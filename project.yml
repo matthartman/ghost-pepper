@@ -1,0 +1,41 @@
+name: WhisperCat
+options:
+  bundleIdPrefix: com.whispercat
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+
+packages:
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit.git
+    from: "0.16.0"
+
+targets:
+  WhisperCat:
+    type: application
+    platform: macOS
+    sources:
+      - WhisperCat
+    settings:
+      base:
+        INFOPLIST_FILE: WhisperCat/Info.plist
+        CODE_SIGN_ENTITLEMENTS: WhisperCat/WhisperCat.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.whispercat.app
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: YES
+    dependencies:
+      - package: WhisperKit
+    entitlements:
+      path: WhisperCat/WhisperCat.entitlements
+
+  WhisperCatTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - WhisperCatTests
+    dependencies:
+      - target: WhisperCat
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WhisperCat.app/Contents/MacOS/WhisperCat"
+        BUNDLE_LOADER: "$(TEST_HOST)"
