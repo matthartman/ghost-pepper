@@ -17,6 +17,7 @@
 		5AB598E205F2134ABE3CF1E5 /* PermissionChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9932A44F524C205EB8AE840A /* PermissionChecker.swift */; };
 		6D38ECBC2606DE6F97DF3FA1 /* RecordingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A510D9DDF7FD9E228BD1A560 /* RecordingOverlay.swift */; };
 		8CBD27433A339C8523112A74 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439BBC8A4489009B6502C3C3 /* MenuBarView.swift */; };
+		9576B9A313A279858D6B7A47 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 6A4E1C5F24A8046839357E57 /* LLM */; };
 		A24087685664803C9C0FDBD7 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 720C58D7CC6AE6BCB88B8DF6 /* WhisperKit */; };
 		B0964536B90576996494617E /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A470F1DE76EDCCCE1C6C8BEE /* AudioRecorder.swift */; };
 		B7BD351DE1ECC888C1A2E442 /* AudioRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8F1262056E97971DDC4C280 /* AudioRecorderTests.swift */; };
@@ -67,6 +68,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A24087685664803C9C0FDBD7 /* WhisperKit in Frameworks */,
+				9576B9A313A279858D6B7A47 /* LLM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -191,6 +193,7 @@
 			name = WhisperCat;
 			packageProductDependencies = (
 				720C58D7CC6AE6BCB88B8DF6 /* WhisperKit */,
+				6A4E1C5F24A8046839357E57 /* LLM */,
 			);
 			productName = WhisperCat;
 			productReference = 2738E430F50FDE9A75D36D27 /* WhisperCat.app */;
@@ -222,6 +225,7 @@
 			mainGroup = 2697E571BDDDBE55A21E523D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				E8CB32899A59A0FAA457634C /* XCRemoteSwiftPackageReference "LLM.swift" */,
 				EA163AF2C734ACDEAE522852 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -505,6 +509,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		E8CB32899A59A0FAA457634C /* XCRemoteSwiftPackageReference "LLM.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/eastriverlee/LLM.swift.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 		EA163AF2C734ACDEAE522852 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
@@ -516,6 +528,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		6A4E1C5F24A8046839357E57 /* LLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E8CB32899A59A0FAA457634C /* XCRemoteSwiftPackageReference "LLM.swift" */;
+			productName = LLM;
+		};
 		720C58D7CC6AE6BCB88B8DF6 /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = EA163AF2C734ACDEAE522852 /* XCRemoteSwiftPackageReference "WhisperKit" */;

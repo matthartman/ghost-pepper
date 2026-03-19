@@ -9,6 +9,9 @@ packages:
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit.git
     from: "0.16.0"
+  LLM.swift:
+    url: https://github.com/eastriverlee/LLM.swift.git
+    branch: main
 
 targets:
   WhisperCat:
@@ -28,6 +31,8 @@ targets:
         DEVELOPMENT_TEAM: BBVMGXR9AY
     dependencies:
       - package: WhisperKit
+      - package: LLM.swift
+        product: LLM
     entitlements:
       path: WhisperCat/WhisperCat.entitlements
 
