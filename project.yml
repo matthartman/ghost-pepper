@@ -39,3 +39,4 @@ targets:
       base:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/WhisperCat.app/Contents/MacOS/WhisperCat"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        GENERATE_INFOPLIST_FILE: YES

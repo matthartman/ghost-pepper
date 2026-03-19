@@ -7,11 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		159DC21395BBE127DCE45CBE /* WhisperTranscriberTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2982CD3A002B866B0EFF8F0E /* WhisperTranscriberTests.swift */; };
 		2836F391A17A7520A05DF5EE /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 003BD88C2EFFAADE4E48E3A4 /* AppState.swift */; };
 		58DF2F200630FFB7E2F2C6D9 /* WhisperCatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91D06020DF82CB364C76216C /* WhisperCatApp.swift */; };
 		8CBD27433A339C8523112A74 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439BBC8A4489009B6502C3C3 /* MenuBarView.swift */; };
 		A24087685664803C9C0FDBD7 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 720C58D7CC6AE6BCB88B8DF6 /* WhisperKit */; };
+		BFC328A5EC5C27190383C083 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE30E5218AB682D709B805F /* ModelManager.swift */; };
 		D1CC1FC4E9069619C2D1A99E /* WhisperCatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6448B6A94297E00FBE83DFF /* WhisperCatTests.swift */; };
+		D8B2BE4ACA5F0EE1E39B8AC1 /* WhisperTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 357D04C5473A25ACAB0EE2AC /* WhisperTranscriber.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,11 +31,14 @@
 		003BD88C2EFFAADE4E48E3A4 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		1C20D8D39B7512866FE993D2 /* WhisperCatTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WhisperCatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2738E430F50FDE9A75D36D27 /* WhisperCat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhisperCat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2982CD3A002B866B0EFF8F0E /* WhisperTranscriberTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperTranscriberTests.swift; sourceTree = "<group>"; };
+		357D04C5473A25ACAB0EE2AC /* WhisperTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperTranscriber.swift; sourceTree = "<group>"; };
 		439BBC8A4489009B6502C3C3 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		61E364B70F7CF60FF05A54F3 /* WhisperCat.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WhisperCat.entitlements; sourceTree = "<group>"; };
 		91D06020DF82CB364C76216C /* WhisperCatApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperCatApp.swift; sourceTree = "<group>"; };
 		BEC10A44DB0BCB1EC41C0AD5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C6448B6A94297E00FBE83DFF /* WhisperCatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperCatTests.swift; sourceTree = "<group>"; };
+		FAE30E5218AB682D709B805F /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,6 +62,15 @@
 			);
 			sourceTree = "<group>";
 		};
+		5EDB93F357F2F16253C13B6D /* Transcription */ = {
+			isa = PBXGroup;
+			children = (
+				FAE30E5218AB682D709B805F /* ModelManager.swift */,
+				357D04C5473A25ACAB0EE2AC /* WhisperTranscriber.swift */,
+			);
+			path = Transcription;
+			sourceTree = "<group>";
+		};
 		666BB0E93726D928E709BD0E /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -72,6 +87,7 @@
 				BEC10A44DB0BCB1EC41C0AD5 /* Info.plist */,
 				61E364B70F7CF60FF05A54F3 /* WhisperCat.entitlements */,
 				91D06020DF82CB364C76216C /* WhisperCatApp.swift */,
+				5EDB93F357F2F16253C13B6D /* Transcription */,
 				D322064D82007C428172CBD5 /* UI */,
 			);
 			path = WhisperCat;
@@ -81,6 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				C6448B6A94297E00FBE83DFF /* WhisperCatTests.swift */,
+				2982CD3A002B866B0EFF8F0E /* WhisperTranscriberTests.swift */,
 			);
 			path = WhisperCatTests;
 			sourceTree = "<group>";
@@ -171,6 +188,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D1CC1FC4E9069619C2D1A99E /* WhisperCatTests.swift in Sources */,
+				159DC21395BBE127DCE45CBE /* WhisperTranscriberTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -180,7 +198,9 @@
 			files = (
 				2836F391A17A7520A05DF5EE /* AppState.swift in Sources */,
 				8CBD27433A339C8523112A74 /* MenuBarView.swift in Sources */,
+				BFC328A5EC5C27190383C083 /* ModelManager.swift in Sources */,
 				58DF2F200630FFB7E2F2C6D9 /* WhisperCatApp.swift in Sources */,
+				D8B2BE4ACA5F0EE1E39B8AC1 /* WhisperTranscriber.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -200,6 +220,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -290,6 +311,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
