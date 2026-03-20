@@ -20,7 +20,7 @@ class RecordingOverlayController {
         }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 110),
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 140),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -75,27 +75,40 @@ struct OverlayPillView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        Group {
             if showSprite {
-                spriteView
+                VStack(spacing: 6) {
+                    spriteView
+                    Text(message.rawValue)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(.black.opacity(0.85))
+                )
             } else {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 10, height: 10)
-                    .opacity(isPulsing ? 0.4 : 1.0)
-                    .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
-            }
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(dotColor)
+                        .frame(width: 10, height: 10)
+                        .opacity(isPulsing ? 0.4 : 1.0)
+                        .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
 
-            Text(message.rawValue)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.white)
+                    Text(message.rawValue)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    Capsule()
+                        .fill(.black.opacity(0.85))
+                )
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(
-            Capsule()
-                .fill(.black.opacity(0.85))
-        )
         .onAppear { isPulsing = true }
     }
 
@@ -104,7 +117,7 @@ struct OverlayPillView: View {
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
-            .frame(height: 80)
+            .frame(width: 80, height: 80)
             .onReceive(spriteTimer) { _ in
                 if showSprite {
                     spriteFrame = (spriteFrame + 1) % frameCount
