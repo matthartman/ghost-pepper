@@ -1,0 +1,19 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+  <channel>
+    <title>Ghost Pepper</title>
+    <link>https://github.com/matthartman/ghost-pepper</link>
+    <item>
+      <title>Version 1.0</title>
+      <sparkle:version>1</sparkle:version>
+      <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure
+        url="https://github.com/matthartman/ghost-pepper/releases/download/v1.0.0/GhostPepper.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="3YvOA4O7SOHtCHYlUpukBAoqcJQm9Z/M/R4C0lDGerzKGJEHq6Pch4z/x9h9jMN9vhsdjvXApQj0P8VbgpvlBg=="
+        length="16995539"
+      />
+    </item>
+  </channel>
+</rss>

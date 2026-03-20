@@ -29,6 +29,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.github.matthartman.ghostpepper
         ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
         ENABLE_HARDENED_RUNTIME: NO
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
