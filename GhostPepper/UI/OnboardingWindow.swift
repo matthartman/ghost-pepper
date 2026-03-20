@@ -222,6 +222,7 @@ struct SetupStep: View {
                                 if granted {
                                     inputDevices = AudioDeviceManager.listInputDevices()
                                     selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
+                                    micLevel.start()
                                 } else {
                                     micDenied = true
                                 }
@@ -233,14 +234,44 @@ struct SetupStep: View {
                     }
                 }
 
-                if micGranted && inputDevices.count > 1 {
-                    Picker("Input Device", selection: $selectedDeviceID) {
-                        ForEach(inputDevices) { device in
-                            Text(device.name).tag(device.id)
+                if micGranted {
+                    VStack(spacing: 8) {
+                        if inputDevices.count > 1 {
+                            Picker("Input Device", selection: $selectedDeviceID) {
+                                ForEach(inputDevices) { device in
+                                    Text(device.name).tag(device.id)
+                                }
+                            }
+                            .onChange(of: selectedDeviceID) { _, newValue in
+                                AudioDeviceManager.setDefaultInputDevice(newValue)
+                                // Restart level monitor for new device
+                                micLevel.stop()
+                                micLevel.start()
+                            }
                         }
-                    }
-                    .onChange(of: selectedDeviceID) { _, newValue in
-                        AudioDeviceManager.setDefaultInputDevice(newValue)
+
+                        // Sound level meter
+                        HStack(spacing: 4) {
+                            Image(systemName: "mic.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(Color(nsColor: .controlBackgroundColor))
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(micLevel.level > 0.7 ? .red : micLevel.level > 0.3 ? .orange : .green)
+                                        .frame(width: geo.size.width * CGFloat(micLevel.level))
+                                        .animation(.easeOut(duration: 0.08), value: micLevel.level)
+                                }
+                            }
+                            .frame(height: 8)
+
+                            Text("Sound check")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.horizontal, 4)
                 }
@@ -317,6 +348,7 @@ struct SetupStep: View {
             if micGranted {
                 inputDevices = AudioDeviceManager.listInputDevices()
                 selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
+                micLevel.start()
             }
 
             if !modelLoadStarted && !modelManager.isReady {
@@ -328,6 +360,7 @@ struct SetupStep: View {
         }
         .onDisappear {
             stopAccessibilityPolling()
+            micLevel.stop()
         }
     }
 
