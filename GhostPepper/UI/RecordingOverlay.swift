@@ -13,14 +13,25 @@ class RecordingOverlayController {
     private var hostingView: NSHostingView<OverlayPillView>?
 
     func show(message: OverlayMessage = .recording) {
-        if let hostingView = hostingView {
+        let isLarge = message == .modelLoading
+        let panelWidth: CGFloat = isLarge ? 250 : 300
+        let panelHeight: CGFloat = isLarge ? 320 : 60
+
+        if let hostingView = hostingView, let panel = panel {
             hostingView.rootView = OverlayPillView(message: message)
-            panel?.orderFrontRegardless()
+            panel.setContentSize(NSSize(width: panelWidth, height: panelHeight))
+            if let screen = NSScreen.main {
+                let screenFrame = screen.visibleFrame
+                let x = screenFrame.midX - panelWidth / 2
+                let y = screenFrame.minY + 40
+                panel.setFrameOrigin(NSPoint(x: x, y: y))
+            }
+            panel.orderFrontRegardless()
             return
         }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 250, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -38,7 +49,7 @@ class RecordingOverlayController {
 
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
-            let x = screenFrame.midX - 140
+            let x = screenFrame.midX - panelWidth / 2
             let y = screenFrame.minY + 40
             panel.setFrameOrigin(NSPoint(x: x, y: y))
         }
@@ -127,14 +138,12 @@ struct OverlayPillView: View {
 
     private func loadSpriteFrame(_ index: Int) -> NSImage {
         let name = "sprite_frame_\(index)"
-        // Try common formats — Xcode may convert PNGs to TIFFs
         for ext in ["png", "tiff", "tif"] {
             if let path = Bundle.main.path(forResource: name, ofType: ext),
                let image = NSImage(contentsOfFile: path) {
                 return image
             }
         }
-        // Try NSImage(named:) which checks the asset catalog
         if let image = NSImage(named: name) {
             return image
         }
