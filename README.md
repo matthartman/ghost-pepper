@@ -30,8 +30,9 @@ Models are served by [Hugging Face](https://huggingface.co/) and cached locally 
 **Download the app:**
 1. Download [GhostPepper.dmg](https://github.com/matthartman/ghost-pepper/releases/latest/download/GhostPepper.dmg)
 2. Open the DMG, drag Ghost Pepper to Applications
-3. Launch, grant Microphone and Accessibility permissions
-4. Hold Control and speak
+3. First launch: right-click the app → Open (macOS will warn about unverified apps — this is normal for open-source apps not distributed through the App Store)
+4. Grant Microphone and Accessibility permissions when prompted
+5. Hold Control and speak
 
 **Build from source:**
 1. Clone the repo
