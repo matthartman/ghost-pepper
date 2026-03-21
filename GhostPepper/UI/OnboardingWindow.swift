@@ -306,39 +306,45 @@ struct SetupStep: View {
                     }
                 }
 
-                SetupRow(
-                    icon: "brain",
-                    title: "Speech Model",
-                    subtitle: modelManager.state == .error
-                        ? "Download failed"
-                        : modelManager.isReady
-                            ? "Ready"
-                            : "Downloading & compiling (may take a few minutes)...",
-                    isComplete: modelManager.isReady
-                ) {
-                    if modelManager.state == .loading {
-                        ProgressView()
+                VStack(spacing: 8) {
+                    SetupRow(
+                        icon: "brain",
+                        title: "AI Models",
+                        subtitle: modelManager.state == .error
+                            ? "Download failed"
+                            : modelManager.isReady
+                                ? "Ready"
+                                : "Downloading & compiling (may take a few minutes)...",
+                        isComplete: modelManager.isReady
+                    ) {
+                        if modelManager.state == .loading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else if modelManager.state == .error {
+                            Button("Retry") {
+                                Task { await modelManager.loadModel() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
                             .controlSize(.small)
-                    } else if modelManager.state == .error {
-                        Button("Retry") {
-                            Task { await modelManager.loadModel() }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
-                        .controlSize(.small)
                     }
-                }
 
-                if modelManager.state == .loading {
-                    VStack(spacing: 6) {
-                        EmojiProgressBar()
-                        VStack(alignment: .leading, spacing: 3) {
-                            ModelStageRow(name: "WhisperKit (speech-to-text)", size: "~500 MB", isDone: false, isActive: true)
-                            ModelStageRow(name: "Qwen 1.5B (fast cleanup)", size: "~1 GB", isDone: false, isActive: false)
-                            ModelStageRow(name: "Qwen 3B (full cleanup)", size: "~2 GB", isDone: false, isActive: false)
+                    if modelManager.state == .loading {
+                        VStack(spacing: 6) {
+                            EmojiProgressBar()
+                            VStack(alignment: .leading, spacing: 3) {
+                                ModelStageRow(name: "WhisperKit (speech-to-text)", size: "~500 MB", isDone: false, isActive: true)
+                                ModelStageRow(name: "Qwen 1.5B (fast cleanup)", size: "~1 GB", isDone: false, isActive: false)
+                                ModelStageRow(name: "Qwen 3B (full cleanup)", size: "~2 GB", isDone: false, isActive: false)
+                            }
                         }
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color(nsColor: .controlBackgroundColor))
+                        )
                     }
-                    .padding(.horizontal, 4)
                 }
             }
             .padding(.horizontal, 24)
@@ -724,6 +730,22 @@ struct DoneStep: View {
                 BulletPoint("Check for updates")
             }
             .padding(.horizontal, 40)
+
+            Button(action: {
+                let tweet = "hey @matthartman I'm trying out Ghost Pepper 🌶️ will let you know how I like it!"
+                let encoded = tweet.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+                if let url = URL(string: "https://twitter.com/intent/tweet?text=\(encoded)") {
+                    NSWorkspace.shared.open(url)
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Text("📣")
+                    Text("Tell Matt you're trying it out!")
+                        .font(.callout)
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
 
             Spacer()
 
