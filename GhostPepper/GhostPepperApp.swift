@@ -8,12 +8,13 @@ struct GhostPepperApp: App {
     @State private var hasInitialized = false
     @State private var pulseBright = true
     private let onboardingController = OnboardingWindowController()
+    private let updaterController = UpdaterController()
 
     private let pulseTimer = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(appState: appState)
+            MenuBarView(appState: appState, updaterController: updaterController)
         } label: {
             Group {
                 switch appState.status {
@@ -31,7 +32,6 @@ struct GhostPepperApp: App {
                 default:
                     Image("MenuBarIcon")
                         .renderingMode(.template)
-                        .foregroundStyle(.orange)
                 }
             }
             .onReceive(pulseTimer) { _ in

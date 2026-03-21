@@ -27,6 +27,7 @@
 		780CB9207962633AEE3E69BD /* AudioDeviceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAF6390CFE5F526DD23C316D /* AudioDeviceManager.swift */; };
 		78678A0067436B71C2C1C3C9 /* sprite_frame_1.png in Resources */ = {isa = PBXBuildFile; fileRef = 24362CABE7BBCAF53CB9B4A8 /* sprite_frame_1.png */; };
 		826FB25FE79E25F566EBEA68 /* sprite_frame_2.png in Resources */ = {isa = PBXBuildFile; fileRef = 4204197D6E98623EA69866C9 /* sprite_frame_2.png */; };
+		829C83DF25112D375A8DB767 /* UpdaterController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F85AD0262D40047E6FCA3D8 /* UpdaterController.swift */; };
 		8DB88CCDDA460DB0BE4DA5D9 /* WhisperTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05CA10D89E26492346D31E43 /* WhisperTranscriber.swift */; };
 		90F411F8E3564F1C5DDD1A5F /* TextPasterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8760607B80C14BCBD5F9FC0 /* TextPasterTests.swift */; };
 		9965C422E2E6A1F48E717C28 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 985AD96FDE69D89C0B2DA245 /* LLM */; };
@@ -71,6 +72,7 @@
 		4A1EB2D492BFBDC803133A31 /* TextPaster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPaster.swift; sourceTree = "<group>"; };
 		52BCF852883B9E469B61B56B /* GhostPepper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GhostPepper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		589AC554EEF132B519736D92 /* HotkeyMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitorTests.swift; sourceTree = "<group>"; };
+		5F85AD0262D40047E6FCA3D8 /* UpdaterController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterController.swift; sourceTree = "<group>"; };
 		6BAE65A5741A98AEADF6498D /* ModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManager.swift; sourceTree = "<group>"; };
 		79231C6829FD88741536FF4A /* sprite_frame_0@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_0@2x.png"; sourceTree = "<group>"; };
 		8E41EBD0A6F249D987AE8853 /* sprite_frame_1@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_1@2x.png"; sourceTree = "<group>"; };
@@ -116,6 +118,7 @@
 				DF9AE24266DDCCADE832CF33 /* GhostPepperApp.swift */,
 				2ADE6885C71A11CEC8B2A50E /* Info.plist */,
 				AC1BDC9C549491AC003117EC /* PermissionChecker.swift */,
+				5F85AD0262D40047E6FCA3D8 /* UpdaterController.swift */,
 				BD13B12B603D3A9D89A5F2C4 /* Audio */,
 				6A2ED16C65A7A2047D1F84F6 /* Cleanup */,
 				5A7262C13F0644663C842FA0 /* Input */,
@@ -345,6 +348,7 @@
 				361E7532F651C1BF7F0D0724 /* TextCleaner.swift in Sources */,
 				4CFBE4928A2B811D649B4140 /* TextCleanupManager.swift in Sources */,
 				5AB7257704509FD4BC36F69E /* TextPaster.swift in Sources */,
+				829C83DF25112D375A8DB767 /* UpdaterController.swift in Sources */,
 				8DB88CCDDA460DB0BE4DA5D9 /* WhisperTranscriber.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
