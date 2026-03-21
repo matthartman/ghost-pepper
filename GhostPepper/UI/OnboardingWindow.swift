@@ -317,7 +317,7 @@ struct SetupStep: View {
                     isComplete: modelManager.isReady
                 ) {
                     if modelManager.state == .loading {
-                        EmojiSpinner()
+                        EmojiProgressBar()
                     } else if modelManager.state == .error {
                         Button("Retry") {
                             Task { await modelManager.loadModel() }
@@ -728,14 +728,35 @@ struct DoneStep: View {
     }
 }
 
-struct EmojiSpinner: View {
-    private let emojis = ["🌶️", "👻", "🌶️", "👻", "🔥"]
+struct EmojiProgressBar: View {
+    private let emojis = ["🌶️", "👻", "🔥"]
+    private let maxSlots = 8
+    @State private var filledCount = 0
+    @State private var timer: Timer?
 
     var body: some View {
-        TimelineView(.periodic(every: 0.5)) { timeline in
-            let frame = Int(timeline.date.timeIntervalSinceReferenceDate * 2) % emojis.count
-            Text(emojis[frame])
-                .font(.system(size: 20))
+        HStack(spacing: 2) {
+            ForEach(0..<maxSlots, id: \.self) { i in
+                if i < filledCount {
+                    Text(emojis[i % emojis.count])
+                        .font(.system(size: 14))
+                } else {
+                    Text("·")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.quaternary)
+                }
+            }
+        }
+        .onAppear {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { _ in
+                DispatchQueue.main.async {
+                    filledCount = (filledCount + 1) % (maxSlots + 1)
+                }
+            }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
         }
     }
 }
