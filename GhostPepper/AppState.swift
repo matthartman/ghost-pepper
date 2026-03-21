@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ServiceManagement
 
 enum AppStatus: String {
     case ready = "Ready"
@@ -47,6 +48,12 @@ class AppState: ObservableObject {
     }
 
     func initialize() async {
+        // Enable launch at login by default on first run
+        if !UserDefaults.standard.bool(forKey: "hasSetLaunchAtLogin") {
+            UserDefaults.standard.set(true, forKey: "hasSetLaunchAtLogin")
+            try? SMAppService.mainApp.register()
+        }
+
         let hasMic = await PermissionChecker.checkMicrophone()
         if !hasMic {
             errorMessage = "Microphone access required"
