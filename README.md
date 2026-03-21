@@ -6,10 +6,6 @@
 
 **[Download the latest release](https://github.com/matthartman/ghost-pepper/releases/latest/download/GhostPepper.dmg)** — macOS 14.0+, Apple Silicon (M1+)
 
-## Why "Ghost Pepper"?
-
-All models run locally, no private data leaves your computer. And it's spicy to offer something for free that other apps have raised $80M to build.
-
 ## Features
 
 - **Hold Control to talk** — release to transcribe and paste into any text field
@@ -56,6 +52,10 @@ Built with [WhisperKit](https://github.com/argmaxinc/WhisperKit), [LLM.swift](ht
 ## License
 
 MIT
+
+## Why "Ghost Pepper"?
+
+All models run locally, no private data leaves your computer. And it's spicy to offer something for free that other apps have raised $80M to build.
 
 ## Enterprise / managed devices
 
