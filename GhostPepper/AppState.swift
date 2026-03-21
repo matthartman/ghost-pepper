@@ -47,27 +47,36 @@ class AppState: ObservableObject {
         }
     }
 
-    func initialize() async {
+    func initialize(skipPermissionPrompts: Bool = false) async {
         // Enable launch at login by default on first run
         if !UserDefaults.standard.bool(forKey: "hasSetLaunchAtLogin") {
             UserDefaults.standard.set(true, forKey: "hasSetLaunchAtLogin")
             try? SMAppService.mainApp.register()
         }
 
-        let hasMic = await PermissionChecker.checkMicrophone()
-        if !hasMic {
-            errorMessage = "Microphone access required"
-            status = .error
-            return
+        if !skipPermissionPrompts {
+            let hasMic = await PermissionChecker.checkMicrophone()
+            if !hasMic {
+                errorMessage = "Microphone access required"
+                status = .error
+                return
+            }
         }
 
         // Pre-warm audio engine so first recording starts faster
         audioRecorder.prewarm()
 
         status = .loading
-        overlay.show(message: .modelLoading)
-        await modelManager.loadModel()
-        overlay.dismiss()
+        let showOverlay = UserDefaults.standard.bool(forKey: "onboardingCompleted")
+        if showOverlay {
+            overlay.show(message: .modelLoading)
+        }
+        if !modelManager.isReady {
+            await modelManager.loadModel()
+        }
+        if showOverlay {
+            overlay.dismiss()
+        }
 
         guard modelManager.isReady else {
             errorMessage = "Failed to load whisper model: \(modelManager.error?.localizedDescription ?? "unknown error")"

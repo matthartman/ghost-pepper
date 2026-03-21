@@ -10,10 +10,8 @@ final class UpdaterController {
             userDriverDelegate: nil
         )
         updater = controller.updater
-
-        // Check for updates automatically once per day
         updater.automaticallyChecksForUpdates = true
-        updater.updateCheckInterval = 86400 // 24 hours
+        updater.updateCheckInterval = 86400
     }
 
     func checkForUpdates() {
