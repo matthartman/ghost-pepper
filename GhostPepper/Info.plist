@@ -10,8 +10,7 @@
     <string>2</string>
     <key>CFBundleShortVersionString</key>
     <string>1.1</string>
-    <key>LSUIElement</key>
-    <true/>
+    <!-- LSUIElement removed — activation policy managed in code -->
     <key>SUFeedURL</key>
     <string>https://raw.githubusercontent.com/matthartman/ghost-pepper/main/appcast.xml</string>
     <key>SUPublicEDKey</key>

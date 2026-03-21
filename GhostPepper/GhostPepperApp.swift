@@ -45,9 +45,14 @@ struct GhostPepperApp: App {
                 guard !hasInitialized else { return }
                 hasInitialized = true
                 if onboardingCompleted {
+                    NSApp.setActivationPolicy(.accessory)
                     Task { await appState.initialize() }
                 } else {
+                    // Show in dock/Cmd+Tab during onboarding
+                    NSApp.setActivationPolicy(.regular)
                     onboardingController.show(appState: appState) {
+                        // Hide from dock after onboarding
+                        NSApp.setActivationPolicy(.accessory)
                         Task { await appState.initialize() }
                     }
                 }
