@@ -35,6 +35,14 @@ class AppState: ObservableObject {
             )
         }
     }
+    @Published var playSounds: Bool {
+        didSet {
+            cleanupSettingsDefaults.set(
+                playSounds,
+                forKey: Self.playSoundsDefaultsKey
+            )
+        }
+    }
     @AppStorage("cleanupEnabled") var cleanupEnabled: Bool = true
     @AppStorage("cleanupPrompt") var cleanupPrompt: String = TextCleaner.defaultPrompt
     @AppStorage("speechModel") var speechModel: String = SpeechModelCatalog.defaultModelID
@@ -54,7 +62,9 @@ class AppState: ObservableObject {
     let audioRecorder: AudioRecorder
     let transcriber: SpeechTranscriber
     let textPaster: TextPaster
-    let soundEffects = SoundEffects()
+    lazy var soundEffects = SoundEffects(isEnabled: { [weak self] in
+        self?.playSounds ?? true
+    })
     let hotkeyMonitor: HotkeyMonitoring
     let overlay = RecordingOverlayController()
     let textCleanupManager: TextCleanupManager
@@ -91,6 +101,7 @@ class AppState: ObservableObject {
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
     private static let postPasteLearningEnabledDefaultsKey = "postPasteLearningEnabled"
+    private static let playSoundsDefaultsKey = "playSounds"
     private static let emptyTranscriptionCancelThresholdSampleCount = 80_000
 
     nonisolated static let defaultPushToTalkChord = KeyChord(keys: Set([
@@ -159,6 +170,11 @@ class AppState: ObservableObject {
         self.cleanupBackend = storedCleanupBackend
         self.frontmostWindowContextEnabled = storedFrontmostWindowContextEnabled
         self.postPasteLearningEnabled = storedPostPasteLearningEnabled
+        if cleanupSettingsDefaults.object(forKey: Self.playSoundsDefaultsKey) == nil {
+            self.playSounds = true
+        } else {
+            self.playSounds = cleanupSettingsDefaults.bool(forKey: Self.playSoundsDefaultsKey)
+        }
         self.transcriber = SpeechTranscriber(modelManager: modelManager)
         self.textCleaner = TextCleaner(
             cleanupManager: self.textCleanupManager,
@@ -189,6 +205,10 @@ class AppState: ObservableObject {
         cleanupSettingsDefaults.set(
             storedPostPasteLearningEnabled,
             forKey: Self.postPasteLearningEnabledDefaultsKey
+        )
+        cleanupSettingsDefaults.set(
+            playSounds,
+            forKey: Self.playSoundsDefaultsKey
         )
         persistShortcutBindingsIfNeeded()
         hotkeyMonitor.updateBindings(shortcutBindings)

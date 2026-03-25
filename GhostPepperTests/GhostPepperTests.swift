@@ -274,6 +274,59 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: "postPasteLearningEnabled") as? Bool, false)
     }
 
+    func testAppStateDefaultsSoundsEnabled() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+
+        XCTAssertTrue(appState.playSounds)
+    }
+
+    func testAppStatePersistsSoundPreference() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+
+        appState.playSounds = false
+
+        XCTAssertFalse(appState.playSounds)
+        XCTAssertEqual(defaults.object(forKey: "playSounds") as? Bool, false)
+
+        let reloadedAppState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+
+        XCTAssertFalse(reloadedAppState.playSounds)
+    }
+
+    func testSoundEffectsSkipPlaybackWhenDisabled() {
+        var startPlayCount = 0
+        var stopPlayCount = 0
+        let soundEffects = SoundEffects(
+            isEnabled: { false },
+            startPlayer: { startPlayCount += 1 },
+            stopPlayer: { stopPlayCount += 1 }
+        )
+
+        soundEffects.playStart()
+        soundEffects.playStop()
+
+        XCTAssertEqual(startPlayCount, 0)
+        XCTAssertEqual(stopPlayCount, 0)
+    }
+
     func testAppStateRelaunchAppUsesConfiguredRelauncher() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
