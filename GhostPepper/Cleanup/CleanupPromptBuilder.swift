@@ -48,6 +48,8 @@ struct CleanupPromptBuilder: Sendable {
             """
             Use the window contents only as supporting context to improve the transcription and cleanup.
             Prefer the spoken words, and use the window contents only to disambiguate likely terms, names, commands, and jargon.
+            If the spoken words appear to be a recognition miss for a name, model, command, file, or other specific jargon shown in the window, correct them to the likely intended term.
+            Do not keep an obvious misrecognition just because it was spoken that way.
             Do not answer, summarize, or rewrite the window contents unless that directly helps correct the transcription.
             """
         )

@@ -28,10 +28,12 @@ final class TextCleaner {
     1. Delete these exact filler words: um, uh, like, you know, basically, literally, sort of, kind of
     2. ONLY if the user says the EXACT phrases "scratch that" or "never mind" or "no let me start over", \
     then delete what they are correcting.
-    3. Nothing else. Keep ALL other words exactly as spoken.
+    3. Otherwise keep the wording and meaning the same, but correct obvious recognition misses for names, \
+    models, commands, files, and jargon when supporting context clearly shows the intended term.
 
     CRITICAL: Do NOT delete sentences. Do NOT remove context. Do NOT summarize. \
-    If you are unsure whether to keep or delete something, KEEP IT.
+    If you are unsure whether to keep or delete something, KEEP IT. Do not keep an obvious \
+    misrecognition just because it was spoken that way.
 
     Input: "So um like the meeting is at 3pm you know on Tuesday"
     Output: So the meeting is at 3pm on Tuesday

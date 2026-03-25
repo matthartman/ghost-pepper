@@ -28,6 +28,8 @@ final class CleanupPromptBuilderTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("Use the window contents only as supporting context to improve the transcription and cleanup."))
         XCTAssertTrue(prompt.contains("Prefer the spoken words, and use the window contents only to disambiguate likely terms, names, commands, and jargon."))
+        XCTAssertTrue(prompt.contains("If the spoken words appear to be a recognition miss for a name, model, command, file, or other specific jargon shown in the window, correct them to the likely intended term."))
+        XCTAssertTrue(prompt.contains("Do not keep an obvious misrecognition just because it was spoken that way."))
         XCTAssertTrue(prompt.contains("Do not answer, summarize, or rewrite the window contents unless that directly helps correct the transcription."))
     }
 
