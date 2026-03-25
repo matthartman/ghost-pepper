@@ -416,6 +416,28 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertTrue(window === reopenedWindow)
     }
 
+    func testSettingsWindowUsesLargeRoomyFrame() throws {
+        closeWindows(titled: "Ghost Pepper Settings")
+        defer { closeWindows(titled: "Ghost Pepper Settings") }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let controller = SettingsWindowController()
+
+        controller.show(appState: appState)
+
+        let window = try XCTUnwrap(
+            NSApp.windows.first(where: { $0.title == "Ghost Pepper Settings" && $0.isVisible })
+        )
+
+        XCTAssertGreaterThanOrEqual(window.minSize.width, 900)
+        XCTAssertGreaterThanOrEqual(window.minSize.height, 680)
+    }
+
     func testPromptEditorHostsSwiftUIViaContentViewController() throws {
         closeWindows(titled: "Edit Cleanup Prompt")
         defer { closeWindows(titled: "Edit Cleanup Prompt") }

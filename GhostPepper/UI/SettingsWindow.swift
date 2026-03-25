@@ -17,7 +17,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let view = SettingsView(appState: appState)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 720),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -25,6 +25,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.title = "Ghost Pepper Settings"
         window.delegate = self
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 900, height: 680)
         window.contentViewController = NSHostingController(rootView: view)
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -126,12 +127,53 @@ final class MicPreviewController: ObservableObject {
 
 // MARK: - Settings View
 
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case recording
+    case cleanup
+    case corrections
+    case models
+    case general
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .recording: "Recording"
+        case .cleanup: "Cleanup"
+        case .corrections: "Corrections"
+        case .models: "Models"
+        case .general: "General"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .recording: "Shortcuts, microphone input, live preview, and sound feedback."
+        case .cleanup: "Prompt cleanup, OCR context, and learning behavior."
+        case .corrections: "Words and replacements Ghost Pepper should preserve."
+        case .models: "Speech and cleanup model downloads and runtime status."
+        case .general: "Startup behavior and app-wide preferences."
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .recording: "waveform.and.mic"
+        case .cleanup: "sparkles"
+        case .corrections: "text.badge.checkmark"
+        case .models: "brain"
+        case .general: "gearshape"
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var appState: AppState
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var hasScreenRecordingPermission = PermissionChecker.hasScreenRecordingPermission()
+    @State private var selectedSection: SettingsSection? = .recording
     @StateObject private var micMonitor: SettingsMicMonitor
     @StateObject private var micPreviewController: MicPreviewController
 
@@ -162,252 +204,23 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                ShortcutRecorderView(
-                    title: "Hold to Record",
-                    chord: appState.pushToTalkChord,
-                    onRecordingStateChange: appState.setShortcutCaptureActive
-                ) { chord in
-                    appState.updateShortcut(chord, for: .pushToTalk)
-                }
-
-                ShortcutRecorderView(
-                    title: "Toggle Recording",
-                    chord: appState.toggleToTalkChord,
-                    onRecordingStateChange: appState.setShortcutCaptureActive
-                ) { chord in
-                    appState.updateShortcut(chord, for: .toggleToTalk)
-                }
-
-                if let shortcutErrorMessage = appState.shortcutErrorMessage {
-                    Text(shortcutErrorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            } header: {
-                Text("Shortcuts")
-            } footer: {
-                Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        NavigationSplitView {
+            List(SettingsSection.allCases, selection: $selectedSection) { section in
+                Label(section.title, systemImage: section.systemImageName)
+                    .tag(Optional(section))
             }
-
-            Section("Input") {
-                Picker("Microphone", selection: $selectedDeviceID) {
-                    ForEach(inputDevices) { device in
-                        Text(device.name).tag(device.id)
-                    }
-                }
-                .onChange(of: selectedDeviceID) { _, newValue in
-                    AudioDeviceManager.setDefaultInputDevice(newValue)
-                    micPreviewController.restartIfNeeded()
-                }
-
-                Toggle(
-                    "Live mic level preview",
-                    isOn: Binding(
-                        get: { micPreviewController.isPreviewing },
-                        set: { micPreviewController.setPreviewing($0) }
-                    )
-                )
-
-                // Mic level meter
-                HStack(spacing: 6) {
-                    Image(systemName: "mic.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Color(nsColor: .controlBackgroundColor))
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(micMonitor.level > 0.7 ? .red : micMonitor.level > 0.3 ? .orange : .green)
-                                .frame(width: geo.size.width * CGFloat(micMonitor.level))
-                                .animation(.easeOut(duration: 0.08), value: micMonitor.level)
-                        }
-                    }
-                    .frame(height: 8)
-
-                    Text("Level")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Microphone preview is off by default so Ghost Pepper only keeps the mic active while recording or while you explicitly preview levels here.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Picker("Speech Model", selection: $appState.speechModel) {
-                    ForEach(ModelManager.availableModels) { model in
-                        Text(model.pickerLabel).tag(model.name)
-                    }
-                }
-                .onChange(of: appState.speechModel) { _, newModel in
-                    Task {
-                        await appState.modelManager.loadModel(name: newModel)
-                    }
-                }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+        } detail: {
+            ScrollView {
+                detailContent
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 32)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Section {
-                Toggle(
-                    "Enable cleanup",
-                    isOn: Binding(
-                        get: { appState.cleanupEnabled },
-                        set: { appState.setCleanupEnabled($0) }
-                    )
-                )
-
-                if appState.cleanupEnabled {
-                    Picker(
-                        "Cleanup model",
-                        selection: Binding(
-                            get: { appState.textCleanupManager.localModelPolicy },
-                            set: { appState.textCleanupManager.localModelPolicy = $0 }
-                        )
-                    ) {
-                        ForEach(LocalCleanupModelPolicy.allCases) { policy in
-                            Text(policy.title).tag(policy)
-                        }
-                    }
-
-                    Button("Edit Cleanup Prompt...") {
-                        appState.showPromptEditor()
-                    }
-
-                    if appState.textCleanupManager.state == .error {
-                        Text(appState.textCleanupManager.errorMessage ?? "Error loading model")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-            } header: {
-                Text("Cleanup")
-            } footer: {
-                Text("When enabled, Ghost Pepper cleans up your transcriptions with the selected local model policy.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Toggle(
-                    "Use frontmost window OCR context",
-                    isOn: Binding(
-                        get: { appState.frontmostWindowContextEnabled },
-                        set: { appState.frontmostWindowContextEnabled = $0 }
-                    )
-                )
-
-                if appState.frontmostWindowContextEnabled && !hasScreenRecordingPermission {
-                    ScreenRecordingRecoveryView {
-                        _ = PermissionChecker.requestScreenRecordingPermission()
-                        PermissionChecker.openScreenRecordingSettings()
-                        refreshScreenRecordingPermission()
-                    }
-                }
-            } header: {
-                Text("Context")
-            } footer: {
-                Text("Ghost Pepper uses high-quality OCR on the frontmost window and adds the result to the cleanup prompt.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Toggle(
-                    "Learn from manual corrections after paste",
-                    isOn: Binding(
-                        get: { appState.postPasteLearningEnabled },
-                        set: { appState.postPasteLearningEnabled = $0 }
-                    )
-                )
-
-                if appState.postPasteLearningEnabled && !hasScreenRecordingPermission {
-                    ScreenRecordingRecoveryView {
-                        _ = PermissionChecker.requestScreenRecordingPermission()
-                        PermissionChecker.openScreenRecordingSettings()
-                        refreshScreenRecordingPermission()
-                    }
-                }
-
-                CorrectionsEditor(
-                    title: "Preferred transcriptions",
-                    text: Binding(
-                        get: { appState.correctionStore.preferredTranscriptionsText },
-                        set: { appState.correctionStore.preferredTranscriptionsText = $0 }
-                    ),
-                    prompt: "One preferred word or phrase per line"
-                )
-
-                CorrectionsEditor(
-                    title: "Commonly misheard",
-                    text: Binding(
-                        get: { appState.correctionStore.commonlyMisheardText },
-                        set: { appState.correctionStore.commonlyMisheardText = $0 }
-                    ),
-                    prompt: "One replacement per line using probably wrong -> probably right"
-                )
-            } header: {
-                Text("Corrections")
-            } footer: {
-                Text("Preferred transcriptions are preserved in cleanup and forwarded into OCR custom words. Commonly misheard replacements run deterministically before cleanup. When learning is enabled, Ghost Pepper does a high-quality OCR check about 15 seconds after paste and only keeps narrow, high-confidence corrections.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("General") {
-                Toggle("Launch at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, enabled in
-                        do {
-                            if enabled {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
-                            }
-                        } catch {
-                            launchAtLogin = !enabled
-                        }
-                    }
-            }
-            Section {
-                ModelInventoryCard(rows: modelRows)
-
-                if let activeDownloadText = RuntimeModelInventory.activeDownloadText(rows: modelRows) {
-                    Text(activeDownloadText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if hasMissingModels {
-                    Button {
-                        Task {
-                            await downloadMissingModels()
-                        }
-                    } label: {
-                        HStack {
-                            if modelsAreDownloading {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: "arrow.down.circle")
-                            }
-                            Text(modelsAreDownloading ? "Downloading Models..." : "Download Missing Models")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-                    .controlSize(.small)
-                    .disabled(modelsAreDownloading)
-                }
-            } header: {
-                Text("Models")
-            }
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .formStyle(.grouped)
-        .padding()
-        .frame(width: 420, height: 700)
+        .frame(minWidth: 900, minHeight: 680)
         .onAppear {
             inputDevices = AudioDeviceManager.listInputDevices()
             selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
@@ -443,6 +256,323 @@ struct SettingsView: View {
             await appState.textCleanupManager.loadModel()
         }
     }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if let selectedSection {
+            VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(selectedSection.title)
+                        .font(.system(size: 28, weight: .semibold))
+                    Text(selectedSection.subtitle)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                switch selectedSection {
+                case .recording:
+                    recordingSection
+                case .cleanup:
+                    cleanupSection
+                case .corrections:
+                    correctionsSection
+                case .models:
+                    modelsSection
+                case .general:
+                    generalSection
+                }
+
+                Spacer(minLength: 0)
+            }
+        } else {
+            EmptyView()
+        }
+    }
+
+    private var recordingSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard("Shortcuts") {
+                VStack(alignment: .leading, spacing: 16) {
+                    ShortcutRecorderView(
+                        title: "Hold to Record",
+                        chord: appState.pushToTalkChord,
+                        onRecordingStateChange: appState.setShortcutCaptureActive
+                    ) { chord in
+                        appState.updateShortcut(chord, for: .pushToTalk)
+                    }
+
+                    ShortcutRecorderView(
+                        title: "Toggle Recording",
+                        chord: appState.toggleToTalkChord,
+                        onRecordingStateChange: appState.setShortcutCaptureActive
+                    ) { chord in
+                        appState.updateShortcut(chord, for: .toggleToTalk)
+                    }
+
+                    if let shortcutErrorMessage = appState.shortcutErrorMessage {
+                        Text(shortcutErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            SettingsCard("Input") {
+                VStack(alignment: .leading, spacing: 18) {
+                    SettingsField("Microphone") {
+                        Picker("Microphone", selection: $selectedDeviceID) {
+                            ForEach(inputDevices) { device in
+                                Text(device.name).tag(device.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 320, alignment: .leading)
+                        .onChange(of: selectedDeviceID) { _, newValue in
+                            AudioDeviceManager.setDefaultInputDevice(newValue)
+                            micPreviewController.restartIfNeeded()
+                        }
+                    }
+
+                    SettingsField("Speech Model") {
+                        Picker("Speech Model", selection: $appState.speechModel) {
+                            ForEach(ModelManager.availableModels) { model in
+                                Text(model.pickerLabel).tag(model.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 320, alignment: .leading)
+                        .onChange(of: appState.speechModel) { _, newModel in
+                            Task {
+                                await appState.modelManager.loadModel(name: newModel)
+                            }
+                        }
+                    }
+
+                    Toggle(
+                        "Live mic level preview",
+                        isOn: Binding(
+                            get: { micPreviewController.isPreviewing },
+                            set: { micPreviewController.setPreviewing($0) }
+                        )
+                    )
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "mic.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color(nsColor: .controlBackgroundColor))
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(micMonitor.level > 0.7 ? .red : micMonitor.level > 0.3 ? .orange : .green)
+                                        .frame(width: geo.size.width * CGFloat(micMonitor.level))
+                                        .animation(.easeOut(duration: 0.08), value: micMonitor.level)
+                                }
+                            }
+                            .frame(height: 10)
+
+                            Text("Level")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: 420)
+
+                        Text("Microphone preview is off by default so Ghost Pepper only keeps the mic active while recording or while you explicitly preview levels here.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle(
+                        "Play sounds",
+                        isOn: Binding(
+                            get: { appState.playSounds },
+                            set: { appState.playSounds = $0 }
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private var cleanupSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard("Cleanup") {
+                VStack(alignment: .leading, spacing: 16) {
+                    Toggle(
+                        "Enable cleanup",
+                        isOn: Binding(
+                            get: { appState.cleanupEnabled },
+                            set: { appState.setCleanupEnabled($0) }
+                        )
+                    )
+
+                    if appState.cleanupEnabled {
+                        SettingsField("Cleanup model") {
+                            Picker(
+                                "Cleanup model",
+                                selection: Binding(
+                                    get: { appState.textCleanupManager.localModelPolicy },
+                                    set: { appState.textCleanupManager.localModelPolicy = $0 }
+                                )
+                            ) {
+                                ForEach(LocalCleanupModelPolicy.allCases) { policy in
+                                    Text(policy.title).tag(policy)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: 320, alignment: .leading)
+                        }
+
+                        Button("Edit Cleanup Prompt...") {
+                            appState.showPromptEditor()
+                        }
+
+                        if appState.textCleanupManager.state == .error {
+                            Text(appState.textCleanupManager.errorMessage ?? "Error loading model")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    Text("When enabled, Ghost Pepper cleans up your transcriptions with the selected local model policy.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            SettingsCard("Context") {
+                VStack(alignment: .leading, spacing: 16) {
+                    Toggle(
+                        "Use frontmost window OCR context",
+                        isOn: Binding(
+                            get: { appState.frontmostWindowContextEnabled },
+                            set: { appState.frontmostWindowContextEnabled = $0 }
+                        )
+                    )
+
+                    if appState.frontmostWindowContextEnabled && !hasScreenRecordingPermission {
+                        ScreenRecordingRecoveryView {
+                            _ = PermissionChecker.requestScreenRecordingPermission()
+                            PermissionChecker.openScreenRecordingSettings()
+                            refreshScreenRecordingPermission()
+                        }
+                    }
+
+                    Toggle(
+                        "Learn from manual corrections after paste",
+                        isOn: Binding(
+                            get: { appState.postPasteLearningEnabled },
+                            set: { appState.postPasteLearningEnabled = $0 }
+                        )
+                    )
+
+                    if appState.postPasteLearningEnabled && !hasScreenRecordingPermission {
+                        ScreenRecordingRecoveryView {
+                            _ = PermissionChecker.requestScreenRecordingPermission()
+                            PermissionChecker.openScreenRecordingSettings()
+                            refreshScreenRecordingPermission()
+                        }
+                    }
+
+                    Text("Ghost Pepper uses high-quality OCR on the frontmost window and adds the result to the cleanup prompt. When learning is enabled, Ghost Pepper does a high-quality OCR check about 15 seconds after paste and only keeps narrow, high-confidence corrections.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var correctionsSection: some View {
+        SettingsCard("Corrections") {
+            VStack(alignment: .leading, spacing: 20) {
+                CorrectionsEditor(
+                    title: "Preferred transcriptions",
+                    text: Binding(
+                        get: { appState.correctionStore.preferredTranscriptionsText },
+                        set: { appState.correctionStore.preferredTranscriptionsText = $0 }
+                    ),
+                    prompt: "One preferred word or phrase per line"
+                )
+
+                Divider()
+
+                CorrectionsEditor(
+                    title: "Commonly misheard",
+                    text: Binding(
+                        get: { appState.correctionStore.commonlyMisheardText },
+                        set: { appState.correctionStore.commonlyMisheardText = $0 }
+                    ),
+                    prompt: "One replacement per line using probably wrong -> probably right"
+                )
+
+                Text("Preferred transcriptions are preserved in cleanup and forwarded into OCR custom words. Commonly misheard replacements run deterministically before cleanup.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var modelsSection: some View {
+        SettingsCard("Runtime models") {
+            VStack(alignment: .leading, spacing: 16) {
+                ModelInventoryCard(rows: modelRows)
+
+                if let activeDownloadText = RuntimeModelInventory.activeDownloadText(rows: modelRows) {
+                    Text(activeDownloadText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if hasMissingModels {
+                    Button {
+                        Task {
+                            await downloadMissingModels()
+                        }
+                    } label: {
+                        HStack {
+                            if modelsAreDownloading {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.down.circle")
+                            }
+                            Text(modelsAreDownloading ? "Downloading Models..." : "Download Missing Models")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .disabled(modelsAreDownloading)
+                }
+            }
+        }
+    }
+
+    private var generalSection: some View {
+        SettingsCard("General") {
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, enabled in
+                    do {
+                        if enabled {
+                            try SMAppService.mainApp.register()
+                        } else {
+                            try SMAppService.mainApp.unregister()
+                        }
+                    } catch {
+                        launchAtLogin = !enabled
+                    }
+                }
+        }
+    }
 }
 
 private struct ScreenRecordingRecoveryView: View {
@@ -456,6 +586,49 @@ private struct ScreenRecordingRecoveryView: View {
 
             Button("Open Screen Recording Settings", action: onOpenSettings)
             .controlSize(.small)
+        }
+    }
+}
+
+private struct SettingsCard<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+
+            content
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+    }
+}
+
+private struct SettingsField<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+            content
         }
     }
 }
