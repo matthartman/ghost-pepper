@@ -107,18 +107,21 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     private let fastModelAvailabilityOverride: Bool?
     private let fullModelAvailabilityOverride: Bool?
     private let probeExecutionOverride: CleanupModelProbeExecutionOverride?
+    private let backendShutdownOverride: (() -> Void)?
 
     init(
         defaults: UserDefaults = .standard,
         localModelPolicy: LocalCleanupModelPolicy? = nil,
         fastModelAvailabilityOverride: Bool? = nil,
         fullModelAvailabilityOverride: Bool? = nil,
-        probeExecutionOverride: CleanupModelProbeExecutionOverride? = nil
+        probeExecutionOverride: CleanupModelProbeExecutionOverride? = nil,
+        backendShutdownOverride: (() -> Void)? = nil
     ) {
         self.defaults = defaults
         self.fastModelAvailabilityOverride = fastModelAvailabilityOverride
         self.fullModelAvailabilityOverride = fullModelAvailabilityOverride
         self.probeExecutionOverride = probeExecutionOverride
+        self.backendShutdownOverride = backendShutdownOverride
 
         let storedPolicy = LocalCleanupModelPolicy(
             rawValue: defaults.string(forKey: Self.localModelPolicyDefaultsKey) ?? ""
@@ -341,6 +344,16 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         state = .idle
         errorMessage = nil
         debugLogger?(.model, "Unloaded local cleanup models.")
+    }
+
+    func shutdownBackend() {
+        unloadModel()
+        if let backendShutdownOverride {
+            backendShutdownOverride()
+        } else {
+            LLM.shutdownBackend()
+        }
+        debugLogger?(.model, "Shutdown llama backend.")
     }
 
     var loadedModelKinds: Set<LocalCleanupModelKind> {

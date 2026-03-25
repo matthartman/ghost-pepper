@@ -57,6 +57,9 @@ struct GhostPepperApp: App {
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                appState.prepareForTermination()
+            }
         }
     }
 }

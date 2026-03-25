@@ -116,4 +116,18 @@ final class TextCleanupManagerTests: XCTestCase {
         XCTAssertEqual(result, "That worked really well.")
         XCTAssertEqual(capturedThinkingMode, .suppressed)
     }
+
+    func testShutdownBackendCallsOverride() {
+        var shutdownCount = 0
+        let manager = TextCleanupManager(
+            backendShutdownOverride: {
+                shutdownCount += 1
+            }
+        )
+
+        manager.shutdownBackend()
+        manager.shutdownBackend()
+
+        XCTAssertEqual(shutdownCount, 2)
+    }
 }

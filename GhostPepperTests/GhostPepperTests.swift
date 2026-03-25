@@ -738,6 +738,28 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(result, "Jesse approved it")
     }
 
+    func testAppStatePrepareForTerminationShutsDownCleanupBackend() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        var shutdownCount = 0
+        let cleanupManager = TextCleanupManager(
+            defaults: defaults,
+            backendShutdownOverride: {
+                shutdownCount += 1
+            }
+        )
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            textCleanupManager: cleanupManager
+        )
+
+        appState.prepareForTermination()
+
+        XCTAssertEqual(shutdownCount, 1)
+    }
+
     private func closeWindows(titled title: String) {
         NSApp.windows
             .filter { $0.title == title }

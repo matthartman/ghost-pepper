@@ -625,6 +625,11 @@ class AppState: ObservableObject {
         }
     }
 
+    func prepareForTermination() {
+        recordingOCRPrefetch.cancel()
+        textCleanupManager.shutdownBackend()
+    }
+
     private func refreshCleanupModelState() async {
         guard cleanupEnabled else {
             debugLogStore.record(category: .model, message: "Cleanup disabled; unloading local cleanup models.")
