@@ -310,7 +310,7 @@ struct SetupStep: View {
                 SetupRow(
                     icon: "rectangle.on.rectangle",
                     title: "Screen Recording",
-                    subtitle: "For OCR context & learning",
+                    subtitle: "To read on-screen text for smarter cleanup (never leaves your computer)",
                     isComplete: screenRecordingPermission.isGranted
                 ) {
                     if !screenRecordingPermission.isGranted {
