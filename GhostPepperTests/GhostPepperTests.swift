@@ -154,7 +154,7 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(monitor.startCallCount, 1)
     }
 
-    func testAppStateStartHotkeyMonitorRequiresInputMonitoringBeforeStartingTap() async throws {
+    func testAppStateStartHotkeyMonitorPromptsForInputMonitoringButStillStartsWhenMonitorCanRun() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let monitor = FakeHotkeyMonitor()
@@ -168,10 +168,10 @@ final class GhostPepperTests: XCTestCase {
 
         await appState.startHotkeyMonitor()
 
-        XCTAssertEqual(monitor.startCallCount, 0)
+        XCTAssertEqual(monitor.startCallCount, 1)
         XCTAssertEqual(requestCount, 1)
-        XCTAssertEqual(appState.status, .error)
-        XCTAssertEqual(appState.errorMessage, "Input Monitoring access required — grant permission then click Retry")
+        XCTAssertEqual(appState.status, .ready)
+        XCTAssertNil(appState.errorMessage)
     }
 
     func testAppStateUpdateShortcutRefreshesHotkeyMonitorBindings() throws {
