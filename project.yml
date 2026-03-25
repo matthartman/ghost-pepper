@@ -41,6 +41,8 @@ targets:
       - package: Sparkle
     entitlements:
       path: GhostPepper/GhostPepper.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
 
   GhostPepperTests:
     type: bundle.unit-test

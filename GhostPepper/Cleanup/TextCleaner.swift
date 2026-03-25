@@ -1,8 +1,14 @@
 import Foundation
-import LLM
 
 final class TextCleaner {
-    private let cleanupManager: TextCleanupManager
+    private static let thinkBlockExpression = try? NSRegularExpression(
+        pattern: #"(?is)<think\b[^>]*>.*?</think>"#
+    )
+
+    private let localBackend: CleanupBackend
+    private let correctionStore: CorrectionStore
+    var debugLogger: ((DebugLogCategory, String) -> Void)?
+    var sensitiveDebugLogger: ((DebugLogCategory, String) -> Void)?
 
     static let defaultPrompt = """
     You are an echo machine. Repeat back EVERYTHING the user says. Your ONLY allowed edits are:
@@ -30,63 +36,131 @@ final class TextCleaner {
     Output: I've been working on this and I'm stuck. Any ideas?
     """
 
-    private static let timeoutSeconds: TimeInterval = 15.0
+    init(
+        localBackend: CleanupBackend,
+        correctionStore: CorrectionStore = CorrectionStore()
+    ) {
+        self.localBackend = localBackend
+        self.correctionStore = correctionStore
+    }
 
-    init(cleanupManager: TextCleanupManager) {
-        self.cleanupManager = cleanupManager
+    convenience init(
+        cleanupManager: TextCleaningManaging,
+        correctionStore: CorrectionStore = CorrectionStore()
+    ) {
+        self.init(
+            localBackend: LocalLLMCleanupBackend(cleanupManager: cleanupManager),
+            correctionStore: correctionStore
+        )
     }
 
     @MainActor
     func clean(text: String, prompt: String? = nil) async -> String {
-        let wordCount = text.split(separator: " ").count
-        let isQuestion = text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
-        // Use full model for questions (1.5B tries to answer them) and longer text
-        let useFullModel = isQuestion || wordCount > TextCleanupManager.shortInputThreshold
-        let llm: LLM
-        if useFullModel {
-            guard let model = cleanupManager.fullLLM ?? cleanupManager.fastLLM else { return text }
-            llm = model
+        let activePrompt = prompt ?? Self.defaultPrompt
+        let correctionEngine = DeterministicCorrectionEngine(
+            preferredTranscriptions: correctionStore.preferredTranscriptions,
+            commonlyMisheard: correctionStore.commonlyMisheard
+        )
+        let correctedText = correctionEngine.applyPreCleanupCorrections(to: text)
+        if correctedText == text {
+            sensitiveDebugLogger?(.cleanup, "Pre-cleanup corrections: no changes applied.")
         } else {
-            guard let model = cleanupManager.model(for: wordCount) else { return text }
-            llm = model
+            sensitiveDebugLogger?(
+                .cleanup,
+                """
+                Pre-cleanup corrections:
+                input:
+                \(text)
+
+                output:
+                \(correctedText)
+                """
+            )
         }
 
-        // Update template with current prompt
-        let activePrompt = prompt ?? Self.defaultPrompt
-        llm.template = Template.chatML(activePrompt)
-        llm.history = []
-
-        let start = Date()
         do {
-            let result = try await withTimeout(seconds: Self.timeoutSeconds) {
-                await llm.respond(to: text)
-                return llm.output
+            sensitiveDebugLogger?(
+                .cleanup,
+                """
+                Cleanup prompt:
+                \(activePrompt)
+                """
+            )
+            sensitiveDebugLogger?(
+                .cleanup,
+                """
+                Cleanup LLM input:
+                \(correctedText)
+                """
+            )
+            let cleanedText = try await localBackend.clean(text: correctedText, prompt: activePrompt)
+            sensitiveDebugLogger?(
+                .cleanup,
+                """
+                Cleanup LLM raw output:
+                \(cleanedText)
+                """
+            )
+
+            let sanitizedText = sanitizeCleanupOutput(cleanedText)
+
+            if sanitizedText != cleanedText {
+                debugLogger?(.cleanup, "Stripped model reasoning tags from cleanup output.")
+                sensitiveDebugLogger?(
+                    .cleanup,
+                    """
+                    Cleanup LLM sanitized output:
+                    \(sanitizedText)
+                    """
+                )
             }
-            let elapsed = Date().timeIntervalSince(start)
-            let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            try? "elapsed=\(elapsed)s, output=\(cleaned)".write(toFile: "/tmp/whispercat-llm.log", atomically: true, encoding: .utf8)
-            // LLM.swift returns "..." when output is empty — treat as failure
-            if cleaned.isEmpty || cleaned == "..." {
-                return text
+
+            let finalText = correctionEngine.applyPostCleanupCorrections(to: sanitizedText)
+            if finalText == sanitizedText {
+                sensitiveDebugLogger?(.cleanup, "Post-cleanup corrections: no changes applied.")
+            } else {
+                sensitiveDebugLogger?(
+                    .cleanup,
+                    """
+                    Post-cleanup corrections:
+                    input:
+                    \(sanitizedText)
+
+                    output:
+                    \(finalText)
+                    """
+                )
             }
-            return cleaned
+            return finalText
         } catch {
-            let elapsed = Date().timeIntervalSince(start)
-            try? "TIMEOUT after \(elapsed)s, error=\(error)".write(toFile: "/tmp/whispercat-llm.log", atomically: true, encoding: .utf8)
-            return text
+            debugLogger?(.cleanup, "Cleanup backend unavailable, returning deterministic corrections only.")
+            let finalText = correctionEngine.applyPostCleanupCorrections(to: correctedText)
+            if finalText == correctedText {
+                sensitiveDebugLogger?(.cleanup, "Post-cleanup corrections: no changes applied.")
+            } else {
+                sensitiveDebugLogger?(
+                    .cleanup,
+                    """
+                    Post-cleanup corrections:
+                    input:
+                    \(correctedText)
+
+                    output:
+                    \(finalText)
+                    """
+                )
+            }
+            return finalText
         }
     }
 
-    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping @Sendable () async -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { await operation() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw CancellationError()
-            }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
+    private func sanitizeCleanupOutput(_ text: String) -> String {
+        guard let expression = Self.thinkBlockExpression else {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
+
+        let range = NSRange(text.startIndex..., in: text)
+        let sanitizedText = expression.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        return sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

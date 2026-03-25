@@ -1,12 +1,15 @@
 import SwiftUI
 import AppKit
 
-class PromptEditorController {
+final class PromptEditorController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
     func show(appState: AppState) {
-        // Always recreate the window to get fresh bindings
-        dismiss()
+        if let window = window {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
 
         let editor = PromptEditorView(appState: appState, onClose: { [weak self] in
             self?.dismiss()
@@ -19,7 +22,9 @@ class PromptEditorController {
             defer: false
         )
         window.title = "Edit Cleanup Prompt"
-        window.contentView = NSHostingView(rootView: editor)
+        window.delegate = self
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: editor)
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -28,8 +33,19 @@ class PromptEditorController {
     }
 
     func dismiss() {
-        window?.close()
-        window = nil
+        if let window {
+            hide(window)
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hide(sender)
+        return false
+    }
+
+    private func hide(_ window: NSWindow) {
+        window.makeFirstResponder(nil)
+        window.orderOut(nil)
     }
 }
 

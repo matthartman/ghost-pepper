@@ -4,7 +4,7 @@ import CoreAudio
 import ServiceManagement
 import AVFoundation
 
-class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
     func show(appState: AppState) {
@@ -17,25 +17,38 @@ class SettingsWindowController {
         let view = SettingsView(appState: appState)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 580),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 700),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = "Ghost Pepper Settings"
-        window.contentView = NSHostingView(rootView: view)
+        window.delegate = self
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: view)
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
         self.window = window
     }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
 }
 
 // MARK: - Mic Level Monitor for Settings
 
+protocol MicLevelMonitoring: AnyObject {
+    func start()
+    func stop()
+    func restart()
+}
+
 @MainActor
-class SettingsMicMonitor: ObservableObject {
+class SettingsMicMonitor: ObservableObject, MicLevelMonitoring {
     @Published var level: Float = 0
     private var engine: AVAudioEngine?
     private var isRunning = false
@@ -84,6 +97,33 @@ class SettingsMicMonitor: ObservableObject {
     }
 }
 
+@MainActor
+final class MicPreviewController: ObservableObject {
+    @Published private(set) var isPreviewing = false
+
+    private let monitor: MicLevelMonitoring
+
+    init(monitor: MicLevelMonitoring) {
+        self.monitor = monitor
+    }
+
+    func setPreviewing(_ previewing: Bool) {
+        guard previewing != isPreviewing else { return }
+
+        isPreviewing = previewing
+        if previewing {
+            monitor.start()
+        } else {
+            monitor.stop()
+        }
+    }
+
+    func restartIfNeeded() {
+        guard isPreviewing else { return }
+        monitor.restart()
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
@@ -91,11 +131,49 @@ struct SettingsView: View {
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @StateObject private var micMonitor = SettingsMicMonitor()
-    private let promptEditor = PromptEditorController()
+    @State private var hasScreenRecordingPermission = PermissionChecker.hasScreenRecordingPermission()
+    @StateObject private var micMonitor: SettingsMicMonitor
+    @StateObject private var micPreviewController: MicPreviewController
+
+    init(appState: AppState) {
+        self.appState = appState
+        let micMonitor = SettingsMicMonitor()
+        _micMonitor = StateObject(wrappedValue: micMonitor)
+        _micPreviewController = StateObject(wrappedValue: MicPreviewController(monitor: micMonitor))
+    }
 
     var body: some View {
         Form {
+            Section {
+                ShortcutRecorderView(
+                    title: "Hold to Record",
+                    chord: appState.pushToTalkChord,
+                    onRecordingStateChange: appState.setShortcutCaptureActive
+                ) { chord in
+                    appState.updateShortcut(chord, for: .pushToTalk)
+                }
+
+                ShortcutRecorderView(
+                    title: "Toggle Recording",
+                    chord: appState.toggleToTalkChord,
+                    onRecordingStateChange: appState.setShortcutCaptureActive
+                ) { chord in
+                    appState.updateShortcut(chord, for: .toggleToTalk)
+                }
+
+                if let shortcutErrorMessage = appState.shortcutErrorMessage {
+                    Text(shortcutErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Shortcuts")
+            } footer: {
+                Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Input") {
                 Picker("Microphone", selection: $selectedDeviceID) {
                     ForEach(inputDevices) { device in
@@ -104,8 +182,16 @@ struct SettingsView: View {
                 }
                 .onChange(of: selectedDeviceID) { _, newValue in
                     AudioDeviceManager.setDefaultInputDevice(newValue)
-                    micMonitor.restart()
+                    micPreviewController.restartIfNeeded()
                 }
+
+                Toggle(
+                    "Live mic level preview",
+                    isOn: Binding(
+                        get: { micPreviewController.isPreviewing },
+                        set: { micPreviewController.setPreviewing($0) }
+                    )
+                )
 
                 // Mic level meter
                 HStack(spacing: 6) {
@@ -129,23 +215,36 @@ struct SettingsView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+
+                Text("Microphone preview is off by default so Ghost Pepper only keeps the mic active while recording or while you explicitly preview levels here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
-                Toggle("Enable cleanup", isOn: $appState.cleanupEnabled)
-                    .onChange(of: appState.cleanupEnabled) { _, enabled in
-                        Task {
-                            if enabled {
-                                await appState.textCleanupManager.loadModel()
-                            } else {
-                                appState.textCleanupManager.unloadModel()
-                            }
+                Toggle(
+                    "Enable cleanup",
+                    isOn: Binding(
+                        get: { appState.cleanupEnabled },
+                        set: { appState.setCleanupEnabled($0) }
+                    )
+                )
+
+                if appState.cleanupEnabled {
+                    Picker(
+                        "Cleanup model",
+                        selection: Binding(
+                            get: { appState.textCleanupManager.localModelPolicy },
+                            set: { appState.textCleanupManager.localModelPolicy = $0 }
+                        )
+                    ) {
+                        ForEach(LocalCleanupModelPolicy.allCases) { policy in
+                            Text(policy.title).tag(policy)
                         }
                     }
 
-                if appState.cleanupEnabled {
                     Button("Edit Cleanup Prompt...") {
-                        promptEditor.show(appState: appState)
+                        appState.showPromptEditor()
                     }
 
                     if appState.textCleanupManager.state == .error {
@@ -157,7 +256,73 @@ struct SettingsView: View {
             } header: {
                 Text("Cleanup")
             } footer: {
-                Text("When enabled, a local AI model cleans up your transcriptions — removing filler words like \"um\" and \"uh\", and handling self-corrections.")
+                Text("When enabled, Ghost Pepper cleans up your transcriptions with the selected local model policy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle(
+                    "Use frontmost window OCR context",
+                    isOn: Binding(
+                        get: { appState.frontmostWindowContextEnabled },
+                        set: { appState.frontmostWindowContextEnabled = $0 }
+                    )
+                )
+
+                if appState.frontmostWindowContextEnabled && !hasScreenRecordingPermission {
+                    ScreenRecordingRecoveryView {
+                        _ = PermissionChecker.requestScreenRecordingPermission()
+                        PermissionChecker.openScreenRecordingSettings()
+                        refreshScreenRecordingPermission()
+                    }
+                }
+            } header: {
+                Text("Context")
+            } footer: {
+                Text("Ghost Pepper uses high-quality OCR on the frontmost window and adds the result to the cleanup prompt.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle(
+                    "Learn from manual corrections after paste",
+                    isOn: Binding(
+                        get: { appState.postPasteLearningEnabled },
+                        set: { appState.postPasteLearningEnabled = $0 }
+                    )
+                )
+
+                if appState.postPasteLearningEnabled && !hasScreenRecordingPermission {
+                    ScreenRecordingRecoveryView {
+                        _ = PermissionChecker.requestScreenRecordingPermission()
+                        PermissionChecker.openScreenRecordingSettings()
+                        refreshScreenRecordingPermission()
+                    }
+                }
+
+                CorrectionsEditor(
+                    title: "Preferred transcriptions",
+                    text: Binding(
+                        get: { appState.correctionStore.preferredTranscriptionsText },
+                        set: { appState.correctionStore.preferredTranscriptionsText = $0 }
+                    ),
+                    prompt: "One preferred word or phrase per line"
+                )
+
+                CorrectionsEditor(
+                    title: "Commonly misheard",
+                    text: Binding(
+                        get: { appState.correctionStore.commonlyMisheardText },
+                        set: { appState.correctionStore.commonlyMisheardText = $0 }
+                    ),
+                    prompt: "One replacement per line using probably wrong -> probably right"
+                )
+            } header: {
+                Text("Corrections")
+            } footer: {
+                Text("Preferred transcriptions are preserved in cleanup and forwarded into OCR custom words. Commonly misheard replacements run deterministically before cleanup. When learning is enabled, Ghost Pepper does a high-quality OCR check about 15 seconds after paste and only keeps narrow, high-confidence corrections.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -176,7 +341,6 @@ struct SettingsView: View {
                         }
                     }
             }
-
             Section {
                 ModelStatusRow(
                     name: "WhisperKit (speech-to-text)",
@@ -217,14 +381,36 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 420, height: 580)
+        .frame(width: 420, height: 700)
         .onAppear {
             inputDevices = AudioDeviceManager.listInputDevices()
             selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
-            micMonitor.start()
+            refreshScreenRecordingPermission()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshScreenRecordingPermission()
         }
         .onDisappear {
-            micMonitor.stop()
+            micPreviewController.setPreviewing(false)
+        }
+    }
+
+    private func refreshScreenRecordingPermission() {
+        hasScreenRecordingPermission = PermissionChecker.hasScreenRecordingPermission()
+    }
+}
+
+private struct ScreenRecordingRecoveryView: View {
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Ghost Pepper needs Screen Recording access. Grant it in System Settings, then return to Ghost Pepper.")
+                .font(.caption)
+                .foregroundStyle(.red)
+
+            Button("Open Screen Recording Settings", action: onOpenSettings)
+            .controlSize(.small)
         }
     }
 }
@@ -258,5 +444,27 @@ struct ModelStatusRow: View {
                 }
             }
         }
+    }
+}
+
+private struct CorrectionsEditor: View {
+    let title: String
+    let text: Binding<String>
+    let prompt: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 72)
+
+            Text(prompt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
     }
 }

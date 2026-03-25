@@ -5,12 +5,15 @@ import ServiceManagement
 struct MenuBarView: View {
     @ObservedObject var appState: AppState
     let updaterController: UpdaterController
-    private let settingsController = SettingsWindowController()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Button("Settings...") {
-                settingsController.show(appState: appState)
+                appState.showSettings()
+            }
+
+            Button("Debug Log...") {
+                appState.showDebugLog()
             }
 
             Text("Ghost Pepper v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
@@ -39,6 +42,14 @@ struct MenuBarView: View {
                     .foregroundStyle(.red)
                     .padding(.horizontal, 14)
 
+                if error.contains("Input Monitoring") {
+                    Button("Open Input Monitoring Settings") {
+                        PermissionChecker.openInputMonitoringSettings()
+                    }
+                    Button("Retry") {
+                        Task { await appState.startHotkeyMonitor() }
+                    }
+                }
                 if error.contains("Accessibility") {
                     Button("Open Accessibility Settings") {
                         PermissionChecker.openAccessibilitySettings()

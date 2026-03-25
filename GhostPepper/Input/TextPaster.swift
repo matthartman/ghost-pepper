@@ -10,6 +10,7 @@ struct ClipboardState {
 /// Saves and restores the clipboard around the paste operation to avoid clobbering user data.
 /// Requires Accessibility permission for CGEvent posting.
 final class TextPaster {
+    typealias PasteSessionProvider = @Sendable (String, Date) -> PasteSession?
 
     // MARK: - Timing Constants
 
@@ -22,6 +23,17 @@ final class TextPaster {
     // MARK: - Virtual Key Codes
 
     private static let vKeyCode: CGKeyCode = 0x09
+    var onPaste: ((PasteSession) -> Void)?
+
+    private let pasteSessionProvider: PasteSessionProvider
+
+    init(
+        pasteSessionProvider: @escaping PasteSessionProvider = { text, date in
+            FocusedElementLocator().capturePasteSession(for: text, at: date)
+        }
+    ) {
+        self.pasteSessionProvider = pasteSessionProvider
+    }
 
     // MARK: - Clipboard Operations
 
@@ -90,6 +102,10 @@ final class TextPaster {
             self?.simulateCmdV()
 
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.postKeystrokeDelay) { [weak self] in
+                if let pasteSession = self?.pasteSessionProvider(text, Date()) {
+                    self?.onPaste?(pasteSession)
+                }
+
                 if let savedState = savedState {
                     self?.restoreClipboard(savedState)
                 }

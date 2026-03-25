@@ -16,6 +16,8 @@ final class ModelManager: ObservableObject {
     /// Any error encountered during model setup.
     @Published private(set) var error: Error?
 
+    var debugLogger: ((DebugLogCategory, String) -> Void)?
+
     /// Whether the model is loaded and ready for transcription.
     var isReady: Bool {
         state == .ready
@@ -32,6 +34,7 @@ final class ModelManager: ObservableObject {
 
         state = .loading
         error = nil
+        debugLogger?(.model, "Loading Whisper model \(modelName).")
 
         do {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -50,9 +53,11 @@ final class ModelManager: ObservableObject {
             let kit = try await WhisperKit(config)
             self.whisperKit = kit
             self.state = .ready
+            debugLogger?(.model, "Whisper model \(modelName) loaded successfully.")
         } catch {
             self.error = error
             self.state = .error
+            debugLogger?(.model, "Whisper model \(modelName) failed to load: \(error.localizedDescription)")
         }
     }
 }

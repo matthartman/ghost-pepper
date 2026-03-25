@@ -9,10 +9,27 @@ enum CleanupModelState: Equatable {
     case error
 }
 
+protocol TextCleaningManaging: AnyObject {
+    func clean(text: String, prompt: String?) async -> String?
+}
+
+enum LocalCleanupModelKind: Equatable {
+    case fast
+    case full
+}
+
 @MainActor
-final class TextCleanupManager: ObservableObject {
+final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     @Published private(set) var state: CleanupModelState = .idle
     @Published private(set) var errorMessage: String?
+    @Published var localModelPolicy: LocalCleanupModelPolicy {
+        didSet {
+            defaults.set(localModelPolicy.rawValue, forKey: Self.localModelPolicyDefaultsKey)
+            updateReadyStateForCurrentPolicy()
+        }
+    }
+
+    var debugLogger: ((DebugLogCategory, String) -> Void)?
 
     /// Fast model for short inputs (< 15 words)
     private(set) var fastLLM: LLM?
@@ -28,13 +45,67 @@ final class TextCleanupManager: ObservableObject {
     static let shortInputThreshold = 15
 
     var isReady: Bool { state == .ready }
-
-    /// Returns the appropriate model based on word count.
-    func model(for wordCount: Int) -> LLM? {
-        if wordCount <= Self.shortInputThreshold {
-            return fastLLM ?? fullLLM
+    var hasUsableModelForCurrentPolicy: Bool {
+        switch localModelPolicy {
+        case .automatic:
+            return hasFastModel || hasFullModel
+        case .fastOnly:
+            return hasFastModel
+        case .fullOnly:
+            return hasFullModel
         }
-        return fullLLM
+    }
+
+    private static let timeoutSeconds: TimeInterval = 15.0
+    private static let localModelPolicyDefaultsKey = "cleanupLocalModelPolicy"
+
+    private let defaults: UserDefaults
+    private let fastModelAvailabilityOverride: Bool?
+    private let fullModelAvailabilityOverride: Bool?
+
+    init(
+        defaults: UserDefaults = .standard,
+        localModelPolicy: LocalCleanupModelPolicy? = nil,
+        fastModelAvailabilityOverride: Bool? = nil,
+        fullModelAvailabilityOverride: Bool? = nil
+    ) {
+        self.defaults = defaults
+        self.fastModelAvailabilityOverride = fastModelAvailabilityOverride
+        self.fullModelAvailabilityOverride = fullModelAvailabilityOverride
+
+        let storedPolicy = LocalCleanupModelPolicy(
+            rawValue: defaults.string(forKey: Self.localModelPolicyDefaultsKey) ?? ""
+        ) ?? .automatic
+        let initialPolicy = localModelPolicy ?? storedPolicy
+        self.localModelPolicy = initialPolicy
+        defaults.set(initialPolicy.rawValue, forKey: Self.localModelPolicyDefaultsKey)
+    }
+
+    func selectedModelKind(wordCount: Int, isQuestion: Bool) -> LocalCleanupModelKind? {
+        switch localModelPolicy {
+        case .automatic:
+            if isQuestion || wordCount > Self.shortInputThreshold {
+                if hasFullModel {
+                    return .full
+                }
+                if hasFastModel {
+                    return .fast
+                }
+                return nil
+            }
+
+            if hasFastModel {
+                return .fast
+            }
+            if hasFullModel {
+                return .full
+            }
+            return nil
+        case .fastOnly:
+            return hasFastModel ? .fast : nil
+        case .fullOnly:
+            return hasFullModel ? .full : nil
+        }
     }
 
     var statusText: String {
@@ -62,11 +133,54 @@ final class TextCleanupManager: ObservableObject {
         modelsDirectory.appendingPathComponent(fileName)
     }
 
+    func clean(text: String, prompt: String? = nil) async -> String? {
+        let wordCount = text.split(separator: " ").count
+        let isQuestion = text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+
+        guard let llm = selectedModel(wordCount: wordCount, isQuestion: isQuestion) else {
+            debugLogger?(
+                .cleanup,
+                "Skipped local cleanup because no usable model was ready for policy \(localModelPolicy.rawValue)."
+            )
+            return nil
+        }
+
+        let activePrompt = prompt ?? TextCleaner.defaultPrompt
+        llm.template = Template.chatML(activePrompt)
+        llm.history = []
+
+        let start = Date()
+        do {
+            let result = try await withTimeout(seconds: Self.timeoutSeconds) {
+                await llm.respond(to: text)
+                return llm.output
+            }
+            let elapsed = Date().timeIntervalSince(start)
+            let cleaned = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            debugLogger?(
+                .cleanup,
+                "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(llm === fastLLM ? "fast" : "full") model."
+            )
+            if cleaned.isEmpty || cleaned == "..." {
+                return nil
+            }
+            return cleaned
+        } catch {
+            let elapsed = Date().timeIntervalSince(start)
+            debugLogger?(
+                .cleanup,
+                "Local cleanup failed after \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)"
+            )
+            return nil
+        }
+    }
+
     func loadModel() async {
         guard state == .idle || state == .error else { return }
 
         errorMessage = nil
         try? FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
+        debugLogger?(.model, "Loading local cleanup models for policy \(localModelPolicy.rawValue).")
 
         // Download both models if needed
         let fastPath = modelPath(for: Self.fastModelFileName)
@@ -87,6 +201,7 @@ final class TextCleanupManager: ObservableObject {
             } catch {
                 self.errorMessage = "Failed to download cleanup model: \(error.localizedDescription)"
                 self.state = .error
+                debugLogger?(.model, self.errorMessage ?? "Failed to download cleanup model.")
                 return
             }
         }
@@ -110,17 +225,13 @@ final class TextCleanupManager: ObservableObject {
             return LLM(from: fullPath, template: Template.chatML(TextCleaner.defaultPrompt), maxTokenCount: 4096)
         }.value
 
-        guard let full = full else {
-            self.errorMessage = "Failed to load cleanup model"
-            self.state = .error
-            return
+        if let full = full {
+            full.temp = 0.1
+            full.update = { (_: String?) in }
+            full.postprocess = { (_: String) in }
+            self.fullLLM = full
         }
-
-        full.temp = 0.1
-        full.update = { (_: String?) in }
-        full.postprocess = { (_: String) in }
-        self.fullLLM = full
-        self.state = .ready
+        updateReadyStateForCurrentPolicy()
     }
 
     func unloadModel() {
@@ -128,6 +239,7 @@ final class TextCleanupManager: ObservableObject {
         fullLLM = nil
         state = .idle
         errorMessage = nil
+        debugLogger?(.model, "Unloaded local cleanup models.")
     }
 
     private func downloadModel(url urlString: String, to destination: URL, progressOffset: Double, progressScale: Double) async throws {
@@ -144,6 +256,61 @@ final class TextCleanupManager: ObservableObject {
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
         let (tempURL, _) = try await session.download(from: url)
         try FileManager.default.moveItem(at: tempURL, to: destination)
+    }
+
+    private var hasFastModel: Bool {
+        fastModelAvailabilityOverride ?? (fastLLM != nil)
+    }
+
+    private var hasFullModel: Bool {
+        fullModelAvailabilityOverride ?? (fullLLM != nil)
+    }
+
+    private func selectedModel(wordCount: Int, isQuestion: Bool) -> LLM? {
+        switch selectedModelKind(wordCount: wordCount, isQuestion: isQuestion) {
+        case .fast:
+            return fastLLM
+        case .full:
+            return fullLLM
+        case nil:
+            return nil
+        }
+    }
+
+    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping @Sendable () async -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw CancellationError()
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func updateReadyStateForCurrentPolicy() {
+        if hasUsableModelForCurrentPolicy {
+            state = .ready
+            errorMessage = nil
+            debugLogger?(
+                .model,
+                "Local cleanup models ready. fastLoaded=\(hasFastModel) fullLoaded=\(hasFullModel) policy=\(localModelPolicy.rawValue)."
+            )
+            return
+        }
+
+        guard fastLLM != nil || fullLLM != nil || state == .loadingModel else {
+            return
+        }
+
+        errorMessage = "Failed to load the selected cleanup model."
+        state = .error
+        debugLogger?(
+            .model,
+            "Local cleanup models unavailable for policy \(localModelPolicy.rawValue). fastLoaded=\(hasFastModel) fullLoaded=\(hasFullModel)."
+        )
     }
 }
 

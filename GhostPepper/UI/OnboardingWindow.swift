@@ -194,14 +194,15 @@ struct SetupStep: View {
     @State private var micGranted = false
     @State private var micDenied = false
     @State private var accessibilityGranted = false
-    @State private var accessibilityTimer: Timer?
+    @State private var permissionTimer: Timer?
     @State private var modelLoadStarted = false
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @StateObject private var micLevel = MicLevelMonitor()
+    @StateObject private var screenRecordingPermission = ScreenRecordingPermissionController()
 
     private var allComplete: Bool {
-        micGranted && accessibilityGranted && modelManager.isReady
+        micGranted && accessibilityGranted && screenRecordingPermission.isGranted && modelManager.isReady
     }
 
     var body: some View {
@@ -293,7 +294,7 @@ struct SetupStep: View {
                 SetupRow(
                     icon: "keyboard.fill",
                     title: "Accessibility",
-                    subtitle: "For the Control key hotkey & pasting",
+                    subtitle: "For keyboard shortcuts & pasting",
                     isComplete: accessibilityGranted
                 ) {
                     if !accessibilityGranted {
@@ -304,6 +305,30 @@ struct SetupStep: View {
                         .tint(.orange)
                         .controlSize(.small)
                     }
+                }
+
+                SetupRow(
+                    icon: "rectangle.on.rectangle",
+                    title: "Screen Recording",
+                    subtitle: "For OCR context & learning",
+                    isComplete: screenRecordingPermission.isGranted
+                ) {
+                    if !screenRecordingPermission.isGranted {
+                        Button("Grant") {
+                            screenRecordingPermission.requestAccess()
+                            PermissionChecker.openScreenRecordingSettings()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        .controlSize(.small)
+                    }
+                }
+
+                if !screenRecordingPermission.isGranted {
+                    Text("Grant Screen Recording access in System Settings, then return here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
                 }
 
                 VStack(spacing: 8) {
@@ -353,7 +378,7 @@ struct SetupStep: View {
 
             if allComplete {
                 Button(action: {
-                    stopAccessibilityPolling()
+                    stopPermissionPolling()
                     onContinue()
                 }) {
                     Text("Continue")
@@ -397,27 +422,34 @@ struct SetupStep: View {
                 Task { await modelManager.loadModel() }
             }
 
-            startAccessibilityPolling()
+            startPermissionPolling()
         }
         .onDisappear {
-            stopAccessibilityPolling()
+            stopPermissionPolling()
             micLevel.stop()
         }
     }
 
-    private func startAccessibilityPolling() {
-        accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-            let granted = PermissionChecker.checkAccessibility()
-            if granted {
+    private func startPermissionPolling() {
+        guard permissionTimer == nil else { return }
+
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            let accessibilityGrantedNow = PermissionChecker.checkAccessibility()
+            if accessibilityGrantedNow {
                 accessibilityGranted = true
-                stopAccessibilityPolling()
+            }
+
+            screenRecordingPermission.refresh()
+
+            if accessibilityGrantedNow && screenRecordingPermission.isGranted {
+                stopPermissionPolling()
             }
         }
     }
 
-    private func stopAccessibilityPolling() {
-        accessibilityTimer?.invalidate()
-        accessibilityTimer = nil
+    private func stopPermissionPolling() {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
     }
 }
 
@@ -470,15 +502,22 @@ class TryItController: ObservableObject {
     @Published var transcribedText: String?
     @Published var monitorStartFailed = false
 
-    private var hotkeyMonitor: HotkeyMonitor?
+    private var hotkeyMonitor: HotkeyMonitoring?
     private var audioRecorder: AudioRecorder?
     private var hasAdvanced = false
     private var retryCount = 0
     private let maxRetries = 5
     private let transcriber: WhisperTranscriber
+    private let hotkeyMonitorFactory: ([ChordAction: KeyChord]) -> HotkeyMonitoring
 
-    init(transcriber: WhisperTranscriber) {
+    init(
+        transcriber: WhisperTranscriber,
+        hotkeyMonitorFactory: @escaping ([ChordAction: KeyChord]) -> HotkeyMonitoring = { bindings in
+            HotkeyMonitor(bindings: bindings)
+        }
+    ) {
         self.transcriber = transcriber
+        self.hotkeyMonitorFactory = hotkeyMonitorFactory
     }
 
     func start(onAdvance: @escaping () -> Void) {
@@ -486,7 +525,9 @@ class TryItController: ObservableObject {
         recorder.prewarm()
         self.audioRecorder = recorder
 
-        let monitor = HotkeyMonitor()
+        let monitor = hotkeyMonitorFactory([
+            .pushToTalk: AppState.defaultPushToTalkChord
+        ])
         monitor.onRecordingStart = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -531,7 +572,7 @@ class TryItController: ObservableObject {
         audioRecorder = nil
     }
 
-    private func retryStartMonitor(monitor: HotkeyMonitor) {
+    private func retryStartMonitor(monitor: HotkeyMonitoring) {
         guard retryCount < maxRetries else {
             monitorStartFailed = true
             return
@@ -564,15 +605,13 @@ struct TryItStep: View {
                 .font(.system(size: 24, weight: .bold))
                 .padding(.top, 24)
 
-            Text("Hold the **Control** key and say something")
+            Text("Hold **Right Command + Right Option** and say something")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 6) {
-                KeyCap(label: "fn", highlighted: false)
-                KeyCap(label: "⌃ control", highlighted: true, isActive: controller.isRecording)
-                KeyCap(label: "⌥", highlighted: false)
-                KeyCap(label: "⌘", highlighted: false)
+                KeyCap(label: "⌘ right", highlighted: true, isActive: controller.isRecording)
+                KeyCap(label: "⌥ right", highlighted: true, isActive: controller.isRecording)
             }
             .padding(.vertical, 8)
 
@@ -619,7 +658,7 @@ struct TryItStep: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                 } else {
-                    Text("Waiting for you to hold Control...")
+                    Text("Waiting for you to hold Right Command + Right Option...")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -734,6 +773,7 @@ struct DoneStep: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 BulletPoint("Switch your microphone")
+                BulletPoint("Change your recording shortcuts")
                 BulletPoint("Toggle text cleanup on/off")
                 BulletPoint("Edit the cleanup prompt")
                 BulletPoint("Check for updates")
