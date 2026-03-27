@@ -100,43 +100,6 @@ final class HistoryStore: ObservableObject {
         persistEntries(deleteAllAudioFiles: true)
     }
 
-    func exportEntry(_ entry: HistoryEntry) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        var sections = [
-            "Created: \(formatter.string(from: entry.createdAt))",
-            "Completed: \(formatter.string(from: entry.completedAt))",
-            "Duration: \(String(format: "%.2f seconds", entry.durationSeconds))",
-            "Speech model: \(entry.speechModelID)",
-            "Cleanup attempted: \(entry.cleanupAttempted ? "Yes" : "No")",
-        ]
-
-        if let cleanupBackend = entry.cleanupBackend {
-            sections.append("Cleanup backend: \(cleanupBackend)")
-        }
-
-        if let cleanupModelName = entry.cleanupModelName {
-            sections.append("Cleanup model: \(cleanupModelName)")
-        }
-
-        if let audioFileURL = entry.audioFileURL {
-            sections.append("Saved recording: \(audioFileURL)")
-        }
-
-        sections.append("")
-        sections.append("Original transcription:")
-        sections.append(entry.rawTranscription)
-
-        if let cleanedText = entry.cleanedText {
-            sections.append("")
-            sections.append("Cleaned text:")
-            sections.append(cleanedText)
-        }
-
-        return sections.joined(separator: "\n")
-    }
-
     func audioFileURL(for entry: HistoryEntry) -> URL? {
         guard let relativePath = entry.audioFileURL else {
             return nil

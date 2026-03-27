@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import SwiftUI
 
 final class HistoryWindowController: NSObject, NSWindowDelegate {
@@ -141,7 +140,7 @@ private struct HistoryWindowView: View {
                 entryPendingDeletion = nil
             }
         } message: { entry in
-            Text("This removes the saved transcript and any recording attached to “\(previewText(for: entry))”.")
+            Text("This removes the saved transcript and any recording attached to "\(previewText(for: entry))".")
         }
     }
 
@@ -176,7 +175,10 @@ private struct HistoryWindowView: View {
             .listStyle(.sidebar)
             .animation(.default, value: displayedEntries.map(\.id))
             .overlay {
-                if displayedEntries.isEmpty {
+                if !appState.historyEnabled {
+                    HistoryDisabledState(onEnable: { appState.historyEnabled = true })
+                        .padding(24)
+                } else if displayedEntries.isEmpty {
                     HistoryEmptyState(
                         title: "No history yet",
                         subtitle: emptyStateSubtitle
@@ -199,18 +201,24 @@ private struct HistoryWindowView: View {
                     HistoryTextSection(
                         title: "Original Transcription",
                         text: selectedEntry.rawTranscription,
-                        buttonTitle: "Copy Original",
-                        buttonAccessibilityLabel: "Copy original transcription",
-                        buttonAction: { copyToPasteboard(selectedEntry.rawTranscription) }
+                        copyButtonTitle: "Copy",
+                        copyAccessibilityLabel: "Copy original transcription",
+                        onCopy: { copyToPasteboard(selectedEntry.rawTranscription) },
+                        pasteButtonTitle: "Paste",
+                        pasteAccessibilityLabel: "Paste original transcription into focused app",
+                        onPaste: { pasteIntoFocusedApp(selectedEntry.rawTranscription) }
                     )
 
                     if let cleanedText = selectedEntry.cleanedText, cleanedText != selectedEntry.rawTranscription {
                         HistoryTextSection(
                             title: "Cleaned Text",
                             text: cleanedText,
-                            buttonTitle: "Copy Cleaned",
-                            buttonAccessibilityLabel: "Copy cleaned transcription",
-                            buttonAction: { copyToPasteboard(cleanedText) }
+                            copyButtonTitle: "Copy",
+                            copyAccessibilityLabel: "Copy cleaned transcription",
+                            onCopy: { copyToPasteboard(cleanedText) },
+                            pasteButtonTitle: "Paste",
+                            pasteAccessibilityLabel: "Paste cleaned transcription into focused app",
+                            onPaste: { pasteIntoFocusedApp(cleanedText) }
                         )
                     }
 
@@ -225,10 +233,6 @@ private struct HistoryWindowView: View {
                         audioSaved: selectedEntry.audioFileURL != nil
                     )
 
-                    if let audioURL = historyStore.audioFileURL(for: selectedEntry) {
-                        HistoryAudioSection(audioURL: audioURL)
-                    }
-
                     HStack {
                         Spacer()
 
@@ -242,6 +246,10 @@ private struct HistoryWindowView: View {
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+        } else if !appState.historyEnabled {
+            HistoryDisabledState(onEnable: { appState.historyEnabled = true })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(32)
         } else if appState.historyEnabled, displayedEntries.isEmpty {
             HistoryEmptyState(
                 title: "No history yet",
@@ -249,17 +257,10 @@ private struct HistoryWindowView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(32)
-        } else if appState.historyEnabled {
-            HistoryEmptyState(
-                title: "Select an entry",
-                subtitle: "Choose a transcription from the list to inspect its text, metadata, and any saved recording."
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(32)
         } else {
             HistoryEmptyState(
-                title: "No history yet",
-                subtitle: "Enable history in Settings to browse saved transcriptions in the app."
+                title: "Select an entry",
+                subtitle: "Choose a transcription from the list."
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(32)
@@ -286,18 +287,15 @@ private struct HistoryWindowView: View {
             Spacer()
 
             Button("Copy All") {
-                copyToPasteboard(historyStore.exportEntry(entry))
+                let text = preferredFullText(for: entry)
+                copyToPasteboard(text)
             }
             .buttonStyle(.borderedProminent)
-            .accessibilityLabel("Copy all history entry details")
+            .accessibilityLabel("Copy full transcription text")
         }
     }
 
     private var emptyStateSubtitle: String {
-        if !appState.historyEnabled {
-            return "Enable history in Settings to browse saved transcriptions in the app."
-        }
-
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Try a different search term. Filters match both the original transcription and the cleaned text."
         }
@@ -338,6 +336,18 @@ private struct HistoryWindowView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+    }
+
+    private func pasteIntoFocusedApp(_ text: String) {
+        appState.textPaster.paste(text: text)
+    }
+
+    private func preferredFullText(for entry: HistoryEntry) -> String {
+        if let cleanedText = entry.cleanedText, cleanedText != entry.rawTranscription {
+            return cleanedText + "\n\n---\n\n" + entry.rawTranscription
+        }
+
+        return entry.rawTranscription
     }
 
     private func previewText(for entry: HistoryEntry) -> String {
@@ -408,9 +418,12 @@ private struct HistorySidebarRow: View {
 private struct HistoryTextSection: View {
     let title: String
     let text: String
-    let buttonTitle: String
-    let buttonAccessibilityLabel: String
-    let buttonAction: () -> Void
+    let copyButtonTitle: String
+    let copyAccessibilityLabel: String
+    let onCopy: () -> Void
+    let pasteButtonTitle: String
+    let pasteAccessibilityLabel: String
+    let onPaste: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -420,9 +433,13 @@ private struct HistoryTextSection: View {
 
                 Spacer()
 
-                Button(buttonTitle, action: buttonAction)
+                Button(pasteButtonTitle, action: onPaste)
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel(pasteAccessibilityLabel)
+
+                Button(copyButtonTitle, action: onCopy)
                     .buttonStyle(.borderedProminent)
-                    .accessibilityLabel(buttonAccessibilityLabel)
+                    .accessibilityLabel(copyAccessibilityLabel)
             }
 
             Text(text)
@@ -447,6 +464,8 @@ private struct HistoryMetadataCard: View {
     let durationText: String
     let audioSaved: Bool
 
+    @State private var isExpanded = false
+
     private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -455,11 +474,8 @@ private struct HistoryMetadataCard: View {
     }()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Metadata")
-                .font(.headline)
-
-            Group {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
                 metadataRow(label: "Speech model", value: speechModelName)
                 metadataRow(label: "Cleanup model", value: cleanupModelName ?? (cleanupAttempted ? "Unavailable" : "Not used"))
                 metadataRow(label: "Cleanup backend", value: cleanupBackend ?? (cleanupAttempted ? "Unavailable" : "Not used"))
@@ -468,6 +484,10 @@ private struct HistoryMetadataCard: View {
                 metadataRow(label: "Duration", value: durationText)
                 metadataRow(label: "Saved recording", value: audioSaved ? "Available" : "Not saved")
             }
+            .padding(.top, 8)
+        } label: {
+            Text("Metadata")
+                .font(.headline)
         }
         .padding(16)
         .background(
@@ -490,101 +510,27 @@ private struct HistoryMetadataCard: View {
     }
 }
 
-private struct HistoryAudioSection: View {
-    let audioURL: URL
-
-    @StateObject private var audioPlayerController = HistoryAudioPlayerController()
+private struct HistoryDisabledState: View {
+    let onEnable: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Saved Recording")
-                .font(.headline)
+        VStack(spacing: 14) {
+            Text("History is off")
+                .font(.title3.weight(.semibold))
 
-            HStack {
-                Button(audioPlayerController.isPlaying ? "Pause" : "Play") {
-                    audioPlayerController.togglePlayback(for: audioURL)
-                }
-                .buttonStyle(.bordered)
+            Text("Enable history to save your transcriptions and browse them here.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
 
-                if let errorMessage = audioPlayerController.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            Button("Enable History") {
+                onEnable()
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .onAppear {
-            audioPlayerController.prepare(url: audioURL)
-        }
-        .onChange(of: audioURL) { _, newURL in
-            audioPlayerController.prepare(url: newURL)
-        }
-        .onDisappear {
-            audioPlayerController.stopPlayback()
-        }
-    }
-}
-
-private final class HistoryAudioPlayerController: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published private(set) var isPlaying = false
-    @Published private(set) var errorMessage: String?
-
-    private var audioPlayer: AVAudioPlayer?
-    private var preparedURL: URL?
-
-    func prepare(url: URL) {
-        guard preparedURL != url else {
-            return
-        }
-
-        stopPlayback()
-        preparedURL = url
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: url)
-            player.delegate = self
-            player.prepareToPlay()
-            audioPlayer = player
-            errorMessage = nil
-        } catch {
-            audioPlayer = nil
-            errorMessage = "Saved recording is unavailable."
-        }
-    }
-
-    func togglePlayback(for url: URL) {
-        prepare(url: url)
-
-        guard let audioPlayer else {
-            return
-        }
-
-        if isPlaying {
-            audioPlayer.pause()
-            isPlaying = false
-        } else {
-            if !audioPlayer.play() {
-                errorMessage = "Could not play the saved recording."
-                return
-            }
-            errorMessage = nil
-            isPlaying = true
-        }
-    }
-
-    func stopPlayback() {
-        audioPlayer?.stop()
-        audioPlayer?.currentTime = 0
-        isPlaying = false
-    }
-
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        isPlaying = false
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
