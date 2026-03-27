@@ -25,6 +25,10 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             thinkingMode: .none,
             input: "Okay, it's running now.",
             correctedInput: "Okay, it's running now.",
+            modelInput: TextCleaner.formatCleanupInput(
+                rawTranscription: "Okay, it's running now.",
+                normalizedTranscription: "Okay, it's running now."
+            ),
             finalPrompt: "System prompt",
             rawModelOutput: "<think>\nReasoning",
             sanitizedOutput: "",
@@ -57,7 +61,13 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             correctionStore: CorrectionStore(defaults: defaults),
             promptBuilder: CleanupPromptBuilder(),
             execute: { input, prompt, modelKind, thinkingMode in
-                XCTAssertEqual(input, "Okay, it's running now.")
+                XCTAssertEqual(
+                    input,
+                    TextCleaner.formatCleanupInput(
+                        rawTranscription: "Okay, it's running now.",
+                        normalizedTranscription: "Okay, it's running now."
+                    )
+                )
                 XCTAssertEqual(prompt, TextCleaner.defaultPrompt)
                 XCTAssertEqual(modelKind, .fast)
                 XCTAssertEqual(thinkingMode, .none)
@@ -82,6 +92,13 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
 
         XCTAssertEqual(transcript.correctedInput, "Okay, it's running now.")
         XCTAssertEqual(
+            transcript.modelInput,
+            TextCleaner.formatCleanupInput(
+                rawTranscription: "Okay, it's running now.",
+                normalizedTranscription: "Okay, it's running now."
+            )
+        )
+        XCTAssertEqual(
             transcript.rawModelOutput,
             """
             <think>
@@ -92,6 +109,51 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
         XCTAssertEqual(transcript.finalOutput, "")
         XCTAssertEqual(transcript.modelDisplayName, "Qwen 3.5 2B (fast cleanup)")
         XCTAssertEqual(transcript.elapsed, 1.25, accuracy: 0.001)
+    }
+
+    func testRunnerWrapsRawAndNormalizedInputBeforeModelExecution() async {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+        let correctionStore = CorrectionStore(defaults: defaults)
+        correctionStore.commonlyMisheardText = "chat gbt -> ChatGPT"
+
+        let runner = CleanupModelProbeRunner(
+            correctionStore: correctionStore,
+            promptBuilder: CleanupPromptBuilder(),
+            execute: { input, _, _, _ in
+                XCTAssertEqual(
+                    input,
+                    TextCleaner.formatCleanupInput(
+                        rawTranscription: "chat gbt fixes text",
+                        normalizedTranscription: "ChatGPT fixes text"
+                    )
+                )
+
+                return CleanupModelProbeRawResult(
+                    modelKind: .fast,
+                    modelDisplayName: "Qwen 3.5 2B (fast cleanup)",
+                    rawOutput: "ChatGPT fixes text",
+                    elapsed: 0.25
+                )
+            }
+        )
+
+        let transcript = try! await runner.run(
+            input: "chat gbt fixes text",
+            modelKind: .fast,
+            thinkingMode: .suppressed
+        )
+
+        XCTAssertEqual(transcript.correctedInput, "ChatGPT fixes text")
+        XCTAssertEqual(
+            transcript.modelInput,
+            TextCleaner.formatCleanupInput(
+                rawTranscription: "chat gbt fixes text",
+                normalizedTranscription: "ChatGPT fixes text"
+            )
+        )
+        XCTAssertEqual(transcript.finalOutput, "ChatGPT fixes text")
     }
 
     func testRunnerBuildsPromptWithOptionalWindowContext() async {

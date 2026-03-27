@@ -17,7 +17,7 @@ private final class SpyCleanupBackend: CleanupBackend {
 
 @MainActor
 final class TextCleanerTests: XCTestCase {
-    func testPreferredTranscriptionsPreserveConfiguredPhrase() async throws {
+    func testPreferredTranscriptionsPreserveConfiguredPhraseBeforeCleanup() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -30,8 +30,11 @@ final class TextCleanerTests: XCTestCase {
 
         let result = await cleaner.clean(text: "Ghost Pepper is ready", prompt: "unused prompt")
 
-        XCTAssertEqual(result, "Ghost Pepper is ready")
-        XCTAssertEqual(localBackend.cleanedInputs.map(\.text), ["Ghost Pepper is ready"])
+        XCTAssertEqual(result, "ghost pepper is ready")
+        XCTAssertEqual(
+            localBackend.cleanedInputs.map(\.text),
+            [TextCleaner.formatCleanupInput(rawTranscription: "Ghost Pepper is ready", normalizedTranscription: "Ghost Pepper is ready")]
+        )
     }
 
     func testCommonlyMisheardReplacementAppliesBeforeCleanup() async throws {
@@ -48,7 +51,10 @@ final class TextCleanerTests: XCTestCase {
         let result = await cleaner.clean(text: "chat gbt fixes text", prompt: "unused prompt")
 
         XCTAssertEqual(result, "ChatGPT fixes text")
-        XCTAssertEqual(localBackend.cleanedInputs.map(\.text), ["ChatGPT fixes text"])
+        XCTAssertEqual(
+            localBackend.cleanedInputs.map(\.text),
+            [TextCleaner.formatCleanupInput(rawTranscription: "chat gbt fixes text", normalizedTranscription: "ChatGPT fixes text")]
+        )
     }
 
     func testCleanerFallsBackToCorrectedRawTextWhenBackendFails() async {
@@ -61,7 +67,22 @@ final class TextCleanerTests: XCTestCase {
         let result = await cleaner.clean(text: text, prompt: "unused prompt")
 
         XCTAssertEqual(result, text)
-        XCTAssertEqual(localBackend.cleanedInputs.map(\.text), [text])
+        XCTAssertEqual(
+            localBackend.cleanedInputs.map(\.text),
+            [TextCleaner.formatCleanupInput(rawTranscription: text, normalizedTranscription: text)]
+        )
+    }
+
+    func testCleanupInputWrapsRawAndNormalizedTranscription() {
+        let formatted = TextCleaner.formatCleanupInput(
+            rawTranscription: "chat gbt fixes text",
+            normalizedTranscription: "ChatGPT fixes text"
+        )
+
+        XCTAssertTrue(formatted.contains("<TRANSCRIPTION_INPUT>"))
+        XCTAssertTrue(formatted.contains("<RAW_TRANSCRIPTION>chat gbt fixes text</RAW_TRANSCRIPTION>"))
+        XCTAssertTrue(formatted.contains("<NORMALIZED_TRANSCRIPTION>ChatGPT fixes text</NORMALIZED_TRANSCRIPTION>"))
+        XCTAssertTrue(formatted.contains("</TRANSCRIPTION_INPUT>"))
     }
 
     func testDeterministicCorrectionsStillApplyWhenNoCleanupBackendIsAvailable() async throws {
@@ -80,7 +101,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, "Jesse approved it")
     }
 
-    func testPreferredTranscriptionsRestoreSpacingAfterCleanupMutatesPhrase() async throws {
+    func testPreferredTranscriptionsDoNotRewriteCleanupOutput() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -93,7 +114,7 @@ final class TextCleanerTests: XCTestCase {
 
         let result = await cleaner.clean(text: "Ghost Pepper is ready", prompt: "unused prompt")
 
-        XCTAssertEqual(result, "Ghost Pepper is ready")
+        XCTAssertEqual(result, "ghost-pepper is ready")
     }
 
     func testCommonlyMisheardReplacementTreatsSpecialCharactersLiterally() async throws {
@@ -172,7 +193,7 @@ final class TextCleanerTests: XCTestCase {
             prompt: "Use OCR context if present."
         )
 
-        XCTAssertEqual(result, "Ghost Pepper is ready")
+        XCTAssertEqual(result, "ghost-pepper is ready")
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Pre-cleanup corrections") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Cleanup LLM transcript") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("System prompt") }))
@@ -228,6 +249,13 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertTrue(result.usedFallback)
         XCTAssertNotNil(result.performance.modelCallDuration)
         XCTAssertEqual(result.transcript?.prompt, "unused prompt")
+        XCTAssertEqual(
+            result.transcript?.inputText,
+            TextCleaner.formatCleanupInput(
+                rawTranscription: "raw text",
+                normalizedTranscription: "raw text"
+            )
+        )
         XCTAssertEqual(result.transcript?.rawOutput, "...")
     }
 }

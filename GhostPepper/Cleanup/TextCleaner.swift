@@ -7,6 +7,7 @@ struct TextCleanerPerformance {
 
 struct TextCleanerTranscript: Equatable {
     let prompt: String
+    let inputText: String
     let rawOutput: String
 }
 
@@ -135,6 +136,10 @@ final class TextCleaner {
             commonlyMisheard: correctionStore.commonlyMisheard
         )
         let correctedText = correctionEngine.applyPreCleanupCorrections(to: text)
+        let formattedInput = Self.formatCleanupInput(
+            rawTranscription: text,
+            normalizedTranscription: correctedText
+        )
         if correctedText == text {
             sensitiveDebugLogger?(.cleanup, "Pre-cleanup corrections: no changes applied.")
         } else {
@@ -154,7 +159,7 @@ final class TextCleaner {
         let modelCallStart = Date()
         do {
             let cleanedText = try await localBackend.clean(
-                text: correctedText,
+                text: formattedInput,
                 prompt: activePrompt,
                 modelKind: modelKind
             )
@@ -169,7 +174,7 @@ final class TextCleaner {
             let finalText = correctionEngine.applyPostCleanupCorrections(to: sanitizedText)
             logCleanupTranscript(
                 prompt: activePrompt,
-                input: correctedText,
+                input: formattedInput,
                 rawOutput: cleanedText,
                 sanitizedOutput: sanitizedText,
                 finalOutput: finalText
@@ -197,6 +202,7 @@ final class TextCleaner {
                 ),
                 transcript: TextCleanerTranscript(
                     prompt: activePrompt,
+                    inputText: formattedInput,
                     rawOutput: cleanedText
                 ),
                 usedFallback: false
@@ -238,7 +244,7 @@ final class TextCleaner {
                 debugLogger?(.cleanup, "Cleanup model returned unusable output, falling back to deterministic corrections.")
                 logCleanupTranscript(
                     prompt: activePrompt,
-                    input: correctedText,
+                    input: formattedInput,
                     rawOutput: rawOutput,
                     sanitizedOutput: sanitizedOutput,
                     finalOutput: finalText
@@ -266,6 +272,7 @@ final class TextCleaner {
                     ),
                     transcript: TextCleanerTranscript(
                         prompt: activePrompt,
+                        inputText: formattedInput,
                         rawOutput: rawOutput
                     ),
                     usedFallback: true
@@ -318,6 +325,15 @@ final class TextCleaner {
         }
 
         return sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func formatCleanupInput(rawTranscription: String, normalizedTranscription: String) -> String {
+        """
+        <TRANSCRIPTION_INPUT>
+        <RAW_TRANSCRIPTION>\(rawTranscription)</RAW_TRANSCRIPTION>
+        <NORMALIZED_TRANSCRIPTION>\(normalizedTranscription)</NORMALIZED_TRANSCRIPTION>
+        </TRANSCRIPTION_INPUT>
+        """
     }
 
     private func logCleanupTranscript(

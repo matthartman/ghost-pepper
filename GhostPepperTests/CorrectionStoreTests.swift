@@ -55,6 +55,17 @@ final class CorrectionStoreTests: XCTestCase {
         XCTAssertEqual(corrected, "open ChatGPT and summarize this")
     }
 
+    func testPreferredTranscriptionsDoNotRewritePostCleanupOutput() {
+        let engine = DeterministicCorrectionEngine(
+            preferredTranscriptions: ["Ghost Pepper"],
+            commonlyMisheard: []
+        )
+
+        let corrected = engine.applyPostCleanupCorrections(to: "ghost pepper is ready")
+
+        XCTAssertEqual(corrected, "ghost pepper is ready")
+    }
+
     func testPreferredOCRCustomWordsMatchPreferredTranscriptions() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)

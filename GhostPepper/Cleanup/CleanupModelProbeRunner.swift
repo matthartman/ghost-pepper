@@ -19,6 +19,7 @@ struct CleanupModelProbeTranscript: Equatable, Sendable {
     let thinkingMode: CleanupModelProbeThinkingMode
     let input: String
     let correctedInput: String
+    let modelInput: String
     let finalPrompt: String
     let rawModelOutput: String
     let sanitizedOutput: String
@@ -75,7 +76,11 @@ struct CleanupModelProbeRunner {
             commonlyMisheard: correctionStore.commonlyMisheard
         )
         let correctedInput = correctionEngine.applyPreCleanupCorrections(to: input)
-        let rawResult = try await execute(correctedInput, finalPrompt, modelKind, thinkingMode)
+        let modelInput = TextCleaner.formatCleanupInput(
+            rawTranscription: input,
+            normalizedTranscription: correctedInput
+        )
+        let rawResult = try await execute(modelInput, finalPrompt, modelKind, thinkingMode)
         let sanitizedOutput = TextCleaner.sanitizeCleanupOutput(rawResult.rawOutput)
         let finalOutput = correctionEngine.applyPostCleanupCorrections(to: sanitizedOutput)
 
@@ -85,6 +90,7 @@ struct CleanupModelProbeRunner {
             thinkingMode: thinkingMode,
             input: input,
             correctedInput: correctedInput,
+            modelInput: modelInput,
             finalPrompt: finalPrompt,
             rawModelOutput: rawResult.rawOutput,
             sanitizedOutput: sanitizedOutput,

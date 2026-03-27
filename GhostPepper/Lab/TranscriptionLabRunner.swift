@@ -111,7 +111,7 @@ final class TranscriptionLabRunner {
             cleanupUsedFallback: cleanedResult.usedFallback,
             transcript: TranscriptionLabCleanupTranscript(
                 prompt: activePrompt,
-                inputText: rawTranscription,
+                inputText: cleanedResult.transcript?.inputText ?? rawTranscription,
                 rawModelOutput: cleanedResult.transcript?.rawOutput
             )
         )

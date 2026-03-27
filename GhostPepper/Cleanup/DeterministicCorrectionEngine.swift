@@ -20,9 +20,7 @@ struct DeterministicCorrectionEngine: Sendable {
     }
 
     func applyPostCleanupCorrections(to text: String) -> String {
-        sortedPreferredTranscriptions.reduce(text) { partialResult, preferredTranscription in
-            replacingPreferredPhrase(preferredTranscription, in: partialResult)
-        }
+        text
     }
 
     private var sortedPreferredTranscriptions: [String] {
@@ -81,20 +79,6 @@ struct DeterministicCorrectionEngine: Sendable {
         )
     }
 
-    private func replacingPreferredPhrase(_ phrase: String, in text: String) -> String {
-        guard let expression = preferredPhraseExpression(for: phrase) else {
-            return text
-        }
-
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return expression.stringByReplacingMatches(
-            in: text,
-            options: [],
-            range: range,
-            withTemplate: NSRegularExpression.escapedTemplate(for: phrase)
-        )
-    }
-
     private func phraseExpression(for phrase: String) -> NSRegularExpression? {
         let trimmedPhrase = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPhrase.isEmpty else {
@@ -113,26 +97,6 @@ struct DeterministicCorrectionEngine: Sendable {
         )
     }
 
-    private func preferredPhraseExpression(for phrase: String) -> NSRegularExpression? {
-        let trimmedPhrase = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedPhrase.isEmpty else {
-            return nil
-        }
-
-        let components = trimmedPhrase.components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-
-        guard components.count > 1 else {
-            return phraseExpression(for: trimmedPhrase)
-        }
-
-        let escapedComponents = components.map(NSRegularExpression.escapedPattern(for:))
-        let pattern = "(?<![\\p{L}\\p{N}])"
-            + escapedComponents.joined(separator: "[\\s\\p{P}\\p{S}_]*")
-            + "(?![\\p{L}\\p{N}])"
-
-        return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-    }
 }
 
 private struct ProtectedText {
