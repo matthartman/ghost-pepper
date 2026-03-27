@@ -54,6 +54,8 @@ private struct ModelInventoryRow: View {
         switch row.status {
         case .loaded:
             return "Loaded"
+        case .loading:
+            return "Loading"
         case .notLoaded:
             return "Not loaded"
         case .downloading(let progress?):
@@ -73,6 +75,9 @@ private struct ModelInventoryStatusIndicator: View {
             case .loaded:
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+            case .loading:
+                ProgressView()
+                    .controlSize(.mini)
             case .notLoaded:
                 Image(systemName: "circle")
                     .foregroundStyle(.quaternary)

@@ -2,6 +2,7 @@ import Foundation
 
 enum RuntimeModelStatus: Equatable {
     case notLoaded
+    case loading
     case downloading(progress: Double?)
     case loaded
 }
@@ -66,7 +67,7 @@ enum RuntimeModelInventory {
             return "Downloading \(row.name) (\(pct)%)..."
         case .downloading(nil):
             return "Preparing \(row.name)..."
-        case .loaded, .notLoaded:
+        case .loading, .loaded, .notLoaded:
             return nil
         }
     }
@@ -82,7 +83,7 @@ enum RuntimeModelInventory {
         cachedSpeechModelNames: Set<String>
     ) -> RuntimeModelStatus {
         if speechModelState == .loading && modelName == activeSpeechModelName {
-            return .downloading(progress: nil)
+            return cachedSpeechModelNames.contains(modelName) ? .loading : .downloading(progress: nil)
         }
 
         return cachedSpeechModelNames.contains(modelName) ? .loaded : .notLoaded

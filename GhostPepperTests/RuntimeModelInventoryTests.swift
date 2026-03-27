@@ -57,4 +57,18 @@ final class RuntimeModelInventoryTests: XCTestCase {
         XCTAssertEqual(rows[1].status, .notLoaded)
         XCTAssertTrue(rows[1].isSelected)
     }
+
+    func testRuntimeModelRowsShowCachedSpeechModelAsLoadingInsteadOfDownloading() {
+        let rows = RuntimeModelInventory.rows(
+            selectedSpeechModelName: "openai_whisper-small.en",
+            activeSpeechModelName: "openai_whisper-small.en",
+            speechModelState: .loading,
+            cachedSpeechModelNames: ["openai_whisper-small.en"],
+            cleanupState: .idle,
+            loadedCleanupKinds: []
+        )
+
+        XCTAssertEqual(rows[1].status, .loading)
+        XCTAssertNil(RuntimeModelInventory.activeDownloadText(rows: rows))
+    }
 }
