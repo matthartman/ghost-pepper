@@ -179,4 +179,38 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
         XCTAssertEqual(transcript.finalOutput, "Terminal says hello")
         XCTAssertEqual(transcript.thinkingMode, .suppressed)
     }
+
+    func testRunnerAddsStrictAntiRewritePromptForCompactCleanupModel() async {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        let runner = CleanupModelProbeRunner(
+            correctionStore: CorrectionStore(defaults: defaults),
+            promptBuilder: CleanupPromptBuilder(),
+            execute: { _, prompt, modelKind, _ in
+                XCTAssertEqual(modelKind, .qwen35_0_8b_q4_k_m)
+                XCTAssertTrue(prompt.hasPrefix("Base prompt"))
+                XCTAssertTrue(prompt.contains("ADDITIONAL STRICT RULES"))
+                XCTAssertTrue(prompt.contains("This is copy editing, not rewriting."))
+                XCTAssertTrue(prompt.contains("Return ONLY the cleaned transcript text."))
+
+                return CleanupModelProbeRawResult(
+                    modelKind: .qwen35_0_8b_q4_k_m,
+                    modelDisplayName: "Qwen 3.5 0.8B Q4_K_M",
+                    rawOutput: "Base output",
+                    elapsed: 0.5
+                )
+            }
+        )
+
+        let transcript = try! await runner.run(
+            input: "Base input",
+            modelKind: .qwen35_0_8b_q4_k_m,
+            thinkingMode: .suppressed,
+            prompt: "Base prompt"
+        )
+
+        XCTAssertTrue(transcript.finalPrompt.contains("ADDITIONAL STRICT RULES"))
+    }
 }

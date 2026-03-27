@@ -236,6 +236,39 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(localBackend.cleanedInputs.map(\.modelKind), [.fast])
     }
 
+    func testCleanerAddsStrictAntiRewritePromptForCompactCleanupModel() async throws {
+        let localBackend = SpyCleanupBackend(nextResult: .success("cleaned"))
+        let cleaner = TextCleaner(localBackend: localBackend)
+
+        _ = await cleaner.cleanWithPerformance(
+            text: "raw text",
+            prompt: "Base prompt",
+            modelKind: .qwen35_0_8b_q4_k_m
+        )
+
+        let prompt = try XCTUnwrap(localBackend.cleanedInputs.first?.prompt)
+        XCTAssertEqual(localBackend.cleanedInputs.map(\.modelKind), [.qwen35_0_8b_q4_k_m])
+        XCTAssertTrue(prompt.hasPrefix("Base prompt"))
+        XCTAssertTrue(prompt.contains("ADDITIONAL STRICT RULES"))
+        XCTAssertTrue(prompt.contains("This is copy editing, not rewriting."))
+        XCTAssertTrue(prompt.contains("Do NOT drop opening sentences, lead-in phrases, qualifiers, or trailing clauses."))
+        XCTAssertTrue(prompt.contains("Return ONLY the cleaned transcript text."))
+    }
+
+    func testCleanerLeavesPromptUnchangedForRecommendedFastModel() async {
+        let localBackend = SpyCleanupBackend(nextResult: .success("cleaned"))
+        let cleaner = TextCleaner(localBackend: localBackend)
+
+        _ = await cleaner.cleanWithPerformance(
+            text: "raw text",
+            prompt: "Base prompt",
+            modelKind: .qwen35_2b_q4_k_m
+        )
+
+        XCTAssertEqual(localBackend.cleanedInputs.map(\.modelKind), [.qwen35_2b_q4_k_m])
+        XCTAssertEqual(localBackend.cleanedInputs.first?.prompt, "Base prompt")
+    }
+
     func testCleanerMarksFallbackAndPreservesTranscriptForUnusableModelOutput() async {
         let localBackend = SpyCleanupBackend(
             nextResult: .failure(CleanupBackendError.unusableOutput(rawOutput: "..."))

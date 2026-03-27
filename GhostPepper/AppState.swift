@@ -765,7 +765,11 @@ class AppState: ObservableObject {
             activeCleanupPrompt = cleanupPrompt
         }
 
-        let cleanedResult = await textCleaner.cleanWithPerformance(text: text, prompt: activeCleanupPrompt)
+        let cleanedResult = await textCleaner.cleanWithPerformance(
+            text: text,
+            prompt: activeCleanupPrompt,
+            modelKind: textCleanupManager.selectedCleanupModelKind
+        )
         activePerformanceTrace?.modelCallDuration = cleanedResult.performance.modelCallDuration
         activePerformanceTrace?.postProcessDuration = cleanedResult.performance.postProcessDuration
         return (

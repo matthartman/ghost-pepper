@@ -63,7 +63,11 @@ struct CleanupModelProbeRunner {
         prompt: String? = nil,
         windowContext: OCRContext? = nil
     ) async throws -> CleanupModelProbeTranscript {
-        let activePrompt = prompt ?? TextCleaner.defaultPrompt
+        let basePrompt = prompt ?? TextCleaner.defaultPrompt
+        let activePrompt = TextCleaner.effectivePrompt(
+            basePrompt: basePrompt,
+            modelKind: modelKind
+        )
         let finalPrompt = promptBuilder.buildPrompt(
             basePrompt: activePrompt,
             windowContext: windowContext,
