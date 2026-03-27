@@ -136,10 +136,7 @@ final class TextCleaner {
             commonlyMisheard: correctionStore.commonlyMisheard
         )
         let correctedText = correctionEngine.applyPreCleanupCorrections(to: text)
-        let formattedInput = Self.formatCleanupInput(
-            rawTranscription: text,
-            normalizedTranscription: correctedText
-        )
+        let formattedInput = Self.formatCleanupInput(userInput: correctedText)
         if correctedText == text {
             sensitiveDebugLogger?(.cleanup, "Pre-cleanup corrections: no changes applied.")
         } else {
@@ -327,12 +324,11 @@ final class TextCleaner {
         return sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func formatCleanupInput(rawTranscription: String, normalizedTranscription: String) -> String {
+    static func formatCleanupInput(userInput: String) -> String {
         """
-        <TRANSCRIPTION_INPUT>
-        <RAW_TRANSCRIPTION>\(rawTranscription)</RAW_TRANSCRIPTION>
-        <NORMALIZED_TRANSCRIPTION>\(normalizedTranscription)</NORMALIZED_TRANSCRIPTION>
-        </TRANSCRIPTION_INPUT>
+        <USER-INPUT>
+        \(userInput)
+        </USER-INPUT>
         """
     }
 

@@ -25,10 +25,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             thinkingMode: .none,
             input: "Okay, it's running now.",
             correctedInput: "Okay, it's running now.",
-            modelInput: TextCleaner.formatCleanupInput(
-                rawTranscription: "Okay, it's running now.",
-                normalizedTranscription: "Okay, it's running now."
-            ),
+            modelInput: TextCleaner.formatCleanupInput(userInput: "Okay, it's running now."),
             finalPrompt: "System prompt",
             rawModelOutput: "<think>\nReasoning",
             sanitizedOutput: "",
@@ -63,10 +60,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             execute: { input, prompt, modelKind, thinkingMode in
                 XCTAssertEqual(
                     input,
-                    TextCleaner.formatCleanupInput(
-                        rawTranscription: "Okay, it's running now.",
-                        normalizedTranscription: "Okay, it's running now."
-                    )
+                    TextCleaner.formatCleanupInput(userInput: "Okay, it's running now.")
                 )
                 XCTAssertEqual(prompt, TextCleaner.defaultPrompt)
                 XCTAssertEqual(modelKind, .fast)
@@ -93,10 +87,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
         XCTAssertEqual(transcript.correctedInput, "Okay, it's running now.")
         XCTAssertEqual(
             transcript.modelInput,
-            TextCleaner.formatCleanupInput(
-                rawTranscription: "Okay, it's running now.",
-                normalizedTranscription: "Okay, it's running now."
-            )
+            TextCleaner.formatCleanupInput(userInput: "Okay, it's running now.")
         )
         XCTAssertEqual(
             transcript.rawModelOutput,
@@ -124,10 +115,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             execute: { input, _, _, _ in
                 XCTAssertEqual(
                     input,
-                    TextCleaner.formatCleanupInput(
-                        rawTranscription: "chat gbt fixes text",
-                        normalizedTranscription: "ChatGPT fixes text"
-                    )
+                    TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")
                 )
 
                 return CleanupModelProbeRawResult(
@@ -148,10 +136,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
         XCTAssertEqual(transcript.correctedInput, "ChatGPT fixes text")
         XCTAssertEqual(
             transcript.modelInput,
-            TextCleaner.formatCleanupInput(
-                rawTranscription: "chat gbt fixes text",
-                normalizedTranscription: "ChatGPT fixes text"
-            )
+            TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")
         )
         XCTAssertEqual(transcript.finalOutput, "ChatGPT fixes text")
     }
@@ -165,8 +150,8 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             correctionStore: CorrectionStore(defaults: defaults),
             promptBuilder: CleanupPromptBuilder(),
             execute: { _, prompt, _, _ in
-                XCTAssertTrue(prompt.contains("Use the OCR contents only as supporting context"))
-                XCTAssertTrue(prompt.contains("<WINDOW_CONTENTS>"))
+                XCTAssertTrue(prompt.contains("Use the window OCR only as supporting context"))
+                XCTAssertTrue(prompt.contains("<WINDOW-OCR-CONTENT>"))
                 XCTAssertTrue(prompt.contains("Terminal says hello"))
 
                 return CleanupModelProbeRawResult(

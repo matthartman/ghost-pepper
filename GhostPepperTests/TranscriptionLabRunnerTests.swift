@@ -45,8 +45,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                     transcript: TextCleanerTranscript(
                         prompt: prompt,
                         inputText: TextCleaner.formatCleanupInput(
-                            rawTranscription: "The default should be Quen three point five four b.",
-                            normalizedTranscription: "The default should be Quen three point five four b."
+                            userInput: "The default should be Quen three point five four b."
                         ),
                         rawOutput: "The default should be Qwen 3.5 4B."
                     )
@@ -79,8 +78,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
         XCTAssertEqual(
             result.transcript?.inputText,
             TextCleaner.formatCleanupInput(
-                rawTranscription: "The default should be Quen three point five four b.",
-                normalizedTranscription: "The default should be Quen three point five four b."
+                userInput: "The default should be Quen three point five four b."
             )
         )
         XCTAssertEqual(result.transcript?.rawModelOutput, "The default should be Qwen 3.5 4B.")
@@ -173,10 +171,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                     ),
                     transcript: TextCleanerTranscript(
                         prompt: prompt,
-                        inputText: TextCleaner.formatCleanupInput(
-                            rawTranscription: "raw text",
-                            normalizedTranscription: "raw text"
-                        ),
+                        inputText: TextCleaner.formatCleanupInput(userInput: "raw text"),
                         rawOutput: "..."
                     ),
                     usedFallback: true
@@ -199,10 +194,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
         XCTAssertEqual(result.correctedTranscription, "raw text")
         XCTAssertEqual(
             result.transcript?.inputText,
-            TextCleaner.formatCleanupInput(
-                rawTranscription: "raw text",
-                normalizedTranscription: "raw text"
-            )
+            TextCleaner.formatCleanupInput(userInput: "raw text")
         )
         XCTAssertEqual(result.transcript?.rawModelOutput, "...")
     }

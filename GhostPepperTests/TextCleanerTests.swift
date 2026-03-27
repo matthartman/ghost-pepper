@@ -33,7 +33,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, "ghost pepper is ready")
         XCTAssertEqual(
             localBackend.cleanedInputs.map(\.text),
-            [TextCleaner.formatCleanupInput(rawTranscription: "Ghost Pepper is ready", normalizedTranscription: "Ghost Pepper is ready")]
+            [TextCleaner.formatCleanupInput(userInput: "Ghost Pepper is ready")]
         )
     }
 
@@ -53,7 +53,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, "ChatGPT fixes text")
         XCTAssertEqual(
             localBackend.cleanedInputs.map(\.text),
-            [TextCleaner.formatCleanupInput(rawTranscription: "chat gbt fixes text", normalizedTranscription: "ChatGPT fixes text")]
+            [TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")]
         )
     }
 
@@ -69,20 +69,18 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, text)
         XCTAssertEqual(
             localBackend.cleanedInputs.map(\.text),
-            [TextCleaner.formatCleanupInput(rawTranscription: text, normalizedTranscription: text)]
+            [TextCleaner.formatCleanupInput(userInput: text)]
         )
     }
 
-    func testCleanupInputWrapsRawAndNormalizedTranscription() {
-        let formatted = TextCleaner.formatCleanupInput(
-            rawTranscription: "chat gbt fixes text",
-            normalizedTranscription: "ChatGPT fixes text"
-        )
+    func testCleanupInputWrapsNormalizedUserInput() {
+        let formatted = TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")
 
-        XCTAssertTrue(formatted.contains("<TRANSCRIPTION_INPUT>"))
-        XCTAssertTrue(formatted.contains("<RAW_TRANSCRIPTION>chat gbt fixes text</RAW_TRANSCRIPTION>"))
-        XCTAssertTrue(formatted.contains("<NORMALIZED_TRANSCRIPTION>ChatGPT fixes text</NORMALIZED_TRANSCRIPTION>"))
-        XCTAssertTrue(formatted.contains("</TRANSCRIPTION_INPUT>"))
+        XCTAssertTrue(formatted.contains("<USER-INPUT>"))
+        XCTAssertTrue(formatted.contains("ChatGPT fixes text"))
+        XCTAssertTrue(formatted.contains("</USER-INPUT>"))
+        XCTAssertFalse(formatted.contains("<RAW_TRANSCRIPTION>"))
+        XCTAssertFalse(formatted.contains("<NORMALIZED_TRANSCRIPTION>"))
     }
 
     func testDeterministicCorrectionsStillApplyWhenNoCleanupBackendIsAvailable() async throws {
@@ -251,10 +249,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result.transcript?.prompt, "unused prompt")
         XCTAssertEqual(
             result.transcript?.inputText,
-            TextCleaner.formatCleanupInput(
-                rawTranscription: "raw text",
-                normalizedTranscription: "raw text"
-            )
+            TextCleaner.formatCleanupInput(userInput: "raw text")
         )
         XCTAssertEqual(result.transcript?.rawOutput, "...")
     }

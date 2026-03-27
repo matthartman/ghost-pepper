@@ -76,10 +76,7 @@ struct CleanupModelProbeRunner {
             commonlyMisheard: correctionStore.commonlyMisheard
         )
         let correctedInput = correctionEngine.applyPreCleanupCorrections(to: input)
-        let modelInput = TextCleaner.formatCleanupInput(
-            rawTranscription: input,
-            normalizedTranscription: correctedInput
-        )
+        let modelInput = TextCleaner.formatCleanupInput(userInput: correctedInput)
         let rawResult = try await execute(modelInput, finalPrompt, modelKind, thinkingMode)
         let sanitizedOutput = TextCleaner.sanitizeCleanupOutput(rawResult.rawOutput)
         let finalOutput = correctionEngine.applyPostCleanupCorrections(to: sanitizedOutput)

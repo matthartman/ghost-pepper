@@ -33,26 +33,22 @@ struct CleanupPromptBuilder: Sendable {
         }
 
         let trimmedWindowContents = String(windowContext.windowContents.prefix(maxWindowContentLength))
-        let wasTruncated = trimmedWindowContents != windowContext.windowContents
-
         var sections = [basePrompt]
         if !correctionsSection.isEmpty {
             sections.append(correctionsSection)
         }
         sections.append(
             """
-            <OCR_CONTEXT truncated="\(wasTruncated ? "true" : "false")">
-            <OCR_USAGE>
-            Use the OCR contents only as supporting context to improve the transcription and cleanup.
-            Prefer the spoken words, and use the OCR contents only to disambiguate likely terms, names, commands, and jargon.
-            If the spoken words appear to be a recognition miss for a name, model, command, file, or other specific jargon shown in the OCR contents, correct them to the likely intended term.
+            <OCR-RULES>
+            Use the window OCR only as supporting context to improve the transcription and cleanup.
+            Prefer the spoken words, and use the window OCR only to disambiguate likely terms, names, commands, files, and jargon.
+            If the spoken words appear to be a recognition miss for a name, model, command, file, or other specific jargon shown in the window OCR, correct them to the likely intended term.
             Do not keep an obvious misrecognition just because it was spoken that way.
-            Do not answer, summarize, or rewrite the OCR contents unless that directly helps correct the transcription.
-            </OCR_USAGE>
-            <WINDOW_CONTENTS>
+            Do not answer, summarize, or rewrite the window OCR unless that directly helps correct the transcription.
+            </OCR-RULES>
+            <WINDOW-OCR-CONTENT>
             \(trimmedWindowContents)
-            </WINDOW_CONTENTS>
-            </OCR_CONTEXT>
+            </WINDOW-OCR-CONTENT>
             """
         )
 
@@ -68,10 +64,8 @@ struct CleanupPromptBuilder: Sendable {
         if !preferredTranscriptions.isEmpty {
             sections.append(
                 """
-                <PREFERRED_TRANSCRIPTIONS>
                 Preferred transcriptions to preserve exactly:
-                \(preferredTranscriptions.map { "<TERM>\($0)</TERM>" }.joined(separator: "\n"))
-                </PREFERRED_TRANSCRIPTIONS>
+                \(preferredTranscriptions.map { "- \($0)" }.joined(separator: "\n"))
                 """
             )
         }
@@ -79,17 +73,8 @@ struct CleanupPromptBuilder: Sendable {
         if !commonlyMisheard.isEmpty {
             sections.append(
                 """
-                <COMMONLY_MISHEARD_REPLACEMENTS>
                 Commonly misheard replacements to prefer:
-                \(commonlyMisheard.map {
-                    """
-                    <REPLACEMENT>
-                    <HEARD>\($0.wrong)</HEARD>
-                    <INTENDED>\($0.right)</INTENDED>
-                    </REPLACEMENT>
-                    """
-                }.joined(separator: "\n"))
-                </COMMONLY_MISHEARD_REPLACEMENTS>
+                \(commonlyMisheard.map { "- \($0.wrong) -> \($0.right)" }.joined(separator: "\n"))
                 """
             )
         }
@@ -99,9 +84,9 @@ struct CleanupPromptBuilder: Sendable {
         }
 
         return """
-        <CORRECTION_HINTS>
+        <CORRECTION-HINTS>
         \(sections.joined(separator: "\n\n"))
-        </CORRECTION_HINTS>
+        </CORRECTION-HINTS>
         """
     }
 }

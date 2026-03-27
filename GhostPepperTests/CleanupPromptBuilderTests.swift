@@ -24,11 +24,11 @@ final class CleanupPromptBuilderTests: XCTestCase {
         )
 
         XCTAssertTrue(prompt.contains("Base prompt"))
-        XCTAssertTrue(prompt.contains("<OCR_CONTEXT"))
-        XCTAssertTrue(prompt.contains("</OCR_CONTEXT>"))
-        XCTAssertTrue(prompt.contains("<WINDOW_CONTENTS>"))
+        XCTAssertTrue(prompt.contains("<OCR-RULES>"))
+        XCTAssertTrue(prompt.contains("</OCR-RULES>"))
+        XCTAssertTrue(prompt.contains("<WINDOW-OCR-CONTENT>"))
         XCTAssertTrue(prompt.contains("Frontmost text"))
-        XCTAssertTrue(prompt.contains("</WINDOW_CONTENTS>"))
+        XCTAssertTrue(prompt.contains("</WINDOW-OCR-CONTENT>"))
     }
 
     func testBuilderExplainsHowToUseWindowContentsAsSupportingContext() {
@@ -41,12 +41,12 @@ final class CleanupPromptBuilderTests: XCTestCase {
             includeWindowContext: true
         )
 
-        XCTAssertTrue(prompt.contains("<OCR_USAGE>"))
-        XCTAssertTrue(prompt.contains("Use the OCR contents only as supporting context to improve the transcription and cleanup."))
-        XCTAssertTrue(prompt.contains("Prefer the spoken words, and use the OCR contents only to disambiguate likely terms, names, commands, and jargon."))
-        XCTAssertTrue(prompt.contains("If the spoken words appear to be a recognition miss for a name, model, command, file, or other specific jargon shown in the OCR contents, correct them to the likely intended term."))
-        XCTAssertTrue(prompt.contains("Do not answer, summarize, or rewrite the OCR contents unless that directly helps correct the transcription."))
-        XCTAssertTrue(prompt.contains("</OCR_USAGE>"))
+        XCTAssertTrue(prompt.contains("<OCR-RULES>"))
+        XCTAssertTrue(prompt.contains("Use the window OCR only as supporting context to improve the transcription and cleanup."))
+        XCTAssertTrue(prompt.contains("Prefer the spoken words, and use the window OCR only to disambiguate likely terms, names, commands, files, and jargon."))
+        XCTAssertTrue(prompt.contains("If the spoken words appear to be a recognition miss for a name, model, command, file, or other specific jargon shown in the window OCR, correct them to the likely intended term."))
+        XCTAssertTrue(prompt.contains("Do not answer, summarize, or rewrite the window OCR unless that directly helps correct the transcription."))
+        XCTAssertTrue(prompt.contains("</OCR-RULES>"))
     }
 
     func testBuilderOmitsWindowContentsWhenContextUnavailable() {
@@ -89,15 +89,15 @@ final class CleanupPromptBuilderTests: XCTestCase {
             includeWindowContext: true
         )
 
+        XCTAssertTrue(prompt.contains("<CORRECTION-HINTS>"))
         XCTAssertTrue(prompt.contains("Preferred transcriptions to preserve exactly:"))
-        XCTAssertTrue(prompt.contains("<CORRECTION_HINTS>"))
-        XCTAssertTrue(prompt.contains("<PREFERRED_TRANSCRIPTIONS>"))
-        XCTAssertTrue(prompt.contains("<TERM>Ghost Pepper</TERM>"))
-        XCTAssertTrue(prompt.contains("<TERM>Jesse</TERM>"))
-        XCTAssertTrue(prompt.contains("<COMMONLY_MISHEARD_REPLACEMENTS>"))
-        XCTAssertTrue(prompt.contains("<HEARD>just see</HEARD>"))
-        XCTAssertTrue(prompt.contains("<INTENDED>Jesse</INTENDED>"))
-        XCTAssertTrue(prompt.contains("<HEARD>chat gbt</HEARD>"))
-        XCTAssertTrue(prompt.contains("<INTENDED>ChatGPT</INTENDED>"))
+        XCTAssertTrue(prompt.contains("- Ghost Pepper"))
+        XCTAssertTrue(prompt.contains("- Jesse"))
+        XCTAssertTrue(prompt.contains("Commonly misheard replacements to prefer:"))
+        XCTAssertTrue(prompt.contains("- just see -> Jesse"))
+        XCTAssertTrue(prompt.contains("- chat gbt -> ChatGPT"))
+        XCTAssertFalse(prompt.contains("<REPLACEMENT>"))
+        XCTAssertFalse(prompt.contains("<HEARD>"))
+        XCTAssertFalse(prompt.contains("<INTENDED>"))
     }
 }
