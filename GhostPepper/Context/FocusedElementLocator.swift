@@ -9,6 +9,170 @@ struct FrontmostWindowReference: Equatable, Sendable {
 }
 
 final class FocusedElementLocator {
+    struct PasteTargetObservation: Equatable {
+        enum Status: Equatable {
+            case editable
+            case nonEditable
+        }
+
+        let processID: pid_t
+        let windowID: UInt32?
+        let status: Status
+    }
+
+    fileprivate final class PasteTargetMonitor {
+        private var activationObserver: NSObjectProtocol?
+        private var axObserver: AXObserver?
+        private var observedProcessID: pid_t?
+        private var observation: PasteTargetObservation?
+        private var isStarted = false
+
+        func start() {
+            guard !isStarted else {
+                return
+            }
+
+            isStarted = true
+            activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.syncFrontmostApplication()
+            }
+            syncFrontmostApplication()
+        }
+
+        func syncFrontmostApplication() {
+            guard let application = NSWorkspace.shared.frontmostApplication else {
+                clearObservation()
+                return
+            }
+
+            guard observedProcessID != application.processIdentifier else {
+                return
+            }
+
+            uninstallObserver()
+            observedProcessID = application.processIdentifier
+            clearObservation()
+            installObserver(for: application.processIdentifier)
+        }
+
+        func currentObservation() -> PasteTargetObservation? {
+            observation
+        }
+
+        func recordDirectFocusedTarget(processID: pid_t, windowID: UInt32?) {
+            observation = PasteTargetObservation(
+                processID: processID,
+                windowID: windowID,
+                status: .editable
+            )
+        }
+
+        fileprivate func handle(notification: CFString, element: AXUIElement) {
+            guard let processID = observedProcessID else {
+                return
+            }
+
+            let locator = FocusedElementLocator()
+            let windowID = locator.frontmostWindowReference(for: processID)?.windowID
+            let status: PasteTargetObservation.Status
+            if locator.isObservedPasteTarget(element) {
+                status = .editable
+            } else if notification as String == kAXFocusedUIElementChangedNotification as String
+                        || notification as String == kAXFocusedWindowChangedNotification as String {
+                status = .nonEditable
+            } else {
+                return
+            }
+
+            observation = PasteTargetObservation(
+                processID: processID,
+                windowID: windowID,
+                status: status
+            )
+        }
+
+        private func clearObservation() {
+            observation = nil
+        }
+
+        private func installObserver(for processID: pid_t) {
+            let applicationElement = AXUIElementCreateApplication(processID)
+            _ = AXUIElementSetAttributeValue(
+                applicationElement,
+                "AXManualAccessibility" as CFString,
+                kCFBooleanTrue
+            )
+
+            var observer: AXObserver?
+            let callback: AXObserverCallback = focusedElementObserverCallback
+            guard AXObserverCreate(processID, callback, &observer) == .success,
+                  let observer else {
+                return
+            }
+
+            let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+            let notifications = [
+                kAXFocusedUIElementChangedNotification as CFString,
+                kAXFocusedWindowChangedNotification as CFString
+            ]
+
+            for notification in notifications {
+                _ = AXObserverAddNotification(observer, applicationElement, notification, context)
+            }
+
+            CFRunLoopAddSource(
+                CFRunLoopGetMain(),
+                AXObserverGetRunLoopSource(observer),
+                .commonModes
+            )
+            axObserver = observer
+        }
+
+        private func uninstallObserver() {
+            guard let axObserver else {
+                observedProcessID = nil
+                return
+            }
+
+            CFRunLoopRemoveSource(
+                CFRunLoopGetMain(),
+                AXObserverGetRunLoopSource(axObserver),
+                .commonModes
+            )
+            self.axObserver = nil
+            observedProcessID = nil
+        }
+    }
+
+    private static let pasteTargetMonitor = PasteTargetMonitor()
+
+    static func startPasteTargetTracking() {
+        pasteTargetMonitor.start()
+    }
+
+    static func canPasteIntoObservedTarget(
+        directFocusedTargetAvailable: Bool,
+        observation: PasteTargetObservation?,
+        processID: pid_t,
+        windowID: UInt32?
+    ) -> Bool {
+        if directFocusedTargetAvailable {
+            return true
+        }
+
+        guard let observation,
+              observation.processID == processID,
+              observation.windowID == windowID else {
+            return false
+        }
+
+        return observation.status == .editable
+    }
+
     static func firstAvailableText<Element>(
         startingAt element: Element,
         maxAncestorDepth: Int = 8,
@@ -73,6 +237,35 @@ final class FocusedElementLocator {
         }
 
         return nil
+    }
+
+    func canPasteIntoFocusedElement() -> Bool {
+        guard PermissionChecker.checkAccessibility(),
+              let application = NSWorkspace.shared.frontmostApplication else {
+            return false
+        }
+
+        Self.pasteTargetMonitor.start()
+        Self.pasteTargetMonitor.syncFrontmostApplication()
+
+        let processID = application.processIdentifier
+        let windowID = frontmostWindowReference(for: processID)?.windowID
+        let directFocusedTargetAvailable = focusedElement(for: processID)
+            .map(isObservedPasteTarget(_:)) ?? false
+
+        if directFocusedTargetAvailable {
+            Self.pasteTargetMonitor.recordDirectFocusedTarget(
+                processID: processID,
+                windowID: windowID
+            )
+        }
+
+        return Self.canPasteIntoObservedTarget(
+            directFocusedTargetAvailable: directFocusedTargetAvailable,
+            observation: Self.pasteTargetMonitor.currentObservation(),
+            processID: processID,
+            windowID: windowID
+        )
     }
 
     func capturePasteSession(for text: String, at date: Date = Date()) -> PasteSession? {
@@ -146,6 +339,25 @@ final class FocusedElementLocator {
             childrenProvider: { [weak self] in
                 self?.children(of: $0) ?? []
             }
+        )
+    }
+
+    private func isObservedPasteTarget(_ element: AXUIElement) -> Bool {
+        TextPaster.containsLikelyPasteTarget(
+            startingAt: TextPaster.AccessibilitySnapshot(
+                role: attributeValue(named: kAXRoleAttribute as String, of: element) as? String,
+                isEnabled: attributeValue(named: kAXEnabledAttribute as String, of: element) as? Bool,
+                isEditable: attributeValue(named: "AXEditable", of: element) as? Bool,
+                isFocused: true,
+                hasSelectedTextRange: attributeValue(
+                    named: kAXSelectedTextRangeAttribute as String,
+                    of: element
+                ) != nil,
+                valueIsSettable: isAttributeSettable(
+                    named: kAXValueAttribute as String,
+                    of: element
+                )
+            )
         )
     }
 
@@ -307,6 +519,15 @@ final class FocusedElementLocator {
         return value
     }
 
+    private func isAttributeSettable(named name: String, of element: AXUIElement) -> Bool {
+        var isSettable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, name as CFString, &isSettable) == .success else {
+            return false
+        }
+
+        return isSettable.boolValue
+    }
+
     private func frontmostWindowReference(for processID: pid_t) -> FrontmostWindowReference? {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
@@ -344,4 +565,20 @@ final class FocusedElementLocator {
 
         return nil
     }
+}
+
+private func focusedElementObserverCallback(
+    _ observer: AXObserver,
+    _ element: AXUIElement,
+    _ notification: CFString,
+    _ refcon: UnsafeMutableRawPointer?
+) {
+    guard let refcon else {
+        return
+    }
+
+    let monitor = Unmanaged<FocusedElementLocator.PasteTargetMonitor>
+        .fromOpaque(refcon)
+        .takeUnretainedValue()
+    monitor.handle(notification: notification, element: element)
 }

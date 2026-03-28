@@ -329,6 +329,7 @@ class AppState: ObservableObject {
 
         // Pre-warm audio engine so first recording starts faster
         audioRecorder.prewarm()
+        FocusedElementLocator.startPasteTargetTracking()
 
         status = .loading
         let showOverlay = UserDefaults.standard.bool(forKey: "onboardingCompleted")
