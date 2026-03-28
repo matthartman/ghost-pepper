@@ -19,6 +19,43 @@ final class TextPaster {
     typealias PasteSessionProvider = @Sendable (String, Date) -> PasteSession?
     typealias PasteScheduler = (TimeInterval, @escaping () -> Void) -> Void
 
+    struct AccessibilitySnapshot {
+        let role: String?
+        let isEnabled: Bool?
+        let isEditable: Bool?
+        let isFocused: Bool?
+        let hasSelectedTextRange: Bool
+        let valueIsSettable: Bool
+        let children: [AccessibilitySnapshot]
+
+        init(
+            role: String?,
+            isEnabled: Bool?,
+            isEditable: Bool?,
+            isFocused: Bool?,
+            hasSelectedTextRange: Bool,
+            valueIsSettable: Bool,
+            children: [AccessibilitySnapshot] = []
+        ) {
+            self.role = role
+            self.isEnabled = isEnabled
+            self.isEditable = isEditable
+            self.isFocused = isFocused
+            self.hasSelectedTextRange = hasSelectedTextRange
+            self.valueIsSettable = valueIsSettable
+            self.children = children
+        }
+    }
+
+    private struct PasteTargetAttributes {
+        let role: String?
+        let isEnabled: Bool?
+        let isEditable: Bool?
+        let isFocused: Bool?
+        let hasSelectedTextRange: Bool
+        let valueIsSettable: Bool
+    }
+
     // MARK: - Timing Constants
 
     /// Delay after writing text to clipboard before simulating Cmd+V.
@@ -148,34 +185,136 @@ final class TextPaster {
     // MARK: - Accessibility Preflight
 
     private static func defaultCanPasteIntoFocusedElement() -> Bool {
-        guard PermissionChecker.checkAccessibility() else {
+        guard PermissionChecker.checkAccessibility(),
+              let application = NSWorkspace.shared.frontmostApplication else {
             return false
+        }
+
+        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+        if let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: applicationElement),
+           isLikelyPasteTarget(attributes(for: focusedElement)) {
+            return true
+        }
+
+        if let focusedWindow = axElementAttribute(kAXFocusedWindowAttribute as CFString, on: applicationElement),
+           containsLikelyPasteTarget(
+            startingAt: focusedWindow,
+            attributesProvider: attributes(for:),
+            childrenProvider: children(of:)
+           ) {
+            return true
         }
 
         let systemWideElement = AXUIElementCreateSystemWide()
-        guard let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: systemWideElement) else {
-            return false
-        }
-
-        guard boolAttribute(kAXEnabledAttribute as CFString, on: focusedElement) ?? true else {
-            return false
-        }
-
-        if hasAttribute(kAXSelectedTextRangeAttribute as CFString, on: focusedElement) {
+        if let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: systemWideElement),
+           isLikelyPasteTarget(attributes(for: focusedElement)) {
             return true
         }
 
-        if isAttributeSettable(kAXValueAttribute as CFString, on: focusedElement) {
+        return false
+    }
+
+    static func containsLikelyPasteTarget(
+        startingAt snapshot: AccessibilitySnapshot,
+        maxDepth: Int = 12
+    ) -> Bool {
+        containsLikelyPasteTarget(
+            startingAt: snapshot,
+            maxDepth: maxDepth,
+            attributesProvider: {
+                PasteTargetAttributes(
+                    role: $0.role,
+                    isEnabled: $0.isEnabled,
+                    isEditable: $0.isEditable,
+                    isFocused: $0.isFocused,
+                    hasSelectedTextRange: $0.hasSelectedTextRange,
+                    valueIsSettable: $0.valueIsSettable
+                )
+            },
+            childrenProvider: { $0.children }
+        )
+    }
+
+    private static func containsLikelyPasteTarget<Element>(
+        startingAt element: Element,
+        maxDepth: Int = 12,
+        attributesProvider: (Element) -> PasteTargetAttributes,
+        childrenProvider: (Element) -> [Element]
+    ) -> Bool {
+        guard maxDepth >= 0 else {
+            return false
+        }
+
+        if isLikelyPasteTarget(attributesProvider(element)) {
             return true
         }
 
-        guard let role = stringAttribute(kAXRoleAttribute as CFString, on: focusedElement) else {
+        guard maxDepth > 0 else {
+            return false
+        }
+
+        let children = childrenProvider(element)
+        let focusedChildren = children.filter { attributesProvider($0).isFocused == true }
+        for child in focusedChildren {
+            if containsLikelyPasteTarget(
+                startingAt: child,
+                maxDepth: maxDepth - 1,
+                attributesProvider: attributesProvider,
+                childrenProvider: childrenProvider
+            ) {
+                return true
+            }
+        }
+
+        for child in children where attributesProvider(child).isFocused != true {
+            if containsLikelyPasteTarget(
+                startingAt: child,
+                maxDepth: maxDepth - 1,
+                attributesProvider: attributesProvider,
+                childrenProvider: childrenProvider
+            ) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func isLikelyPasteTarget(_ attributes: PasteTargetAttributes) -> Bool {
+        guard attributes.isEnabled ?? true else {
+            return false
+        }
+
+        if attributes.hasSelectedTextRange {
+            return true
+        }
+
+        if attributes.isEditable == true {
+            return true
+        }
+
+        if attributes.valueIsSettable {
+            return true
+        }
+
+        guard let role = attributes.role else {
             return false
         }
 
         return role == (kAXTextFieldRole as String)
             || role == (kAXTextAreaRole as String)
             || role == (kAXComboBoxRole as String)
+    }
+
+    private static func attributes(for element: AXUIElement) -> PasteTargetAttributes {
+        PasteTargetAttributes(
+            role: stringAttribute(kAXRoleAttribute as CFString, on: element),
+            isEnabled: boolAttribute(kAXEnabledAttribute as CFString, on: element),
+            isEditable: boolAttribute("AXEditable" as CFString, on: element),
+            isFocused: boolAttribute(kAXFocusedAttribute as CFString, on: element),
+            hasSelectedTextRange: hasAttribute(kAXSelectedTextRangeAttribute as CFString, on: element),
+            valueIsSettable: isAttributeSettable(kAXValueAttribute as CFString, on: element)
+        )
     }
 
     private static func axElementAttribute(_ attribute: CFString, on element: AXUIElement) -> AXUIElement? {
@@ -221,6 +360,23 @@ final class TextPaster {
         }
 
         return isSettable.boolValue
+    }
+
+    private static func children(of element: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+              let children = value as? [Any] else {
+            return []
+        }
+
+        return children.compactMap {
+            let value = $0 as CFTypeRef
+            guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
+                return nil
+            }
+
+            return unsafeBitCast(value, to: AXUIElement.self)
+        }
     }
 
     // MARK: - Key Simulation
