@@ -89,6 +89,11 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertNil(OverlayMessage.noSoundDetected.secondaryText)
     }
 
+    func testClipboardFallbackOverlayMessageUsesExpectedCopy() {
+        XCTAssertEqual(OverlayMessage.clipboardFallback.primaryText, "Copied to clipboard")
+        XCTAssertEqual(OverlayMessage.clipboardFallback.secondaryText, "Press Cmd-V to paste")
+    }
+
     func testOverlayHostingViewDoesNotManageWindowSizingConstraints() {
         let overlay = RecordingOverlayController()
         overlay.show(message: .recording)
