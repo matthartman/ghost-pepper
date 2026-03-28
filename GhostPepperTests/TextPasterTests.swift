@@ -1,7 +1,77 @@
 import XCTest
+import ApplicationServices
 @testable import GhostPepper
 
 final class TextPasterTests: XCTestCase {
+    func testContainsLikelyPasteTargetAcceptsTerminalStyleFocusedTextArea() {
+        let snapshot = TextPaster.AccessibilitySnapshot(
+            role: kAXTextAreaRole as String,
+            isEnabled: nil,
+            isEditable: nil,
+            isFocused: true,
+            hasSelectedTextRange: true,
+            valueIsSettable: false
+        )
+
+        XCTAssertTrue(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
+    }
+
+    func testContainsLikelyPasteTargetAcceptsCodexStyleGroupedEditor() {
+        let snapshot = TextPaster.AccessibilitySnapshot(
+            role: kAXWindowRole as String,
+            isEnabled: true,
+            isEditable: nil,
+            isFocused: false,
+            hasSelectedTextRange: false,
+            valueIsSettable: false,
+            children: [
+                TextPaster.AccessibilitySnapshot(
+                    role: kAXGroupRole as String,
+                    isEnabled: nil,
+                    isEditable: nil,
+                    isFocused: false,
+                    hasSelectedTextRange: true,
+                    valueIsSettable: false,
+                    children: [
+                        TextPaster.AccessibilitySnapshot(
+                            role: kAXGroupRole as String,
+                            isEnabled: nil,
+                            isEditable: nil,
+                            isFocused: false,
+                            hasSelectedTextRange: true,
+                            valueIsSettable: false
+                        )
+                    ]
+                )
+            ]
+        )
+
+        XCTAssertTrue(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
+    }
+
+    func testContainsLikelyPasteTargetRejectsWindowWithoutEditableSignals() {
+        let snapshot = TextPaster.AccessibilitySnapshot(
+            role: kAXWindowRole as String,
+            isEnabled: true,
+            isEditable: nil,
+            isFocused: false,
+            hasSelectedTextRange: false,
+            valueIsSettable: false,
+            children: [
+                TextPaster.AccessibilitySnapshot(
+                    role: kAXButtonRole as String,
+                    isEnabled: true,
+                    isEditable: nil,
+                    isFocused: false,
+                    hasSelectedTextRange: false,
+                    valueIsSettable: false
+                )
+            ]
+        )
+
+        XCTAssertFalse(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
+    }
+
     func testSaveAndRestoreClipboard() {
         let pasteboard = NSPasteboard.withUniqueName()
         let paster = TextPaster(pasteboard: pasteboard)
