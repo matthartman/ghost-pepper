@@ -283,7 +283,7 @@ final class TextPaster {
         let hasTextRole = isTextEntryRole(attributes.role)
 
         if attributes.hasSelectedTextRange {
-            return attributes.isFocused == true || hasTextRole
+            return hasTextRole
         }
 
         if hasTextRole {
