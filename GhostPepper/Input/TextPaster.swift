@@ -192,7 +192,12 @@ final class TextPaster {
 
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
         if let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: applicationElement),
-           isLikelyPasteTarget(attributes(for: focusedElement)) {
+           containsLikelyPasteTarget(
+            startingAt: focusedElement,
+            hasFocusContext: true,
+            attributesProvider: attributes(for:),
+            childrenProvider: children(of:)
+           ) {
             return true
         }
 
@@ -207,7 +212,12 @@ final class TextPaster {
 
         let systemWideElement = AXUIElementCreateSystemWide()
         if let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: systemWideElement),
-           isLikelyPasteTarget(attributes(for: focusedElement)) {
+           containsLikelyPasteTarget(
+            startingAt: focusedElement,
+            hasFocusContext: true,
+            attributesProvider: attributes(for:),
+            childrenProvider: children(of:)
+           ) {
             return true
         }
 
@@ -238,6 +248,7 @@ final class TextPaster {
     private static func containsLikelyPasteTarget<Element>(
         startingAt element: Element,
         maxDepth: Int = 12,
+        hasFocusContext: Bool = false,
         attributesProvider: (Element) -> PasteTargetAttributes,
         childrenProvider: (Element) -> [Element]
     ) -> Bool {
@@ -245,7 +256,10 @@ final class TextPaster {
             return false
         }
 
-        if isLikelyPasteTarget(attributesProvider(element)) {
+        let currentAttributes = attributesProvider(element)
+        let currentHasFocusContext = hasFocusContext || currentAttributes.isFocused == true
+
+        if isLikelyPasteTarget(currentAttributes, hasFocusContext: currentHasFocusContext) {
             return true
         }
 
@@ -259,6 +273,7 @@ final class TextPaster {
             if containsLikelyPasteTarget(
                 startingAt: child,
                 maxDepth: maxDepth - 1,
+                hasFocusContext: currentHasFocusContext,
                 attributesProvider: attributesProvider,
                 childrenProvider: childrenProvider
             ) {
@@ -270,6 +285,7 @@ final class TextPaster {
             if containsLikelyPasteTarget(
                 startingAt: child,
                 maxDepth: maxDepth - 1,
+                hasFocusContext: currentHasFocusContext,
                 attributesProvider: attributesProvider,
                 childrenProvider: childrenProvider
             ) {
@@ -280,13 +296,16 @@ final class TextPaster {
         return false
     }
 
-    private static func isLikelyPasteTarget(_ attributes: PasteTargetAttributes) -> Bool {
+    private static func isLikelyPasteTarget(
+        _ attributes: PasteTargetAttributes,
+        hasFocusContext: Bool
+    ) -> Bool {
         guard attributes.isEnabled ?? true else {
             return false
         }
 
-        if attributes.hasSelectedTextRange {
-            return true
+        guard hasFocusContext else {
+            return false
         }
 
         if attributes.isEditable == true {
@@ -297,7 +316,21 @@ final class TextPaster {
             return true
         }
 
-        guard let role = attributes.role else {
+        let hasTextRole = isTextEntryRole(attributes.role)
+
+        if attributes.hasSelectedTextRange {
+            return attributes.isFocused == true || hasTextRole
+        }
+
+        if hasTextRole {
+            return true
+        }
+
+        return false
+    }
+
+    private static func isTextEntryRole(_ role: String?) -> Bool {
+        guard let role else {
             return false
         }
 

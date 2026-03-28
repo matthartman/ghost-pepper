@@ -16,7 +16,40 @@ final class TextPasterTests: XCTestCase {
         XCTAssertTrue(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
     }
 
-    func testContainsLikelyPasteTargetAcceptsCodexStyleGroupedEditor() {
+    func testContainsLikelyPasteTargetAcceptsWindowWithFocusedTextDescendant() {
+        let snapshot = TextPaster.AccessibilitySnapshot(
+            role: kAXWindowRole as String,
+            isEnabled: true,
+            isEditable: nil,
+            isFocused: false,
+            hasSelectedTextRange: false,
+            valueIsSettable: false,
+            children: [
+                TextPaster.AccessibilitySnapshot(
+                    role: kAXGroupRole as String,
+                    isEnabled: nil,
+                    isEditable: nil,
+                    isFocused: false,
+                    hasSelectedTextRange: false,
+                    valueIsSettable: false,
+                    children: [
+                        TextPaster.AccessibilitySnapshot(
+                            role: kAXTextAreaRole as String,
+                            isEnabled: nil,
+                            isEditable: nil,
+                            isFocused: true,
+                            hasSelectedTextRange: true,
+                            valueIsSettable: false
+                        )
+                    ]
+                )
+            ]
+        )
+
+        XCTAssertTrue(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
+    }
+
+    func testContainsLikelyPasteTargetRejectsCodexStyleGroupedWindowWithoutFocusedInput() {
         let snapshot = TextPaster.AccessibilitySnapshot(
             role: kAXWindowRole as String,
             isEnabled: true,
@@ -46,7 +79,7 @@ final class TextPasterTests: XCTestCase {
             ]
         )
 
-        XCTAssertTrue(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
+        XCTAssertFalse(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
     }
 
     func testContainsLikelyPasteTargetRejectsWindowWithoutEditableSignals() {
