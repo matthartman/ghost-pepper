@@ -156,12 +156,17 @@ final class FocusedElementLocator {
 
     static func canPasteIntoObservedTarget(
         directFocusedTargetAvailable: Bool,
+        hasDirectFocusedElement: Bool,
         observation: PasteTargetObservation?,
         processID: pid_t,
         windowID: UInt32?
     ) -> Bool {
         if directFocusedTargetAvailable {
             return true
+        }
+
+        if hasDirectFocusedElement {
+            return false
         }
 
         guard let observation,
@@ -250,7 +255,8 @@ final class FocusedElementLocator {
 
         let processID = application.processIdentifier
         let windowID = frontmostWindowReference(for: processID)?.windowID
-        let directFocusedTargetAvailable = focusedElement(for: processID)
+        let directFocusedElement = focusedElement(for: processID)
+        let directFocusedTargetAvailable = directFocusedElement
             .map(isObservedPasteTarget(_:)) ?? false
 
         if directFocusedTargetAvailable {
@@ -262,6 +268,7 @@ final class FocusedElementLocator {
 
         return Self.canPasteIntoObservedTarget(
             directFocusedTargetAvailable: directFocusedTargetAvailable,
+            hasDirectFocusedElement: directFocusedElement != nil,
             observation: Self.pasteTargetMonitor.currentObservation(),
             processID: processID,
             windowID: windowID
