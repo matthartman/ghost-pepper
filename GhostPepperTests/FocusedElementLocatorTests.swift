@@ -6,6 +6,7 @@ final class FocusedElementLocatorTests: XCTestCase {
     func testPasteTargetDecisionUsesDirectFocusedTargetWhenAvailable() {
         let decision = FocusedElementLocator.canPasteIntoObservedTarget(
             directFocusedTargetAvailable: true,
+            hasDirectFocusedElement: true,
             observation: .init(processID: 42, windowID: 99, status: .nonEditable),
             processID: 42,
             windowID: 99
@@ -17,6 +18,7 @@ final class FocusedElementLocatorTests: XCTestCase {
     func testPasteTargetDecisionUsesObservedEditableTargetForMatchingWindow() {
         let decision = FocusedElementLocator.canPasteIntoObservedTarget(
             directFocusedTargetAvailable: false,
+            hasDirectFocusedElement: false,
             observation: .init(processID: 42, windowID: 99, status: .editable),
             processID: 42,
             windowID: 99
@@ -28,6 +30,7 @@ final class FocusedElementLocatorTests: XCTestCase {
     func testPasteTargetDecisionRejectsObservedEditableTargetForDifferentWindow() {
         let decision = FocusedElementLocator.canPasteIntoObservedTarget(
             directFocusedTargetAvailable: false,
+            hasDirectFocusedElement: false,
             observation: .init(processID: 42, windowID: 99, status: .editable),
             processID: 42,
             windowID: 100
@@ -39,7 +42,20 @@ final class FocusedElementLocatorTests: XCTestCase {
     func testPasteTargetDecisionRejectsObservedNonEditableTarget() {
         let decision = FocusedElementLocator.canPasteIntoObservedTarget(
             directFocusedTargetAvailable: false,
+            hasDirectFocusedElement: false,
             observation: .init(processID: 42, windowID: 99, status: .nonEditable),
+            processID: 42,
+            windowID: 99
+        )
+
+        XCTAssertFalse(decision)
+    }
+
+    func testPasteTargetDecisionRejectsObservedEditableTargetWhenDifferentFocusedElementExists() {
+        let decision = FocusedElementLocator.canPasteIntoObservedTarget(
+            directFocusedTargetAvailable: false,
+            hasDirectFocusedElement: true,
+            observation: .init(processID: 42, windowID: 99, status: .editable),
             processID: 42,
             windowID: 99
         )
