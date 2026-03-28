@@ -32,7 +32,7 @@ enum OverlayMessage: Equatable {
     var secondaryText: String? {
         switch self {
         case .clipboardFallback:
-            return "Press Cmd-V to paste"
+            return "⌘V to paste"
         case .learnedCorrection(let replacement):
             return "\(replacement.wrong) -> \(replacement.right)"
         default:

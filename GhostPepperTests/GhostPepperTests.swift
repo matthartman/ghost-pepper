@@ -91,7 +91,7 @@ final class GhostPepperTests: XCTestCase {
 
     func testClipboardFallbackOverlayMessageUsesExpectedCopy() {
         XCTAssertEqual(OverlayMessage.clipboardFallback.primaryText, "Copied to clipboard")
-        XCTAssertEqual(OverlayMessage.clipboardFallback.secondaryText, "Press Cmd-V to paste")
+        XCTAssertEqual(OverlayMessage.clipboardFallback.secondaryText, "⌘V to paste")
     }
 
     func testOverlayHostingViewDoesNotManageWindowSizingConstraints() {
