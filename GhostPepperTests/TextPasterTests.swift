@@ -115,6 +115,19 @@ final class TextPasterTests: XCTestCase {
         XCTAssertTrue(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
     }
 
+    func testContainsLikelyPasteTargetRejectsFocusedCodexBackgroundGroupWithoutSettableValue() {
+        let snapshot = TextPaster.AccessibilitySnapshot(
+            role: kAXGroupRole as String,
+            isEnabled: true,
+            isEditable: nil,
+            isFocused: true,
+            hasSelectedTextRange: true,
+            valueIsSettable: false
+        )
+
+        XCTAssertFalse(TextPaster.containsLikelyPasteTarget(startingAt: snapshot))
+    }
+
     func testContainsLikelyPasteTargetRejectsWindowWithoutEditableSignals() {
         let snapshot = TextPaster.AccessibilitySnapshot(
             role: kAXWindowRole as String,
