@@ -185,43 +185,7 @@ final class TextPaster {
     // MARK: - Accessibility Preflight
 
     private static func defaultCanPasteIntoFocusedElement() -> Bool {
-        guard PermissionChecker.checkAccessibility(),
-              let application = NSWorkspace.shared.frontmostApplication else {
-            return false
-        }
-
-        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
-        if let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: applicationElement),
-           containsLikelyPasteTarget(
-            startingAt: focusedElement,
-            hasFocusContext: true,
-            attributesProvider: attributes(for:),
-            childrenProvider: children(of:)
-           ) {
-            return true
-        }
-
-        if let focusedWindow = axElementAttribute(kAXFocusedWindowAttribute as CFString, on: applicationElement),
-           containsLikelyPasteTarget(
-            startingAt: focusedWindow,
-            attributesProvider: attributes(for:),
-            childrenProvider: children(of:)
-           ) {
-            return true
-        }
-
-        let systemWideElement = AXUIElementCreateSystemWide()
-        if let focusedElement = axElementAttribute(kAXFocusedUIElementAttribute as CFString, on: systemWideElement),
-           containsLikelyPasteTarget(
-            startingAt: focusedElement,
-            hasFocusContext: true,
-            attributesProvider: attributes(for:),
-            childrenProvider: children(of:)
-           ) {
-            return true
-        }
-
-        return false
+        FocusedElementLocator().canPasteIntoFocusedElement()
     }
 
     static func containsLikelyPasteTarget(
