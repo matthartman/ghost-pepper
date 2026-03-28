@@ -304,8 +304,8 @@ final class TextPaster {
             return false
         }
 
-        guard hasFocusContext else {
-            return false
+        if !hasFocusContext {
+            return attributes.hasSelectedTextRange && attributes.valueIsSettable
         }
 
         if attributes.isEditable == true {
