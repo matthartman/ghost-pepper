@@ -7,6 +7,7 @@ BUILD_DIR="build"
 DMG_DIR="$BUILD_DIR/dmg"
 SIGNING_IDENTITY="Developer ID Application: Matthew Hartman (BBVMGXR9AY)"
 TEAM_ID="BBVMGXR9AY"
+SOURCE_ENTITLEMENTS="$(pwd)/GhostPepper/GhostPepper.entitlements"
 
 # Get version from Info.plist
 VERSION=$(defaults read "$(pwd)/GhostPepper/Info.plist" CFBundleShortVersionString)
@@ -49,18 +50,11 @@ done
 find "$APP_PATH" -name "*.framework" -type d | while read -r fw; do
   codesign --force --deep --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$fw" 2>/dev/null || true
 done
-# Sign the app itself last (with entitlements stripped of get-task-allow)
+# Sign the app itself last while preserving app capabilities needed at runtime.
 ENTITLEMENTS_PLIST=$(mktemp)
-cat > "$ENTITLEMENTS_PLIST" << 'ENTEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
-</dict>
-</plist>
-ENTEOF
+cp "$SOURCE_ENTITLEMENTS" "$ENTITLEMENTS_PLIST"
+/usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Delete :com.apple.security.app-sandbox" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
 codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime --entitlements "$ENTITLEMENTS_PLIST" "$APP_PATH"
 rm "$ENTITLEMENTS_PLIST"
 
