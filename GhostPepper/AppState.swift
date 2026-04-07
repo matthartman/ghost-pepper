@@ -773,6 +773,7 @@ class AppState: ObservableObject {
     private var pepperChatRecorder: AudioRecorder?
 
     func beginPepperChatRecording() {
+        guard !pepperChatApiKey.isEmpty else { return }
         let recorder = AudioRecorder()
         recorder.prewarm()
         try? recorder.startRecording()
