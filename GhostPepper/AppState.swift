@@ -67,6 +67,7 @@ class AppState: ObservableObject {
     @AppStorage("pepperChatHost") var pepperChatHost: String = "https://api.zo.computer"
     @AppStorage("pepperChatApiKey") var pepperChatApiKey: String = ""
     @AppStorage("pepperChatIncludeScreenContext") var pepperChatIncludeScreenContext: Bool = true
+    @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
     @Published private(set) var pepperChatChord: KeyChord
@@ -94,6 +95,9 @@ class AppState: ObservableObject {
     let textPaster: TextPaster
     lazy var soundEffects = SoundEffects(isEnabled: { [weak self] in
         self?.playSounds ?? true
+    })
+    private lazy var mediaPlaybackController = MediaPlaybackController(enabled: { [weak self] in
+        self?.pauseMediaWhileRecording ?? true
     })
     let hotkeyMonitor: HotkeyMonitoring
     let overlay = RecordingOverlayController()
@@ -526,6 +530,7 @@ class AppState: ObservableObject {
             } else {
                 recordingOCRPrefetch.cancel()
             }
+            mediaPlaybackController.pauseIfPlaying()
             try audioRecorder.startRecording()
             debugLogStore.record(category: .hotkey, message: "Recording started.")
             soundEffects.playStart()
@@ -554,6 +559,7 @@ class AppState: ObservableObject {
         clearRecordingSessionCoordinator()
         soundEffects.playStop()
         isRecording = false
+        mediaPlaybackController.resumeIfPaused()
         status = .transcribing
         overlay.show(message: .transcribing)
         activePerformanceTrace?.transcriptionStartAt = Date()

@@ -508,6 +508,14 @@ struct SettingsView: View {
                         )
                     )
 
+                    Toggle(
+                        "Pause media while recording",
+                        isOn: Binding(
+                            get: { appState.pauseMediaWhileRecording },
+                            set: { appState.pauseMediaWhileRecording = $0 }
+                        )
+                    )
+
                     if speakerFilteringToggleState.isVisible {
                         Toggle(
                             "Ignore other speakers",
