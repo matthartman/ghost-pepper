@@ -46,6 +46,8 @@ Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit). 
 3. Grant Microphone and Accessibility permissions when prompted
 4. Hold Control and speak
 
+> **"Apple could not verify" warning?** On macOS Sequoia, you may see a Gatekeeper warning the first time you open the app. Go to **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to the Ghost Pepper message. Click **Confirm** in the popup. You only need to do this once.
+
 **Build from source:**
 1. Clone the repo
 2. Open `GhostPepper.xcodeproj` in Xcode
