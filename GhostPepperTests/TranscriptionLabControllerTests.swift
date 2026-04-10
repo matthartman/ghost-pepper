@@ -87,6 +87,66 @@ final class TranscriptionLabControllerTests: XCTestCase {
         XCTAssertEqual(synchronizedCleanupModelKinds, [.qwen35_2b_q4_k_m])
     }
 
+    func testChangingRerunModelsSupportsWhisperLargeV3Turbo() {
+        var synchronizedSpeechModelIDs: [String] = []
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            defaultCleanupModelKind: .qwen35_4b_q4_k_m,
+            loadStageTimings: { [:] },
+            loadEntries: { [] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _ in "" },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            syncSelectedSpeechModelID: { synchronizedSpeechModelIDs.append($0) }
+        )
+
+        controller.selectedSpeechModelID = "openai_whisper-large-v3_turbo"
+
+        XCTAssertEqual(synchronizedSpeechModelIDs, ["openai_whisper-large-v3_turbo"])
+    }
+
+    func testChangingRerunModelsSupportsWhisperCppLargeV3TurboQuantized() {
+        var synchronizedSpeechModelIDs: [String] = []
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            defaultCleanupModelKind: .qwen35_4b_q4_k_m,
+            loadStageTimings: { [:] },
+            loadEntries: { [] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _ in "" },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            syncSelectedSpeechModelID: { synchronizedSpeechModelIDs.append($0) }
+        )
+
+        controller.selectedSpeechModelID = "ggml-large-v3-turbo-q5_0"
+
+        XCTAssertEqual(synchronizedSpeechModelIDs, ["ggml-large-v3-turbo-q5_0"])
+    }
+
+    func testChangingRerunModelsSupportsWhisperCppLargeV3Turbo() {
+        var synchronizedSpeechModelIDs: [String] = []
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            defaultCleanupModelKind: .qwen35_4b_q4_k_m,
+            loadStageTimings: { [:] },
+            loadEntries: { [] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _ in "" },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            syncSelectedSpeechModelID: { synchronizedSpeechModelIDs.append($0) }
+        )
+
+        controller.selectedSpeechModelID = "ggml-large-v3-turbo"
+
+        XCTAssertEqual(synchronizedSpeechModelIDs, ["ggml-large-v3-turbo"])
+    }
+
     func testStageRerunsUpdateExperimentOutputs() async {
         let entry = makeEntry(
             createdAt: Date(),
@@ -159,6 +219,99 @@ final class TranscriptionLabControllerTests: XCTestCase {
         XCTAssertEqual(controller.latestCleanupTranscript?.rawModelOutput, "clean rerun raw")
         XCTAssertNil(controller.errorMessage)
         XCTAssertNil(controller.runningStage)
+    }
+
+    func testStageRerunsUseWhisperLargeV3TurboSelection() async {
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "openai_whisper-small.en",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)"
+        )
+        var executedSpeechModelID: String?
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, speechModelID in
+                executedSpeechModelID = speechModelID
+                return "raw rerun"
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            }
+        )
+
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+        controller.selectedSpeechModelID = "openai_whisper-large-v3_turbo"
+
+        await controller.rerunTranscription()
+
+        XCTAssertEqual(executedSpeechModelID, "openai_whisper-large-v3_turbo")
+        XCTAssertEqual(controller.experimentRawTranscription, "raw rerun")
+    }
+
+    func testStageRerunsUseWhisperCppLargeV3TurboQuantizedSelection() async {
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "openai_whisper-small.en",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)"
+        )
+        var executedSpeechModelID: String?
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, speechModelID in
+                executedSpeechModelID = speechModelID
+                return "whisper.cpp rerun"
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            }
+        )
+
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+        controller.selectedSpeechModelID = "ggml-large-v3-turbo-q5_0"
+
+        await controller.rerunTranscription()
+
+        XCTAssertEqual(executedSpeechModelID, "ggml-large-v3-turbo-q5_0")
+        XCTAssertEqual(controller.experimentRawTranscription, "whisper.cpp rerun")
+    }
+
+    func testStageRerunsUseWhisperCppLargeV3TurboSelection() async {
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "openai_whisper-small.en",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)"
+        )
+        var executedSpeechModelID: String?
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, speechModelID in
+                executedSpeechModelID = speechModelID
+                return "whisper.cpp full rerun"
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            }
+        )
+
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+        controller.selectedSpeechModelID = "ggml-large-v3-turbo"
+
+        await controller.rerunTranscription()
+
+        XCTAssertEqual(executedSpeechModelID, "ggml-large-v3-turbo")
+        XCTAssertEqual(controller.experimentRawTranscription, "whisper.cpp full rerun")
     }
 
     func testDisplayedExperimentOutputsDefaultToOriginalOutputs() {

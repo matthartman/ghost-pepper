@@ -58,4 +58,107 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .idle)
         XCTAssertNil(manager.error)
     }
+
+    func testModelManagerLoadsWhisperLargeV3TurboThroughOverride() async {
+        var loadedNames: [String] = []
+        let manager = ModelManager(
+            modelName: "openai_whisper-large-v3_turbo",
+            modelLoadOverride: { descriptor in
+                loadedNames.append(descriptor.name)
+            },
+            loadRetryDelayOverride: {}
+        )
+
+        await manager.loadModel()
+
+        XCTAssertEqual(manager.state, .ready)
+        XCTAssertNil(manager.error)
+        XCTAssertEqual(loadedNames, ["openai_whisper-large-v3_turbo"])
+    }
+
+    func testDeleteCachedLargeV3TurboNotifiesObserversForInventoryRefresh() throws {
+        let manager = ModelManager(modelName: "openai_whisper-small.en")
+        let expectation = expectation(description: "large v3 turbo deletion publishes change")
+        var cancellable: AnyCancellable? = manager.objectWillChange.sink {
+            expectation.fulfill()
+        }
+
+        let model = try XCTUnwrap(SpeechModelCatalog.model(named: "openai_whisper-large-v3_turbo"))
+        manager.deleteCachedModel(model)
+
+        wait(for: [expectation], timeout: 1.0)
+        withExtendedLifetime(cancellable) {}
+        cancellable = nil
+    }
+
+    func testModelManagerLoadsWhisperCppQuantizedTurboThroughOverride() async {
+        var loadedNames: [String] = []
+        let manager = ModelManager(
+            modelName: "ggml-large-v3-turbo-q5_0",
+            modelLoadOverride: { descriptor in
+                loadedNames.append(descriptor.name)
+            },
+            loadRetryDelayOverride: {}
+        )
+
+        await manager.loadModel()
+
+        XCTAssertEqual(manager.state, .ready)
+        XCTAssertNil(manager.error)
+        XCTAssertEqual(loadedNames, ["ggml-large-v3-turbo-q5_0"])
+    }
+
+    func testDeleteCachedWhisperCppQuantizedTurboNotifiesObserversForInventoryRefresh() throws {
+        let manager = ModelManager(modelName: "openai_whisper-small.en")
+        let expectation = expectation(description: "whisper.cpp quantized turbo deletion publishes change")
+        var cancellable: AnyCancellable? = manager.objectWillChange.sink {
+            expectation.fulfill()
+        }
+
+        let model = try XCTUnwrap(SpeechModelCatalog.model(named: "ggml-large-v3-turbo-q5_0"))
+        manager.deleteCachedModel(model)
+
+        wait(for: [expectation], timeout: 1.0)
+        withExtendedLifetime(cancellable) {}
+        cancellable = nil
+    }
+
+    func testDeleteCachedWhisperCppTurboNotifiesObserversForInventoryRefresh() throws {
+        let manager = ModelManager(modelName: "openai_whisper-small.en")
+        let expectation = expectation(description: "whisper.cpp turbo deletion publishes change")
+        var cancellable: AnyCancellable? = manager.objectWillChange.sink {
+            expectation.fulfill()
+        }
+
+        let model = try XCTUnwrap(SpeechModelCatalog.model(named: "ggml-large-v3-turbo"))
+        manager.deleteCachedModel(model)
+
+        wait(for: [expectation], timeout: 1.0)
+        withExtendedLifetime(cancellable) {}
+        cancellable = nil
+    }
+
+    func testModelManagerReportsErrorWhenWhisperCppValidationFails() async throws {
+        let model = try XCTUnwrap(SpeechModelCatalog.model(named: "ggml-large-v3-turbo-q5_0"))
+        let modelURL = WhisperCppSpeechBackend.modelURL(for: model)
+        try FileManager.default.createDirectory(
+            at: modelURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("test".utf8).write(to: modelURL)
+        defer { try? FileManager.default.removeItem(at: modelURL) }
+
+        let manager = ModelManager(
+            modelName: model.name,
+            loadRetryDelayOverride: {},
+            whisperCppExecutableURLOverride: {
+                URL(fileURLWithPath: "/usr/bin/false")
+            }
+        )
+
+        await manager.loadModel()
+
+        XCTAssertEqual(manager.state, .error)
+        XCTAssertNotNil(manager.error)
+    }
 }

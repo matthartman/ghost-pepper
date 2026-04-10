@@ -18,6 +18,9 @@ final class RuntimeModelInventoryTests: XCTestCase {
         XCTAssertTrue(rows.map(\.name).contains("Whisper tiny.en (speed)"))
         XCTAssertTrue(rows.map(\.name).contains("Whisper small.en (accuracy)"))
         XCTAssertTrue(rows.map(\.name).contains("Whisper small (multilingual)"))
+        XCTAssertTrue(rows.map(\.name).contains("Whisper multilingual (large v3 turbo)"))
+        XCTAssertTrue(rows.map(\.name).contains("whisper.cpp Large v3 Turbo (q5_0 quantized)"))
+        XCTAssertTrue(rows.map(\.name).contains("whisper.cpp Large v3 Turbo (f16 full precision)"))
         XCTAssertTrue(rows.map(\.name).contains("Parakeet v3 (25 languages)"))
         XCTAssertTrue(rows.map(\.name).contains("Qwen 3.5 0.8B Q4_K_M (Very fast)"))
         XCTAssertTrue(rows.map(\.name).contains("Qwen 3.5 2B Q4_K_M (Fast)"))
@@ -31,6 +34,15 @@ final class RuntimeModelInventoryTests: XCTestCase {
 
         XCTAssertEqual(row(named: "Whisper small (multilingual)", in: rows)?.status, .notLoaded)
         XCTAssertEqual(row(named: "Whisper small (multilingual)", in: rows)?.isSelected, false)
+
+        XCTAssertEqual(row(named: "Whisper multilingual (large v3 turbo)", in: rows)?.status, .notLoaded)
+        XCTAssertEqual(row(named: "Whisper multilingual (large v3 turbo)", in: rows)?.isSelected, false)
+
+        XCTAssertEqual(row(named: "whisper.cpp Large v3 Turbo (q5_0 quantized)", in: rows)?.status, .notLoaded)
+        XCTAssertEqual(row(named: "whisper.cpp Large v3 Turbo (q5_0 quantized)", in: rows)?.isSelected, false)
+
+        XCTAssertEqual(row(named: "whisper.cpp Large v3 Turbo (f16 full precision)", in: rows)?.status, .notLoaded)
+        XCTAssertEqual(row(named: "whisper.cpp Large v3 Turbo (f16 full precision)", in: rows)?.isSelected, false)
 
         XCTAssertEqual(row(named: "Parakeet v3 (25 languages)", in: rows)?.status, .notLoaded)
         XCTAssertEqual(row(named: "Parakeet v3 (25 languages)", in: rows)?.isSelected, false)

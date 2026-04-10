@@ -62,4 +62,61 @@ final class PerformanceTraceTests: XCTestCase {
 
         XCTAssertTrue(summary.contains("cleanup=skipped"))
     }
+
+    func testSummaryIncludesWhisperLargeV3TurboSpeechModelID() {
+        let startedAt = Date(timeIntervalSinceReferenceDate: 300)
+        var trace = PerformanceTrace(sessionID: "session-3", startedAt: startedAt)
+        trace.hotkeyDetectedAt = startedAt
+        trace.micLiveAt = startedAt.addingTimeInterval(0.05)
+        trace.hotkeyLiftedAt = startedAt.addingTimeInterval(0.90)
+        trace.micColdAt = startedAt.addingTimeInterval(1.10)
+        trace.transcriptionStartAt = startedAt.addingTimeInterval(1.10)
+        trace.transcriptionEndAt = startedAt.addingTimeInterval(1.75)
+
+        let summary = trace.summary(
+            speechModelID: "openai_whisper-large-v3_turbo",
+            cleanupBackend: .localModels,
+            cleanupAttempted: false
+        )
+
+        XCTAssertTrue(summary.contains("speechModel=openai_whisper-large-v3_turbo"))
+    }
+
+    func testSummaryIncludesWhisperCppLargeV3TurboQuantizedSpeechModelID() {
+        let startedAt = Date(timeIntervalSinceReferenceDate: 400)
+        var trace = PerformanceTrace(sessionID: "session-4", startedAt: startedAt)
+        trace.hotkeyDetectedAt = startedAt
+        trace.micLiveAt = startedAt.addingTimeInterval(0.04)
+        trace.hotkeyLiftedAt = startedAt.addingTimeInterval(0.82)
+        trace.micColdAt = startedAt.addingTimeInterval(1.01)
+        trace.transcriptionStartAt = startedAt.addingTimeInterval(1.01)
+        trace.transcriptionEndAt = startedAt.addingTimeInterval(1.71)
+
+        let summary = trace.summary(
+            speechModelID: "ggml-large-v3-turbo-q5_0",
+            cleanupBackend: .localModels,
+            cleanupAttempted: false
+        )
+
+        XCTAssertTrue(summary.contains("speechModel=ggml-large-v3-turbo-q5_0"))
+    }
+
+    func testSummaryIncludesWhisperCppLargeV3TurboSpeechModelID() {
+        let startedAt = Date(timeIntervalSinceReferenceDate: 500)
+        var trace = PerformanceTrace(sessionID: "session-5", startedAt: startedAt)
+        trace.hotkeyDetectedAt = startedAt
+        trace.micLiveAt = startedAt.addingTimeInterval(0.06)
+        trace.hotkeyLiftedAt = startedAt.addingTimeInterval(0.95)
+        trace.micColdAt = startedAt.addingTimeInterval(1.16)
+        trace.transcriptionStartAt = startedAt.addingTimeInterval(1.16)
+        trace.transcriptionEndAt = startedAt.addingTimeInterval(1.89)
+
+        let summary = trace.summary(
+            speechModelID: "ggml-large-v3-turbo",
+            cleanupBackend: .localModels,
+            cleanupAttempted: false
+        )
+
+        XCTAssertTrue(summary.contains("speechModel=ggml-large-v3-turbo"))
+    }
 }

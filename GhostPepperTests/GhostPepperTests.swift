@@ -337,11 +337,26 @@ final class GhostPepperTests: XCTestCase {
         let whisperState = RecordingSpeakerFilteringToggleState(
             speechModel: SpeechModelCatalog.whisperSmallEnglish
         )
+        let whisperTurboState = RecordingSpeakerFilteringToggleState(
+            speechModel: SpeechModelCatalog.whisperLargeV3Turbo
+        )
+        let whisperCppQuantizedTurboState = RecordingSpeakerFilteringToggleState(
+            speechModel: SpeechModelCatalog.whisperCppLargeV3TurboQuantized
+        )
+        let whisperCppTurboState = RecordingSpeakerFilteringToggleState(
+            speechModel: SpeechModelCatalog.whisperCppLargeV3Turbo
+        )
 
         XCTAssertTrue(parakeetState.isVisible)
         XCTAssertTrue(parakeetState.isEnabled)
         XCTAssertTrue(whisperState.isVisible)
         XCTAssertFalse(whisperState.isEnabled)
+        XCTAssertTrue(whisperTurboState.isVisible)
+        XCTAssertFalse(whisperTurboState.isEnabled)
+        XCTAssertTrue(whisperCppQuantizedTurboState.isVisible)
+        XCTAssertFalse(whisperCppQuantizedTurboState.isEnabled)
+        XCTAssertTrue(whisperCppTurboState.isVisible)
+        XCTAssertFalse(whisperCppTurboState.isEnabled)
     }
 
     func testAppStateUpdatePostPasteLearningPersistsAndUpdatesCoordinator() throws {

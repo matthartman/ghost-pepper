@@ -2,6 +2,7 @@ import Foundation
 
 enum SpeechBackendKind: Equatable {
     case whisperKit
+    case whisperCpp
     case fluidAudio
 }
 
@@ -17,6 +18,7 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
     let sizeDescription: String
     let backend: SpeechBackendKind
     let cachePathComponents: [String]
+    let downloadURL: String?
     let fluidAudioVariant: FluidAudioModelVariant?
 
     var id: String { name }
@@ -29,6 +31,8 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
         switch backend {
         case .whisperKit:
             "Whisper \(variantName) (\(pickerTitle.lowercased()))"
+        case .whisperCpp:
+            "\(pickerTitle) (\(variantName.lowercased()))"
         case .fluidAudio:
             "\(pickerTitle) (\(variantName.lowercased()))"
         }
@@ -49,6 +53,7 @@ enum SpeechModelCatalog {
         sizeDescription: "~75 MB",
         backend: .whisperKit,
         cachePathComponents: ["openai", "whisper-tiny.en"],
+        downloadURL: nil,
         fluidAudioVariant: nil
     )
 
@@ -59,6 +64,7 @@ enum SpeechModelCatalog {
         sizeDescription: "~466 MB",
         backend: .whisperKit,
         cachePathComponents: ["openai", "whisper-small.en"],
+        downloadURL: nil,
         fluidAudioVariant: nil
     )
 
@@ -69,6 +75,40 @@ enum SpeechModelCatalog {
         sizeDescription: "~466 MB",
         backend: .whisperKit,
         cachePathComponents: ["openai", "whisper-small"],
+        downloadURL: nil,
+        fluidAudioVariant: nil
+    )
+
+    static let whisperLargeV3Turbo = SpeechModelDescriptor(
+        name: "openai_whisper-large-v3_turbo",
+        pickerTitle: "Large v3 Turbo",
+        variantName: "multilingual",
+        sizeDescription: "~954 MB",
+        backend: .whisperKit,
+        cachePathComponents: ["openai", "whisper-large-v3_turbo"],
+        downloadURL: nil,
+        fluidAudioVariant: nil
+    )
+
+    static let whisperCppLargeV3TurboQuantized = SpeechModelDescriptor(
+        name: "ggml-large-v3-turbo-q5_0",
+        pickerTitle: "whisper.cpp Large v3 Turbo",
+        variantName: "Q5_0 quantized",
+        sizeDescription: "~574 MB",
+        backend: .whisperCpp,
+        cachePathComponents: ["ggml-large-v3-turbo-q5_0.bin"],
+        downloadURL: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        fluidAudioVariant: nil
+    )
+
+    static let whisperCppLargeV3Turbo = SpeechModelDescriptor(
+        name: "ggml-large-v3-turbo",
+        pickerTitle: "whisper.cpp Large v3 Turbo",
+        variantName: "F16 full precision",
+        sizeDescription: "~1.5 GB",
+        backend: .whisperCpp,
+        cachePathComponents: ["ggml-large-v3-turbo.bin"],
+        downloadURL: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         fluidAudioVariant: nil
     )
 
@@ -79,6 +119,7 @@ enum SpeechModelCatalog {
         sizeDescription: "~1.4 GB",
         backend: .fluidAudio,
         cachePathComponents: ["FluidInference", "parakeet-tdt-0.6b-v3-coreml"],
+        downloadURL: nil,
         fluidAudioVariant: .parakeetV3
     )
 
@@ -89,6 +130,7 @@ enum SpeechModelCatalog {
         sizeDescription: "~900 MB",
         backend: .fluidAudio,
         cachePathComponents: [],
+        downloadURL: nil,
         fluidAudioVariant: .qwen3AsrInt8
     )
 
@@ -97,6 +139,9 @@ enum SpeechModelCatalog {
         whisperTiny,
         whisperSmallEnglish,
         whisperSmallMultilingual,
+        whisperLargeV3Turbo,
+        whisperCppLargeV3TurboQuantized,
+        whisperCppLargeV3Turbo,
         parakeetV3,
     ]
 
@@ -110,7 +155,7 @@ enum SpeechModelCatalog {
     static let defaultModelID = whisperSmallEnglish.id
 
     static var whisperModels: [SpeechModelDescriptor] {
-        availableModels.filter { $0.backend == .whisperKit }
+        availableModels.filter { $0.backend == .whisperKit || $0.backend == .whisperCpp }
     }
 
     static func model(named name: String) -> SpeechModelDescriptor? {

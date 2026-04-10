@@ -18,6 +18,8 @@
 		17AF31EA19761CA8B7DF5F9A /* CleanupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0065F99395EEC3EB77997C2C /* CleanupSettings.swift */; };
 		194F5FBCC55E0EA3E0351C15 /* SpeechModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD317A8D8E749E5596734DB7 /* SpeechModelCatalog.swift */; };
 		1A9C394F69A8A0E9DCA48219 /* ModelManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A098A2516C7563B1E4FDD3 /* ModelManagerTests.swift */; };
+		A1C3E7D91F4B6A8092D3E4F5 /* WhisperCppSpeechBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C3E7D91F4B6A8092D3E4F6 /* WhisperCppSpeechBackend.swift */; };
+		A1C3E7D91F4B6A8092D3E4F7 /* WhisperCppSpeechBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C3E7D91F4B6A8092D3E4F8 /* WhisperCppSpeechBackendTests.swift */; };
 		1AB34878C4E7E375F34A1339 /* CleanupModelProbeRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7201BD31C20BC2B1D0E51DB6 /* CleanupModelProbeRunner.swift */; };
 		1AECB19E0AD630641AE8649B /* TranscriptionLabRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F0BBC9BB83FDC0739EF319 /* TranscriptionLabRunner.swift */; };
 		1BA7D7D7A6F2FBFE95CC7206 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 28AB9D6DD22DB83ADFC3F6F3 /* LLM */; };
@@ -241,6 +243,8 @@
 		A1B93B4F9F40EE6BD8525677 /* CleanupModelProbeRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupModelProbeRunnerTests.swift; sourceTree = "<group>"; };
 		A2E051FC96D522216E8C2F01 /* OCRContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRContextTests.swift; sourceTree = "<group>"; };
 		A5F781190896573C3BA687CB /* FluidAudioSpeechSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidAudioSpeechSessionTests.swift; sourceTree = "<group>"; };
+		A1C3E7D91F4B6A8092D3E4F6 /* WhisperCppSpeechBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperCppSpeechBackend.swift; sourceTree = "<group>"; };
+		A1C3E7D91F4B6A8092D3E4F8 /* WhisperCppSpeechBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperCppSpeechBackendTests.swift; sourceTree = "<group>"; };
 		A91C299194463F439E81D6BC /* ShortcutRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorderView.swift; sourceTree = "<group>"; };
 		AA783B889855B0811E210751 /* CleanupPromptEvalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupPromptEvalTests.swift; sourceTree = "<group>"; };
 		AACCB8CD3CFA3BA1C91B5B87 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
@@ -524,6 +528,7 @@
 				F5DEE2CB8B9ED5B0CAE8C152 /* RecordingSessionCoordinator.swift */,
 				BD317A8D8E749E5596734DB7 /* SpeechModelCatalog.swift */,
 				D2CC027B53AAE03079D78761 /* SpeechTranscriber.swift */,
+				A1C3E7D91F4B6A8092D3E4F6 /* WhisperCppSpeechBackend.swift */,
 			);
 			path = Transcription;
 			sourceTree = "<group>";
@@ -606,6 +611,7 @@
 				335E3F3AA3803E2274CF6197 /* TranscriptionLabControllerTests.swift */,
 				48FD8FBD546233B0547BB89D /* TranscriptionLabRunnerTests.swift */,
 				D7EC6EEC8F041DE99399C3E3 /* TranscriptionLabStoreTests.swift */,
+				A1C3E7D91F4B6A8092D3E4F8 /* WhisperCppSpeechBackendTests.swift */,
 			);
 			path = GhostPepperTests;
 			sourceTree = "<group>";
@@ -814,6 +820,7 @@
 				DFAB770908C43B46C21F6986 /* TranscriptionLabStore.swift in Sources */,
 				829C83DF25112D375A8DB767 /* UpdaterController.swift in Sources */,
 				750B0226D3A035D24259B606 /* WindowCaptureService.swift in Sources */,
+				A1C3E7D91F4B6A8092D3E4F5 /* WhisperCppSpeechBackend.swift in Sources */,
 				3B8354B1BAACB0F28DF98815 /* ZoBackend.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -872,6 +879,7 @@
 				F43D0549F804473CD7C8A6A6 /* TranscriptionLabControllerTests.swift in Sources */,
 				950E9B7AB1223E2B2D679B71 /* TranscriptionLabRunnerTests.swift in Sources */,
 				09DA02222FFAFD8F32DB0212 /* TranscriptionLabStoreTests.swift in Sources */,
+				A1C3E7D91F4B6A8092D3E4F7 /* WhisperCppSpeechBackendTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

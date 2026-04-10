@@ -757,7 +757,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("Ghost Pepper uses this model for speech recognition everywhere in the app.")
+                Text("Ghost Pepper uses this model for speech recognition everywhere in the app. `whisper.cpp` models require the local `whisper-cli` runtime (`brew install whisper-cpp`).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -787,7 +787,7 @@ struct SettingsView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                             .font(.caption)
-                        Text("You've selected a non-English language but are using an English-only model. Switch to **Multilingual** or **Parakeet v3** above for best results.")
+                        Text("You've selected a non-English language but are using an English-only model. Switch to **Multilingual**, **Large v3 Turbo**, **whisper.cpp Large v3 Turbo**, or **Parakeet v3** above for best results.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

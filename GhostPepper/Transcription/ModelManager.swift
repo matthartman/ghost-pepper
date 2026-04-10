@@ -7,10 +7,13 @@ import WhisperKit
 final class ModelManager: ObservableObject {
     typealias ModelLoadOverride = @MainActor (SpeechModelDescriptor) async throws -> Void
     typealias RetryDelayOverride = @MainActor () async -> Void
+    typealias WhisperCppTranscriptionOverride = WhisperCppSpeechBackend.TranscriptionOverride
+    typealias WhisperCppExecutableURLOverride = WhisperCppSpeechBackend.ExecutableURLOverride
 
     private(set) var whisperKit: WhisperKit?
     private var fluidAudioManager: AsrManager?
     private var sortformerModels: SortformerModels?
+    private var loadedWhisperCppModelURL: URL?
     /// Stored as `Any?` because `Qwen3AsrManager` is `@available(macOS 15, *)`
     /// and the app deploys to macOS 14. Cast at use sites under `#available`.
     private var qwen3AsrManagerStorage: Any?
@@ -39,15 +42,22 @@ final class ModelManager: ObservableObject {
 
     private let modelLoadOverride: ModelLoadOverride?
     private let loadRetryDelayOverride: RetryDelayOverride?
+    private let whisperCppBackend: WhisperCppSpeechBackend
 
     init(
         modelName: String = SpeechModelCatalog.defaultModelID,
         modelLoadOverride: ModelLoadOverride? = nil,
-        loadRetryDelayOverride: RetryDelayOverride? = nil
+        loadRetryDelayOverride: RetryDelayOverride? = nil,
+        whisperCppTranscriptionOverride: WhisperCppTranscriptionOverride? = nil,
+        whisperCppExecutableURLOverride: WhisperCppExecutableURLOverride? = nil
     ) {
         self.modelName = modelName
         self.modelLoadOverride = modelLoadOverride
         self.loadRetryDelayOverride = loadRetryDelayOverride
+        self.whisperCppBackend = WhisperCppSpeechBackend(
+            transcriptionOverride: whisperCppTranscriptionOverride,
+            executableURLOverride: whisperCppExecutableURLOverride
+        )
     }
 
     func loadModel(name: String? = nil) async {
@@ -107,6 +117,8 @@ final class ModelManager: ObservableObject {
         switch requestedModel.backend {
         case .whisperKit:
             try await loadWhisperModel(named: requestedModel.name)
+        case .whisperCpp:
+            try await loadWhisperCppModel(requestedModel)
         case .fluidAudio:
             switch requestedModel.fluidAudioVariant {
             case .qwen3AsrInt8:
@@ -144,6 +156,19 @@ final class ModelManager: ObservableObject {
                     .joined(separator: " ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let cleaned = SpeechTranscriber.removeArtifacts(from: text)
+                return cleaned.isEmpty ? nil : cleaned
+            case .whisperCpp:
+                let modelURL = loadedWhisperCppModelURL ?? WhisperCppSpeechBackend.modelURL(for: model)
+                let text = try await whisperCppBackend.transcribe(
+                    model: model,
+                    modelURL: modelURL,
+                    audioBuffer: audioBuffer,
+                    language: language,
+                    debugLogger: debugLogger
+                )
+                let cleaned = SpeechTranscriber.removeArtifacts(
+                    from: text?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+                )
                 return cleaned.isEmpty ? nil : cleaned
             case .fluidAudio:
                 switch model.fluidAudioVariant {
@@ -243,6 +268,16 @@ final class ModelManager: ObservableObject {
         whisperKit = try await WhisperKit(config)
     }
 
+    private func loadWhisperCppModel(_ model: SpeechModelDescriptor) async throws {
+        let modelURL = try await whisperCppBackend.loadModel(model) { [weak self] progress in
+            Task { @MainActor in
+                self?.downloadProgress = progress
+            }
+        }
+        downloadProgress = nil
+        loadedWhisperCppModelURL = modelURL
+    }
+
     private func loadFluidAudioModel(_ model: SpeechModelDescriptor) async throws {
         guard let fluidAudioVariant = model.fluidAudioVariant else {
             throw NSError(
@@ -318,6 +353,7 @@ final class ModelManager: ObservableObject {
         fluidAudioManager = nil
         sortformerModels = nil
         qwen3AsrManagerStorage = nil
+        loadedWhisperCppModelURL = nil
         downloadProgress = nil
     }
 
@@ -395,6 +431,8 @@ final class ModelManager: ObservableObject {
                 partialURL.appendingPathComponent(component, isDirectory: true)
             }
             try? FileManager.default.removeItem(at: modelPath)
+        case .whisperCpp:
+            WhisperCppSpeechBackend.deleteCachedModel(model)
         case .fluidAudio:
             guard let fluidAudioVariant = model.fluidAudioVariant else { return }
             switch fluidAudioVariant {
@@ -414,6 +452,8 @@ final class ModelManager: ObservableObject {
                 partialURL.appendingPathComponent(component, isDirectory: true)
             }
             return FileManager.default.fileExists(atPath: modelPath.path)
+        case .whisperCpp:
+            return WhisperCppSpeechBackend.modelIsCached(model)
         case .fluidAudio:
             guard let fluidAudioVariant = model.fluidAudioVariant else {
                 return false
