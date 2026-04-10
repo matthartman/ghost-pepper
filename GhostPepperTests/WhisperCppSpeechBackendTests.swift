@@ -64,6 +64,7 @@ final class WhisperCppSpeechBackendTests: XCTestCase {
         let loadedURL = try await backend.loadModel(model) { _ in }
 
         XCTAssertEqual(loadedURL, cachedURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: validationMarkerURL(for: model).path))
     }
 
     func testLoadModelFailsWhenValidationCommandReturnsNonZero() async throws {
@@ -78,6 +79,38 @@ final class WhisperCppSpeechBackendTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(try await backend.loadModel(model) { _ in }) { error in
             XCTAssertTrue(error.localizedDescription.contains("whisper.cpp exited with status"))
         }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: validationMarkerURL(for: model).path))
+    }
+
+    func testLoadModelSkipsValidationForCachedModelWithValidationMarker() async throws {
+        let model = makeTestModel(cachePathComponents: ["unit-tests", UUID().uuidString, "validated.bin"])
+        let cachedURL = try cacheModelFile(for: model)
+        let markerURL = validationMarkerURL(for: model)
+        try Data().write(to: markerURL)
+        defer { try? FileManager.default.removeItem(at: cachedURL.deletingLastPathComponent().deletingLastPathComponent()) }
+
+        let backend = WhisperCppSpeechBackend(executableURLOverride: {
+            URL(fileURLWithPath: "/usr/bin/false")
+        })
+
+        let loadedURL = try await backend.loadModel(model) { _ in }
+
+        XCTAssertEqual(loadedURL, cachedURL)
+    }
+
+    func testDeleteCachedModelRemovesValidationMarker() throws {
+        let model = makeTestModel(cachePathComponents: ["unit-tests", UUID().uuidString, "delete-marker.bin"])
+        let cachedURL = try cacheModelFile(for: model)
+        let markerURL = validationMarkerURL(for: model)
+        try Data().write(to: markerURL)
+        defer { try? FileManager.default.removeItem(at: cachedURL.deletingLastPathComponent().deletingLastPathComponent()) }
+
+        WhisperCppSpeechBackend.deleteCachedModel(model)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
     }
 
     func testTranscriptionOverrideReceivesWhisperCppInputs() async throws {
@@ -129,6 +162,10 @@ final class WhisperCppSpeechBackendTests: XCTestCase {
         )
         try Data("test".utf8).write(to: url)
         return url
+    }
+
+    private func validationMarkerURL(for model: SpeechModelDescriptor) -> URL {
+        WhisperCppSpeechBackend.modelURL(for: model).appendingPathExtension("validated")
     }
 }
 

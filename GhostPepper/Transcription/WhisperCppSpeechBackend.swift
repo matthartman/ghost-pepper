@@ -12,6 +12,7 @@ final class WhisperCppSpeechBackend {
 
     private let transcriptionOverride: TranscriptionOverride?
     private let executableURLOverride: ExecutableURLOverride?
+    private static let validationTimeout: TimeInterval = 30
 
     init(
         transcriptionOverride: TranscriptionOverride? = nil,
@@ -42,7 +43,8 @@ final class WhisperCppSpeechBackend {
             withIntermediateDirectories: true
         )
 
-        if !Self.modelIsCached(model) {
+        let modelWasCached = Self.modelIsCached(model)
+        if !modelWasCached {
             guard let downloadURLString = model.downloadURL,
                   let downloadURL = URL(string: downloadURLString) else {
                 throw NSError(
@@ -55,7 +57,19 @@ final class WhisperCppSpeechBackend {
             try await downloadModel(from: downloadURL, to: modelURL, onProgress: onProgress)
         }
 
-        try await validateModelLoad(modelURL: modelURL, executableURL: executableURL)
+        let requiresValidation = !modelWasCached || Self.validationMarkerExists(for: modelURL) == false
+        guard requiresValidation else {
+            return modelURL
+        }
+
+        do {
+            try await validateModelLoad(modelURL: modelURL, executableURL: executableURL)
+            Self.writeValidationMarker(for: modelURL)
+        } catch {
+            Self.removeCachedArtifacts(for: modelURL)
+            throw error
+        }
+
         return modelURL
     }
 
@@ -119,7 +133,7 @@ final class WhisperCppSpeechBackend {
     }
 
     static func deleteCachedModel(_ model: SpeechModelDescriptor) {
-        try? FileManager.default.removeItem(at: modelURL(for: model))
+        removeCachedArtifacts(for: modelURL(for: model))
     }
 
     static func modelIsCached(_ model: SpeechModelDescriptor) -> Bool {
@@ -135,6 +149,24 @@ final class WhisperCppSpeechBackend {
     private static var modelsDirectory: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("GhostPepper/whisper-cpp-models", isDirectory: true)
+    }
+
+    private static func validationMarkerURL(for modelURL: URL) -> URL {
+        modelURL.appendingPathExtension("validated")
+    }
+
+    private static func validationMarkerExists(for modelURL: URL) -> Bool {
+        FileManager.default.fileExists(atPath: validationMarkerURL(for: modelURL).path)
+    }
+
+    private static func writeValidationMarker(for modelURL: URL) {
+        let markerURL = validationMarkerURL(for: modelURL)
+        try? Data().write(to: markerURL, options: .atomic)
+    }
+
+    private static func removeCachedArtifacts(for modelURL: URL) {
+        try? FileManager.default.removeItem(at: modelURL)
+        try? FileManager.default.removeItem(at: validationMarkerURL(for: modelURL))
     }
 
     private func downloadModel(
@@ -220,58 +252,87 @@ final class WhisperCppSpeechBackend {
                 "--no-prints",
                 "--no-timestamps",
                 "--language", "en",
+            ],
+            timeout: Self.validationTimeout
+        )
+    }
+
+    private func processTimeoutError(executableURL: URL, timeout: TimeInterval) -> NSError {
+        NSError(
+            domain: "GhostPepper.WhisperCppSpeechBackend",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Timed out after \(Int(timeout)) seconds waiting for \(executableURL.lastPathComponent) to finish."
             ]
         )
     }
 
-    private func runProcess(executableURL: URL, arguments: [String]) async throws {
+    private func runProcess(
+        executableURL: URL,
+        arguments: [String],
+        timeout: TimeInterval? = nil
+    ) async throws {
         let outputPipe = Pipe()
         let outputBuffer = ProcessOutputBuffer()
         let process = Process()
+        let state = ProcessRunState()
         process.executableURL = executableURL
         process.arguments = arguments
         process.standardOutput = outputPipe
         process.standardError = outputPipe
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let outputHandle = outputPipe.fileHandleForReading
-            outputHandle.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    return
-                }
-                outputBuffer.append(data)
-            }
-
-            process.terminationHandler = { process in
-                outputHandle.readabilityHandler = nil
-                outputBuffer.append(outputHandle.readDataToEndOfFile())
-                let outputText = outputBuffer.text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                if process.terminationStatus == 0 {
-                    continuation.resume(returning: ())
-                    return
-                }
-
-                let message = outputText.isEmpty == false
-                    ? outputText
-                    : "whisper.cpp exited with status \(process.terminationStatus)."
-                continuation.resume(
-                    throwing: NSError(
-                        domain: "GhostPepper.WhisperCppSpeechBackend",
-                        code: Int(process.terminationStatus),
-                        userInfo: [NSLocalizedDescriptionKey: message]
+        let timeoutTask = timeout.map { timeout in
+            Task {
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    state.requestTermination(
+                        processTimeoutError(executableURL: executableURL, timeout: timeout),
+                        for: process
                     )
-                )
+                } catch {
+                    return
+                }
             }
+        }
+        defer { timeoutTask?.cancel() }
 
-            do {
-                try process.run()
-            } catch {
-                outputHandle.readabilityHandler = nil
-                continuation.resume(throwing: error)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let outputHandle = outputPipe.fileHandleForReading
+                outputHandle.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if data.isEmpty {
+                        handle.readabilityHandler = nil
+                        return
+                    }
+                    outputBuffer.append(data)
+                }
+
+                process.terminationHandler = { process in
+                    state.finish(
+                        process: process,
+                        outputHandle: outputHandle,
+                        outputBuffer: outputBuffer,
+                        continuation: continuation
+                    )
+                }
+
+                do {
+                    try process.run()
+                    if state.markStarted() {
+                        process.terminate()
+                    }
+                } catch {
+                    state.failToStart(
+                        error,
+                        outputHandle: outputHandle,
+                        continuation: continuation
+                    )
+                }
             }
+        } onCancel: {
+            state.requestTermination(CancellationError(), for: process)
         }
     }
 }
@@ -315,5 +376,101 @@ private final class ProcessOutputBuffer: @unchecked Sendable {
         let snapshot = data
         lock.unlock()
         return String(decoding: snapshot, as: UTF8.self)
+    }
+}
+
+private final class ProcessRunState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completionError: Error?
+    private var hasCompleted = false
+    private var hasStarted = false
+
+    func requestTermination(_ error: Error, for process: Process) {
+        lock.lock()
+        guard hasCompleted == false else {
+            lock.unlock()
+            return
+        }
+        if hasStarted && process.isRunning == false {
+            lock.unlock()
+            return
+        }
+        if completionError == nil {
+            completionError = error
+        }
+        let shouldTerminate = hasStarted && process.isRunning
+        lock.unlock()
+
+        if shouldTerminate {
+            process.terminate()
+        }
+    }
+
+    func markStarted() -> Bool {
+        lock.lock()
+        hasStarted = true
+        let shouldTerminate = completionError != nil && hasCompleted == false
+        lock.unlock()
+        return shouldTerminate
+    }
+
+    func finish(
+        process: Process,
+        outputHandle: FileHandle,
+        outputBuffer: ProcessOutputBuffer,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        outputHandle.readabilityHandler = nil
+        outputBuffer.append(outputHandle.readDataToEndOfFile())
+        let outputText = outputBuffer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        lock.lock()
+        guard hasCompleted == false else {
+            lock.unlock()
+            return
+        }
+        hasCompleted = true
+        let completionError = completionError
+        lock.unlock()
+
+        if let completionError {
+            continuation.resume(throwing: completionError)
+            return
+        }
+
+        if process.terminationStatus == 0 {
+            continuation.resume(returning: ())
+            return
+        }
+
+        let message = outputText.isEmpty == false
+            ? outputText
+            : "whisper.cpp exited with status \(process.terminationStatus)."
+        continuation.resume(
+            throwing: NSError(
+                domain: "GhostPepper.WhisperCppSpeechBackend",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        )
+    }
+
+    func failToStart(
+        _ error: Error,
+        outputHandle: FileHandle,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        outputHandle.readabilityHandler = nil
+
+        lock.lock()
+        guard hasCompleted == false else {
+            lock.unlock()
+            return
+        }
+        hasCompleted = true
+        let completionError = completionError
+        lock.unlock()
+
+        continuation.resume(throwing: completionError ?? error)
     }
 }
