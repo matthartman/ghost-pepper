@@ -189,6 +189,46 @@ final class TranscriptionLabStoreTests: XCTestCase {
         XCTAssertEqual(decoded.speakerFilteringUsedFallback, false)
     }
 
+    func testEntryRoundTripsWhisperCppLargeV3TurboQuantizedSpeechModelID() throws {
+        let entry = TranscriptionLabEntry(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000034")!,
+            createdAt: Date(timeIntervalSince1970: 988),
+            audioFileName: "turbo-q5.wav",
+            audioDuration: 2.0,
+            windowContext: OCRContext(windowContents: "Turbo Q5"),
+            rawTranscription: "turbo q5 raw",
+            correctedTranscription: "turbo q5 corrected",
+            speechModelID: "ggml-large-v3-turbo-q5_0",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)",
+            cleanupUsedFallback: false
+        )
+
+        let encoded = try JSONEncoder().encode(entry)
+        let decoded = try JSONDecoder().decode(TranscriptionLabEntry.self, from: encoded)
+
+        XCTAssertEqual(decoded.speechModelID, "ggml-large-v3-turbo-q5_0")
+    }
+
+    func testEntryRoundTripsWhisperCppLargeV3TurboSpeechModelID() throws {
+        let entry = TranscriptionLabEntry(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000035")!,
+            createdAt: Date(timeIntervalSince1970: 989),
+            audioFileName: "turbo-f16.wav",
+            audioDuration: 2.0,
+            windowContext: OCRContext(windowContents: "Turbo F16"),
+            rawTranscription: "turbo f16 raw",
+            correctedTranscription: "turbo f16 corrected",
+            speechModelID: "ggml-large-v3-turbo",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)",
+            cleanupUsedFallback: false
+        )
+
+        let encoded = try JSONEncoder().encode(entry)
+        let decoded = try JSONDecoder().decode(TranscriptionLabEntry.self, from: encoded)
+
+        XCTAssertEqual(decoded.speechModelID, "ggml-large-v3-turbo")
+    }
+
     func testTranscriptionLabStorePersistsDiarizationSummary() throws {
         let fixture = makeFixture()
         let store = TranscriptionLabStore(

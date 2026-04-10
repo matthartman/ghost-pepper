@@ -25,6 +25,8 @@ Ghost Pepper uses open-source models that run entirely on your Mac. Models downl
 | Whisper tiny.en | ~75 MB | Fastest, English only |
 | **Whisper small.en** (default) | ~466 MB | Best accuracy, English only |
 | Whisper small (multilingual) | ~466 MB | Multi-language support |
+| Whisper large v3 turbo (q5_0, multilingual) | ~547 MB | Smaller ggml download with local `whisper.cpp` runtime |
+| Whisper large v3 turbo (full, multilingual) | ~1.5 GB | Full-precision ggml model for local `whisper.cpp` runtime |
 | Parakeet v3 (25 languages) | ~1.4 GB | Multi-language via [FluidAudio](https://github.com/FluidInference/FluidAudio) |
 | Qwen3-ASR 0.6B int8 (50+ languages) | ~900 MB | Highest multilingual quality, macOS 15+ required |
 
@@ -36,7 +38,7 @@ Ghost Pepper uses open-source models that run entirely on your Mac. Models downl
 | Qwen 3.5 2B | ~1.3 GB | Fast (~4-5s) |
 | Qwen 3.5 4B | ~2.8 GB | Full quality (~5-7s) |
 
-Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit). Cleanup models powered by [LLM.swift](https://github.com/eastriverlee/LLM.swift). All models served by [Hugging Face](https://huggingface.co/).
+Speech models are powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit), [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and [FluidAudio](https://github.com/FluidInference/FluidAudio). Cleanup models powered by [LLM.swift](https://github.com/eastriverlee/LLM.swift). All models served by [Hugging Face](https://huggingface.co/).
 
 ## Getting started
 

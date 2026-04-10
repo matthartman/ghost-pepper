@@ -12,12 +12,16 @@ final class SpeechTranscriberTests: XCTestCase {
             "openai_whisper-tiny.en",
             "openai_whisper-small.en",
             "openai_whisper-small",
+            "ggml-large-v3-turbo-q5_0",
+            "ggml-large-v3-turbo",
             "fluid_parakeet-v3",
         ]
         let baseBackends: [SpeechBackendKind] = [
             .whisperKit,
             .whisperKit,
             .whisperKit,
+            .whisperCpp,
+            .whisperCpp,
             .fluidAudio,
         ]
 
@@ -32,10 +36,12 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertEqual(SpeechModelCatalog.defaultModelID, "openai_whisper-small.en")
     }
 
-    func testFluidAudioSpeechModelsSupportSpeakerFiltering() {
+    func testSpeechModelsOnlySupportSpeakerFilteringForParakeet() {
         XCTAssertFalse(SpeechModelCatalog.whisperTiny.supportsSpeakerFiltering)
         XCTAssertFalse(SpeechModelCatalog.whisperSmallEnglish.supportsSpeakerFiltering)
         XCTAssertFalse(SpeechModelCatalog.whisperSmallMultilingual.supportsSpeakerFiltering)
+        XCTAssertFalse(SpeechModelCatalog.whisperCppLargeV3TurboQuantized.supportsSpeakerFiltering)
+        XCTAssertFalse(SpeechModelCatalog.whisperCppLargeV3Turbo.supportsSpeakerFiltering)
         XCTAssertTrue(SpeechModelCatalog.parakeetV3.supportsSpeakerFiltering)
         // Qwen3-ASR is an encoder-decoder without a diarization output.
         XCTAssertFalse(SpeechModelCatalog.qwen3AsrInt8.supportsSpeakerFiltering)
@@ -49,6 +55,32 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertTrue(model.pickerLabel.contains("Qwen3-ASR 0.6B"))
         XCTAssertTrue(model.pickerLabel.contains("int8"))
         XCTAssertTrue(model.pickerLabel.contains("~900 MB"))
+    }
+
+    func testWhisperCppLargeV3TurboQuantizedDescriptor() {
+        let model = SpeechModelCatalog.whisperCppLargeV3TurboQuantized
+        XCTAssertEqual(model.name, "ggml-large-v3-turbo-q5_0")
+        XCTAssertEqual(model.backend, .whisperCpp)
+        XCTAssertNil(model.fluidAudioVariant)
+        XCTAssertEqual(model.downloadURL, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin")
+        XCTAssertTrue(model.pickerLabel.contains("Whisper large v3 turbo"))
+        XCTAssertTrue(model.pickerLabel.contains("q5_0"))
+        XCTAssertTrue(model.pickerLabel.contains("multilingual"))
+        XCTAssertTrue(model.pickerLabel.contains("~547 MB"))
+        XCTAssertEqual(model.statusName, "Whisper large v3 turbo (q5_0, multilingual)")
+    }
+
+    func testWhisperCppLargeV3TurboFullPrecisionDescriptor() {
+        let model = SpeechModelCatalog.whisperCppLargeV3Turbo
+        XCTAssertEqual(model.name, "ggml-large-v3-turbo")
+        XCTAssertEqual(model.backend, .whisperCpp)
+        XCTAssertNil(model.fluidAudioVariant)
+        XCTAssertEqual(model.downloadURL, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin")
+        XCTAssertTrue(model.pickerLabel.contains("Whisper large v3 turbo"))
+        XCTAssertTrue(model.pickerLabel.contains("full"))
+        XCTAssertTrue(model.pickerLabel.contains("multilingual"))
+        XCTAssertTrue(model.pickerLabel.contains("~1.5 GB"))
+        XCTAssertEqual(model.statusName, "Whisper large v3 turbo (full, multilingual)")
     }
 
     func testQwen3ModelLookupIsAvailableOnSupportedOS() {
@@ -117,7 +149,7 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertNil(result, "Should return nil when model is not loaded")
     }
 
-    // MARK: - Qwen3-ASR ModelManager Tests
+    // MARK: - Additional ModelManager Tests
 
     func testModelManagerLoadsQwen3AsrModelThroughOverride() async throws {
         guard #available(macOS 15, iOS 18, *) else {
@@ -140,6 +172,62 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertEqual(loadedDescriptors.count, 1)
         XCTAssertEqual(loadedDescriptors.first?.name, "fluid_qwen3-asr-0.6b-int8")
         XCTAssertEqual(loadedDescriptors.first?.fluidAudioVariant, .qwen3AsrInt8)
+    }
+
+    func testModelManagerLoadsWhisperCppQuantizedModelThroughOverride() async {
+        var loadedDescriptors: [SpeechModelDescriptor] = []
+        let manager = ModelManager(
+            modelName: "ggml-large-v3-turbo-q5_0",
+            modelLoadOverride: { descriptor in
+                loadedDescriptors.append(descriptor)
+            },
+            loadRetryDelayOverride: {}
+        )
+
+        await manager.loadModel()
+
+        XCTAssertEqual(manager.state, .ready)
+        XCTAssertNil(manager.error)
+        XCTAssertEqual(loadedDescriptors.map(\.name), ["ggml-large-v3-turbo-q5_0"])
+        XCTAssertEqual(loadedDescriptors.first?.backend, .whisperCpp)
+    }
+
+    func testModelManagerLoadsWhisperCppFullPrecisionModelThroughOverride() async {
+        var loadedDescriptors: [SpeechModelDescriptor] = []
+        let manager = ModelManager(
+            modelName: "ggml-large-v3-turbo",
+            modelLoadOverride: { descriptor in
+                loadedDescriptors.append(descriptor)
+            },
+            loadRetryDelayOverride: {}
+        )
+
+        await manager.loadModel()
+
+        XCTAssertEqual(manager.state, .ready)
+        XCTAssertNil(manager.error)
+        XCTAssertEqual(loadedDescriptors.map(\.name), ["ggml-large-v3-turbo"])
+        XCTAssertEqual(loadedDescriptors.first?.backend, .whisperCpp)
+    }
+
+    func testWhisperCppTranscriptionOverrideReturnsTrimmedTranscript() async {
+        let manager = ModelManager(
+            modelName: "ggml-large-v3-turbo-q5_0",
+            modelLoadOverride: { _ in },
+            loadRetryDelayOverride: {},
+            whisperCppTranscriptionOverride: { descriptor, modelURL, audioBuffer, language in
+                XCTAssertEqual(descriptor.name, "ggml-large-v3-turbo-q5_0")
+                XCTAssertTrue(modelURL.lastPathComponent.contains("ggml-large-v3-turbo-q5_0.bin"))
+                XCTAssertEqual(audioBuffer, [0.1, 0.2, 0.3])
+                XCTAssertEqual(language, "auto")
+                return " whisper.cpp transcript "
+            }
+        )
+
+        await manager.loadModel()
+        let result = await manager.transcribe(audioBuffer: [0.1, 0.2, 0.3], language: "auto")
+
+        XCTAssertEqual(result, "whisper.cpp transcript")
     }
 
     func testModelManagerSurfacesQwen3LoadFailure() async throws {
