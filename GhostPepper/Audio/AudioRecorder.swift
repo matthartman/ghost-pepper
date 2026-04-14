@@ -1,9 +1,13 @@
 import AVFoundation
+import CoreAudio
 
 final class AudioRecorder {
     var onRecordingStarted: (() -> Void)?
     var onRecordingStopped: (() -> Void)?
     var onConvertedAudioChunk: (([Float]) -> Void)?
+
+    /// The device ID to record from. If nil, uses the system default.
+    var targetDeviceID: AudioDeviceID?
 
     /// Recreated for every recording session. AVAudioEngine does not reliably
     /// recover when the default input device or its sample rate changes between
@@ -111,7 +115,7 @@ final class AudioRecorder {
         return audioBuffer
     }
 
-    /// Starts capturing audio from the default input device.
+    /// Starts capturing audio from the targeted input device (or system default).
     /// Audio is converted to 16 kHz mono Float32 and appended to `audioBuffer`.
     func startRecording() throws {
         resetBuffer()
@@ -121,6 +125,26 @@ final class AudioRecorder {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         engine = AVAudioEngine()
+
+        // Set the specific input device on the audio unit if one is targeted.
+        // This avoids changing the system-wide default input device.
+        if let deviceID = targetDeviceID {
+            let audioUnit = engine.inputNode.audioUnit!
+            var devID = deviceID
+            let status = AudioUnitSetProperty(
+                audioUnit,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &devID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            if status != noErr {
+                print("AudioRecorder: failed to set device \(deviceID) on audio unit, status=\(status)")
+            } else {
+                print("AudioRecorder: targeting device \(deviceID) directly on audio unit")
+            }
+        }
 
         let inputNode = engine.inputNode
         // `inputFormat(forBus:)` reflects the bus's *actual* HW input format.
@@ -141,8 +165,15 @@ final class AudioRecorder {
 
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: hwFormat) { [weak self] pcmBuffer, _ in
             guard let self = self else { return }
-            guard let converter = self.converter(for: pcmBuffer.format) else { return }
-            self.convert(buffer: pcmBuffer, using: converter)
+
+            // For devices with >2 channels (e.g. aggregate devices), AVAudioConverter
+            // can't downmix to mono. Manually downmix to mono first, then convert.
+            if pcmBuffer.format.channelCount > 2 {
+                self.convertWithManualDownmix(buffer: pcmBuffer)
+            } else {
+                guard let converter = self.converter(for: pcmBuffer.format) else { return }
+                self.convert(buffer: pcmBuffer, using: converter)
+            }
         }
 
         try engine.start()
@@ -223,6 +254,45 @@ final class AudioRecorder {
         let frames = Array(UnsafeBufferPointer(start: channelData[0], count: Int(convertedBuffer.frameLength)))
 
         appendConvertedFrames(frames)
+    }
+
+    /// Manual mono downmix for devices with >2 channels (aggregate devices).
+    /// AVAudioConverter can't handle non-standard channel counts, so we average
+    /// all channels to mono first, then use a mono→mono converter for sample rate.
+    private func convertWithManualDownmix(buffer: AVAudioPCMBuffer) {
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+        guard channelCount > 0, frameLength > 0 else { return }
+
+        // Average all channels to produce mono samples
+        var monoSamples = [Float](repeating: 0, count: frameLength)
+
+        if let channelData = buffer.floatChannelData {
+            // Non-interleaved: each channel is a separate pointer
+            for frame in 0..<frameLength {
+                var sum: Float = 0
+                for ch in 0..<channelCount {
+                    sum += channelData[ch][frame]
+                }
+                monoSamples[frame] = sum / Float(channelCount)
+            }
+        } else {
+            return
+        }
+
+        // Create a mono buffer at the source sample rate
+        let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: buffer.format.sampleRate, channels: 1, interleaved: false)!
+        guard let monoBuffer = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: AVAudioFrameCount(frameLength)) else { return }
+        monoBuffer.frameLength = AVAudioFrameCount(frameLength)
+        if let dest = monoBuffer.floatChannelData?[0] {
+            monoSamples.withUnsafeBufferPointer { src in
+                dest.update(from: src.baseAddress!, count: frameLength)
+            }
+        }
+
+        // Now convert mono→mono with sample rate change (source rate → 16kHz)
+        guard let converter = self.converter(for: monoFormat) else { return }
+        self.convert(buffer: monoBuffer, using: converter)
     }
 
     #if DEBUG

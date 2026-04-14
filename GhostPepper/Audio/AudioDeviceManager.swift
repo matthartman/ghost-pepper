@@ -52,7 +52,21 @@ class AudioDeviceManager {
         return deviceID
     }
 
+    /// Persists the selected input device ID for Ghost Pepper's use.
+    /// Does NOT change the system-wide default — the device is set directly
+    /// on the audio unit when recording starts.
+    static func setSelectedInputDevice(_ deviceID: AudioDeviceID) {
+        UserDefaults.standard.set(Int(deviceID), forKey: "selectedInputDeviceID")
+    }
+
+    /// Returns the user's selected input device ID, or nil to use the system default.
+    static func selectedInputDeviceID() -> AudioDeviceID? {
+        let stored = UserDefaults.standard.integer(forKey: "selectedInputDeviceID")
+        return stored > 0 ? AudioDeviceID(stored) : nil
+    }
+
     /// Sets the system default input device.
+    /// Deprecated: prefer setSelectedInputDevice() + targeting the audio unit directly.
     static func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {
         var id = deviceID
         var address = AudioObjectPropertyAddress(

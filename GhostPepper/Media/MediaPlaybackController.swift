@@ -5,7 +5,6 @@ import Darwin
 /// Uses the private MediaRemote framework via dynamic loading.
 /// Gracefully degrades if the framework is unavailable.
 final class MediaPlaybackController {
-    private var didPause = false
     private let enabled: () -> Bool
 
     private typealias SendCommandFunc = @convention(c) (UInt32, UnsafeRawPointer?) -> Bool
@@ -43,17 +42,20 @@ final class MediaPlaybackController {
     }
 
     /// Pause media if currently playing. Call before recording starts.
-    /// Always sends the pause command — it's a no-op if nothing is playing.
+    /// Sends the pause command — it's a no-op if nothing is playing.
+    /// Does NOT auto-resume afterward; the user presses play themselves.
+    /// This avoids the bug where sending kMRPlay opens Apple Music
+    /// even when nothing was playing before recording started.
     func pauseIfPlaying() {
         guard enabled(), let sendCommand else { return }
         _ = sendCommand(Self.kMRPause, nil)
-        didPause = true
     }
 
-    /// Resume media if we paused it. Call after recording ends.
+    /// No-op. Kept for API compatibility.
+    /// We no longer auto-resume because sending kMRPlay when nothing was
+    /// playing causes Apple Music to launch (macOS routes the play command
+    /// to the default media handler).
     func resumeIfPaused() {
-        guard didPause, let sendCommand else { return }
-        didPause = false
-        _ = sendCommand(Self.kMRPlay, nil)
+        // Intentionally empty — user resumes media manually.
     }
 }

@@ -607,6 +607,7 @@ class AppState: ObservableObject {
                 recordingOCRPrefetch.cancel()
             }
             mediaPlaybackController.pauseIfPlaying()
+            audioRecorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
             try audioRecorder.startRecording()
             debugLogStore.record(category: .hotkey, message: "Recording started.")
             soundEffects.playStart()
@@ -859,6 +860,7 @@ class AppState: ObservableObject {
     }()
 
     func resetAudioEngine() {
+        audioRecorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
         audioRecorder.resetForDeviceChange()
         debugLogStore.record(category: .model, message: "Audio engine reset for device change.")
     }

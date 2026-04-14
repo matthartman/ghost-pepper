@@ -274,7 +274,7 @@ struct SetupStep: View {
                                 }
                             }
                             .onChange(of: selectedDeviceID) { _, newValue in
-                                AudioDeviceManager.setDefaultInputDevice(newValue)
+                                AudioDeviceManager.setSelectedInputDevice(newValue)
                                 // Restart level monitor for new device
                                 micLevel.stop()
                                 micLevel.start()

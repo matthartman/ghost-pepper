@@ -530,7 +530,7 @@ struct SettingsView: View {
                         .labelsHidden()
                         .frame(maxWidth: 320, alignment: .leading)
                         .onChange(of: selectedDeviceID) { _, newValue in
-                            _ = AudioDeviceManager.setDefaultInputDevice(newValue)
+                            AudioDeviceManager.setSelectedInputDevice(newValue)
                             appState.resetAudioEngine()
                         }
                     }
