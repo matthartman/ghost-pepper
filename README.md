@@ -10,17 +10,27 @@
 
 <br>
 
+<img src="./privacy-flow.svg" width="600" alt="Your Voice → Your Mac (on device) → Your Text">
+
+<br>
+
 <a href="https://github.com/matthartman/ghost-pepper/releases/latest/download/GhostPepper.dmg">
   <img src="https://img.shields.io/badge/Download_for_Mac-FF6600?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" height="44">
 </a>
 
-macOS 14.0+ &middot; Apple Silicon (M1+) &middot; Free & open source
+<br>
 
-<a href="https://github.com/matthartman/ghost-pepper">Star on GitHub to support the project</a>
+macOS 14.0+ &middot; Apple Silicon (M1+) &middot; Free & open source
 
 <br>
 
-`MIT License` &nbsp; `50+ languages` &nbsp; `100% local`
+[![GitHub stars](https://img.shields.io/github/stars/matthartman/ghost-pepper?style=social)](https://github.com/matthartman/ghost-pepper)
+&nbsp;
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+&nbsp;
+![100% Local](https://img.shields.io/badge/100%25-Local-FF6600)
+&nbsp;
+![50+ Languages](https://img.shields.io/badge/50%2B-Languages-blue)
 
 </div>
 
@@ -160,8 +170,12 @@ Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit). 
 
 <div align="center">
 
+### Why "Ghost Pepper"?
+
 All models run locally — no private data leaves your computer.<br>
 It's spicy to offer something for free that other apps have raised $80M to build.
+
+<br>
 
 Built with [WhisperKit](https://github.com/argmaxinc/WhisperKit), [LLM.swift](https://github.com/eastriverlee/LLM.swift), [Hugging Face](https://huggingface.co/), and [Sparkle](https://sparkle-project.org/). &middot; MIT License
 

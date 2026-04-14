@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 80" fill="none">
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  </style>
+  <!-- Your Voice -->
+  <rect x="0" y="16" width="160" height="48" rx="24" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="80" y="46" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2328">Your Voice</text>
+
+  <!-- Arrow 1 -->
+  <path d="M170 40 L230 40" stroke="#d0d7de" stroke-width="2" stroke-linecap="round"/>
+  <path d="M225 35 L235 40 L225 45" stroke="#d0d7de" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Your Mac (highlighted) -->
+  <rect x="240" y="8" width="240" height="64" rx="32" fill="#FFF3E8" stroke="#FF6600" stroke-width="2"/>
+  <text x="298" y="36" font-size="20">🔒</text>
+  <text x="316" y="50" text-anchor="start" font-size="15" font-weight="700" fill="#FF6600">Your Mac — on device</text>
+
+  <!-- Arrow 2 -->
+  <path d="M490 40 L550 40" stroke="#d0d7de" stroke-width="2" stroke-linecap="round"/>
+  <path d="M545 35 L555 40 L545 45" stroke="#d0d7de" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Your Text -->
+  <rect x="560" y="16" width="160" height="48" rx="24" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+  <text x="640" y="46" text-anchor="middle" font-size="15" font-weight="600" fill="#1f2328">Your Text</text>
+</svg>
