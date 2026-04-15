@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreAudio
 import ServiceManagement
 
 enum AppStatus: String {
@@ -83,6 +84,8 @@ class AppState: ObservableObject {
     @AppStorage("meetingWindowFloatsWhileRecording") var meetingWindowFloatsWhileRecording: Bool = true
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
     @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
+    @AppStorage("resumeMediaAfterRecording") var resumeMediaAfterRecording: Bool = false
+    @AppStorage("preferredInputDeviceName") var preferredInputDeviceName: String = ""
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
     @Published private(set) var pepperChatChord: KeyChord
@@ -111,9 +114,10 @@ class AppState: ObservableObject {
     lazy var soundEffects = SoundEffects(isEnabled: { [weak self] in
         self?.playSounds ?? true
     })
-    private lazy var mediaPlaybackController = MediaPlaybackController(enabled: { [weak self] in
-        self?.pauseMediaWhileRecording ?? true
-    })
+    private lazy var mediaPlaybackController = MediaPlaybackController(
+        enabled: { [weak self] in self?.pauseMediaWhileRecording ?? true },
+        resumeEnabled: { [weak self] in self?.resumeMediaAfterRecording ?? false }
+    )
     let hotkeyMonitor: HotkeyMonitoring
     let overlay = RecordingOverlayController()
     let textCleanupManager: TextCleanupManager
@@ -153,6 +157,9 @@ class AppState: ObservableObject {
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
     private var hotkeyMonitorStarted = false
+    /// Set before BT device switch, cleared after recording stops.
+    /// Prevents the device listener from undoing an intentional HFP switch.
+    private var btSwitchInProgress = false
 
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
@@ -432,8 +439,21 @@ class AppState: ObservableObject {
             self?.showSettings()
         }
 
-        // Pre-warm audio engine so first recording starts faster
-        audioRecorder.prewarm()
+        if !preferredInputDeviceName.isEmpty {
+            // Ensure BT headset is on A2DP right now
+            ensureBTOnA2DP()
+
+            // Watch for BT device connections — when the headset connects, macOS
+            // may auto-switch it to HFP. React by switching it back to A2DP.
+            AudioDeviceManager.onDeviceListChanged { [weak self] in
+                guard let self, !self.isRecording, !self.btSwitchInProgress else { return }
+                self.ensureBTOnA2DP()
+            }
+
+            // Skip prewarm — accessing inputNode causes BT to switch to HFP.
+        } else {
+            audioRecorder.prewarm()
+        }
         FocusedElementLocator.startPasteTargetTracking()
 
         status = .loading
@@ -515,7 +535,7 @@ class AppState: ObservableObject {
         // Context Bundler uses toggle mode: press once to start, press again to stop
         hotkeyMonitor.onPepperChatStart = { [weak self] in
             Task { @MainActor in
-                self?.toggleContextBundlerRecording()
+                await self?.toggleContextBundlerRecording()
             }
         }
         hotkeyMonitor.onPepperChatStop = {
@@ -586,6 +606,74 @@ class AppState: ObservableObject {
         SpeechModelCatalog.model(named: speechModel)?.supportsSpeakerFiltering == true
     }
 
+    /// If the preferred Bluetooth device is on HFP (appears in the input device list),
+    /// switches the system default input to built-in mic, which forces the headset
+    /// back to A2DP (high-quality stereo output, no mic).
+    private func ensureBTOnA2DP() {
+        guard !preferredInputDeviceName.isEmpty else { return }
+        // If the BT device is in the input list, it's on HFP — switch to built-in
+        if let btDevice = AudioDeviceManager.inputDevice(named: preferredInputDeviceName),
+           let builtIn = AudioDeviceManager.listInputDevices().first(where: { $0.id != btDevice.id }) {
+            _ = AudioDeviceManager.setDefaultInputDevice(builtIn.id)
+            debugLogStore.record(category: .hotkey, message: "Forced '\(btDevice.name)' back to A2DP.")
+        }
+    }
+
+    /// Ensures the preferred Bluetooth device is the system default input for recording.
+    /// Handles three cases:
+    /// - Case 1: Already the default input (still on HFP from last recording) → no-op.
+    /// - Case 2: On HFP but not default → sets it as default (no profile switch).
+    /// - Case 3: On A2DP (not in input list) → triggers A2DP→HFP switch, polls until ready.
+    private func switchToPreferredInputDevice() async {
+        btSwitchInProgress = true
+        guard !preferredInputDeviceName.isEmpty else { return }
+
+        let currentDefault = AudioDeviceManager.defaultInputDeviceID()
+        let existingInput = AudioDeviceManager.inputDevice(named: preferredInputDeviceName)
+
+        // Case 1: Already the default input — ready to record
+        if let existing = existingInput, currentDefault == existing.id {
+            return
+        }
+
+        // Case 2: Device is on HFP (in input list) but not default — just set it
+        if let existing = existingInput {
+            _ = AudioDeviceManager.setDefaultInputDevice(existing.id)
+            return
+        }
+
+        // Case 3: Device is on A2DP (not in input list) — trigger one HFP switch
+        overlay.show(message: .switchingMicrophone)
+        if let device = AudioDeviceManager.anyDevice(named: preferredInputDeviceName) {
+            _ = AudioDeviceManager.setDefaultInputDevice(device.id)
+            debugLogStore.record(category: .hotkey, message: "Switching input to '\(device.name)', waiting for HFP...")
+        }
+
+        // Poll until HFP device appears
+        let deadline = Date().addingTimeInterval(5)
+        var pollCount = 0
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            pollCount += 1
+            if let inputDevice = AudioDeviceManager.inputDevice(named: preferredInputDeviceName) {
+                debugLogStore.record(category: .hotkey, message: "Input device ready: '\(inputDevice.name)' (id=\(inputDevice.id)).")
+                return
+            }
+        }
+    }
+
+    /// Restore the system default to built-in mic so BT headset returns to A2DP.
+    private func restoreToA2DP() {
+        guard let builtIn = AudioDeviceManager.listInputDevices().first(where: { $0.name != preferredInputDeviceName }) else {
+            btSwitchInProgress = false
+            return
+        }
+        _ = AudioDeviceManager.setDefaultInputDevice(builtIn.id)
+        audioRecorder.resetForDeviceChange()
+        btSwitchInProgress = false
+        debugLogStore.record(category: .hotkey, message: "Restored to '\(builtIn.name)' — headset returning to A2DP.")
+    }
+
     private func startRecording() async {
         // If the selected speech model isn't ready, show loading message
         guard status == .ready else {
@@ -618,6 +706,15 @@ class AppState: ObservableObject {
             }
             mediaPlaybackController.pauseIfPlaying()
             audioRecorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
+            await switchToPreferredInputDevice()
+
+            // Warm-up cycle: the first engine start after a BT device switch
+            // binds the engine but I/O isn't ready yet (EAGAIN). A quick
+            // start+stop cycle gets the engine into the right state.
+            try audioRecorder.startRecording()
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            _ = await audioRecorder.stopRecording()
+
             try audioRecorder.startRecording()
             debugLogStore.record(category: .hotkey, message: "Recording started.")
             soundEffects.playStart()
@@ -636,16 +733,24 @@ class AppState: ObservableObject {
     private var isTranscribing = false
 
     private func stopRecordingAndTranscribe() async {
-        guard status == .recording, !isTranscribing else { return }
+        guard status == .recording, !isTranscribing else {
+            return
+        }
         isTranscribing = true
         defer { isTranscribing = false }
 
         debugLogStore.record(category: .hotkey, message: "Recording stopped. Starting transcription.")
         let buffer = await audioRecorder.stopRecording()
+        restoreToA2DP()
         let recordingSessionCoordinator = activeRecordingSessionCoordinator
         clearRecordingSessionCoordinator()
         soundEffects.playStop()
-        mediaPlaybackController.resumeIfPaused()
+        // Delay resume until BT has switched back to A2DP, otherwise the
+        // media player can't resume while the audio output route is changing.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            self?.mediaPlaybackController.resumeIfPaused()
+        }
         isRecording = false
         status = .transcribing
         overlay.show(message: .transcribing)
@@ -902,17 +1007,17 @@ class AppState: ObservableObject {
     private var contextCaptureMonitor: Any?
     private var lastCapturedWindowTitle: String?
 
-    func toggleContextBundlerRecording() {
+    func toggleContextBundlerRecording() async {
         if pepperChatRecorder != nil {
             // Already recording — stop
             endPepperChatRecording()
         } else {
             // Not recording — start
-            beginPepperChatRecording()
+            await beginPepperChatRecording()
         }
     }
 
-    func beginPepperChatRecording() {
+    func beginPepperChatRecording() async {
         guard pepperChatEnabled, !pepperChatApiKey.isEmpty else { return }
         // Clear previous state so new recording takes over
         pepperChatSession.isReviewingContext = false
@@ -936,6 +1041,7 @@ class AppState: ObservableObject {
             }
         }
 
+        await switchToPreferredInputDevice()
         let recorder = AudioRecorder()
         recorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
         recorder.prewarm()
@@ -1002,6 +1108,7 @@ class AppState: ObservableObject {
 
         Task {
             let buffer = await recorder.stopRecording()
+            restoreToA2DP()
             await pepperChatSession.processRecording(
                 audioBuffer: buffer,
                 includeScreenContext: pepperChatIncludeScreenContext

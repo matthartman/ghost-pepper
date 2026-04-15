@@ -9,13 +9,15 @@ final class AudioRecorder {
     /// The device ID to record from. If nil, uses the system default.
     var targetDeviceID: AudioDeviceID?
 
-    /// Recreated for every recording session. AVAudioEngine does not reliably
-    /// recover when the default input device or its sample rate changes between
-    /// sessions (Bluetooth mics flipping between HFP/A2DP profiles is the common
-    /// trigger), and the symptom is `HALB_IOThread: there already is a thread`
-    /// + EAGAIN on the next start. A fresh instance per session avoids that.
+    /// The audio engine is REUSED across recording sessions to avoid triggering
+    /// Bluetooth profile re-negotiation. Creating a new AVAudioEngine causes
+    /// CoreAudio to rebuild its hidden aggregate device, which forces BT headsets
+    /// to re-negotiate HFP — producing beeps and EAGAIN failures.
+    /// The engine is only recreated when `forceEngineRecreation` is set (e.g.
+    /// after a device change in Settings).
     private var engine = AVAudioEngine()
     private let bufferLock = NSLock()
+    private var forceEngineRecreation = false
 
     /// The accumulated audio samples captured during recording.
     /// Accessible for reading within the module (internal) so tests can inspect it.
@@ -32,12 +34,10 @@ final class AudioRecorder {
         engine.prepare()
     }
 
-    /// Reset the audio engine to pick up a new default input device.
+    /// Flag the engine for recreation on the next startRecording() call.
     /// Call this after changing the system default input device in Settings.
     func resetForDeviceChange() {
-        engine.stop()
-        engine.reset()
-        prewarm()
+        forceEngineRecreation = true
     }
 
     static func serializeAudioBuffer(_ samples: [Float]) throws -> Data {
@@ -117,14 +117,23 @@ final class AudioRecorder {
 
     /// Starts capturing audio from the targeted input device (or system default).
     /// Audio is converted to 16 kHz mono Float32 and appended to `audioBuffer`.
+    /// Reuses the existing AVAudioEngine to avoid triggering Bluetooth profile
+    /// re-negotiation. Only recreates the engine when explicitly flagged.
     func startRecording() throws {
         resetBuffer()
 
-        // Tear down any leftover state from the previous session and rebuild the
-        // engine from scratch. See the engine property's doc comment for why.
-        engine.stop()
+        // Clean up previous session's tap
         engine.inputNode.removeTap(onBus: 0)
-        engine = AVAudioEngine()
+        engine.stop()
+
+        // Only recreate the engine when flagged (device change in Settings).
+        // Reusing avoids the hidden aggregate device recreation that causes
+        // BT headsets to beep and re-negotiate HFP.
+        if forceEngineRecreation {
+            print("AudioRecorder: recreating engine (device change flagged)")
+            engine = AVAudioEngine()
+            forceEngineRecreation = false
+        }
 
         // Set the specific input device on the audio unit if one is targeted.
         // This avoids changing the system-wide default input device.
@@ -147,9 +156,6 @@ final class AudioRecorder {
         }
 
         let inputNode = engine.inputNode
-        // `inputFormat(forBus:)` reflects the bus's *actual* HW input format.
-        // `outputFormat(forBus:)` is the downstream format and is the one that
-        // can go stale. Always trust inputFormat for input nodes.
         let hwFormat = inputNode.inputFormat(forBus: 0)
         print("AudioRecorder: input HW format = \(hwFormat), sampleRate=\(hwFormat.sampleRate), channels=\(hwFormat.channelCount)")
 
@@ -157,7 +163,6 @@ final class AudioRecorder {
             throw AudioRecorderError.noInputAvailable
         }
 
-        // Roughly 100ms of audio at the actual HW rate.
         let bufferSize: AVAudioFrameCount = AVAudioFrameCount(hwFormat.sampleRate * 0.1)
 
         cachedConverter = nil
@@ -176,7 +181,33 @@ final class AudioRecorder {
             }
         }
 
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // If reuse failed, try once with a fresh engine as fallback
+            print("AudioRecorder: engine.start() failed, retrying with fresh engine — \(error)")
+            engine.inputNode.removeTap(onBus: 0)
+            engine = AVAudioEngine()
+
+            let freshNode = engine.inputNode
+            let freshFormat = freshNode.inputFormat(forBus: 0)
+            guard freshFormat.sampleRate > 0, freshFormat.channelCount > 0 else {
+                throw AudioRecorderError.noInputAvailable
+            }
+
+            let freshBufferSize = AVAudioFrameCount(freshFormat.sampleRate * 0.1)
+            cachedConverter = nil
+            cachedConverterSourceFormat = nil
+
+            freshNode.installTap(onBus: 0, bufferSize: freshBufferSize, format: freshFormat) { [weak self] pcmBuffer, _ in
+                guard let self = self else { return }
+                guard let converter = self.converter(for: pcmBuffer.format) else { return }
+                self.convert(buffer: pcmBuffer, using: converter)
+            }
+
+            try engine.start()
+        }
+
         onRecordingStarted?()
     }
 

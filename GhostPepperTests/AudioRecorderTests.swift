@@ -65,4 +65,31 @@ final class AudioRecorderTests: XCTestCase {
         XCTAssertEqual(deliveredSamples, [0.1, 0.2, 0.3, 0.4])
         XCTAssertEqual(recorder.audioBuffer, [0.1, 0.2, 0.3, 0.4])
     }
+
+    func testResetForDeviceChangePreservesExistingBuffer() {
+        let recorder = AudioRecorder()
+        recorder.test_convert(samples: [0.1, 0.2, 0.3])
+        XCTAssertFalse(recorder.audioBuffer.isEmpty)
+
+        recorder.resetForDeviceChange()
+
+        // Buffer lives on the recorder, not the engine, so it persists across resets.
+        // It gets cleared when startRecording() calls resetBuffer().
+        XCTAssertEqual(recorder.audioBuffer.count, 3)
+    }
+
+    func testResetForDeviceChangeAllowsNewChunkDelivery() {
+        let recorder = AudioRecorder()
+        recorder.resetForDeviceChange()
+
+        var deliveredChunks: [[Float]] = []
+        recorder.onConvertedAudioChunk = { chunk in
+            deliveredChunks.append(chunk)
+        }
+
+        recorder.test_convert(samples: [0.5, 0.6])
+
+        XCTAssertEqual(deliveredChunks, [[0.5, 0.6]])
+        XCTAssertEqual(recorder.audioBuffer, [0.5, 0.6])
+    }
 }
