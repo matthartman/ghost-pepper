@@ -1320,6 +1320,14 @@ struct SettingsView: View {
 
     private var pepperChatSection: some View {
         VStack(alignment: .leading, spacing: 24) {
+            SettingsCard("Availability") {
+                Toggle("Enable Pepper Chat", isOn: $appState.pepperChatEnabled)
+
+                Text("When disabled, Pepper Chat stays out of the menu bar and its shortcut will not start new chats.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             SettingsCard("Shortcut") {
                 ShortcutRecorderView(
                     title: "Context Bundler (hold to speak)",
@@ -1533,6 +1541,18 @@ struct SettingsView: View {
                         }
 
                         Text("Monitors for Zoom, Teams, FaceTime, Meet, and other call apps. When detected, the pepper character will ask if you'd like to transcribe.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Toggle(
+                            "Float the meeting window while recording",
+                            isOn: $appState.meetingWindowFloatsWhileRecording
+                        )
+                        .onChange(of: appState.meetingWindowFloatsWhileRecording) { _, _ in
+                            appState.refreshMeetingTranscriptWindowPresentation()
+                        }
+
+                        Text("Keeps the current meeting window above other windows only while an active meeting is recording.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

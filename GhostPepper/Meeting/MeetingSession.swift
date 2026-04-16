@@ -11,21 +11,28 @@ final class MeetingSession: ObservableObject {
 
     @Published var transcript: MeetingTranscript
 
+    var onAutoStopRequested: ((MeetingSession) -> Void)?
+
     private let capture = DualStreamCapture()
     private var pipeline: ChunkedTranscriptionPipeline?
     private let transcriber: SpeechTranscriber
     private let saveDirectory: URL
+    private let detectedMeetingAppName: String?
+    private let detectedMeetingBundleIdentifier: String?
 
     /// How often to auto-save the markdown file (matches chunk interval).
     private var autoSaveTimer: Timer?
     private var silenceCheckTimer: Timer?
+    private var meetingEndCheckTimer: Timer?
     private var hasReceivedAudio = false
     private var hasAutoUpdatedTitle = false
     private let originalName: String
     private let ocrService: FrontmostWindowOCRService
+    private var inactiveMeetingPollCount = 0
 
     init(
         meetingName: String,
+        detectedMeeting: DetectedMeeting? = nil,
         transcriber: SpeechTranscriber,
         saveDirectory: URL,
         ocrService: FrontmostWindowOCRService = FrontmostWindowOCRService()
@@ -35,6 +42,8 @@ final class MeetingSession: ObservableObject {
         self.saveDirectory = saveDirectory
         self.originalName = meetingName
         self.ocrService = ocrService
+        self.detectedMeetingAppName = detectedMeeting?.appName
+        self.detectedMeetingBundleIdentifier = detectedMeeting?.bundleIdentifier
     }
 
     /// Start dual-stream capture and chunked transcription.
@@ -102,10 +111,12 @@ final class MeetingSession: ObservableObject {
         // (gives the meeting app time to update its window title and show participants)
         Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.autoUpdateTitleFromFrontmostWindow()
+                self?.autoUpdateTitleFromDetectedMeetingApp()
                 await self?.captureAttendees()
             }
         }
+
+        startMeetingEndMonitorIfNeeded()
 
         print("MeetingSession: started '\(transcript.meetingName)'")
     }
@@ -127,6 +138,9 @@ final class MeetingSession: ObservableObject {
         autoSaveTimer = nil
         silenceCheckTimer?.invalidate()
         silenceCheckTimer = nil
+        meetingEndCheckTimer?.invalidate()
+        meetingEndCheckTimer = nil
+        inactiveMeetingPollCount = 0
 
         print("MeetingSession: stopped '\(transcript.meetingName)' — \(transcript.segments.count) segments, \(transcript.formattedDuration)")
     }
@@ -138,56 +152,28 @@ final class MeetingSession: ObservableObject {
 
     // MARK: - Auto-update title
 
-    /// One-time attempt to update the meeting title from the frontmost window.
+    /// One-time attempt to update the meeting title from the detected meeting app.
     /// Only updates if the user hasn't manually changed the name.
-    private func autoUpdateTitleFromFrontmostWindow() {
+    private func autoUpdateTitleFromDetectedMeetingApp() {
         guard !hasAutoUpdatedTitle, isActive else { return }
         // Only update if user hasn't edited the name
         guard transcript.meetingName == originalName else { return }
+        guard let detectedMeetingAppName,
+              let detectedMeetingBundleIdentifier,
+              let meetingApp = NSRunningApplication.runningApplications(withBundleIdentifier: detectedMeetingBundleIdentifier).first else { return }
         hasAutoUpdatedTitle = true
 
-        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
-        let pid = frontmost.processIdentifier
-        let appElement = AXUIElementCreateApplication(pid)
+        let titles = AccessibilityWindowTitles.all(for: meetingApp)
+        guard let cleaned = MeetingWindowHeuristics.bestAutoUpdateTitle(
+            in: titles,
+            appName: detectedMeetingAppName,
+            observedBundleIdentifier: meetingApp.bundleIdentifier,
+            monitoredBundleIdentifier: detectedMeetingBundleIdentifier
+        ) else { return }
 
-        var windowsValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue) == .success,
-              let windows = windowsValue as? [AXUIElement] else { return }
-
-        // Collect all window titles
-        var titles: [String] = []
-        for window in windows {
-            var titleValue: CFTypeRef?
-            if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue) == .success,
-               let title = titleValue as? String, !title.isEmpty {
-                titles.append(title)
-            }
-        }
-
-        // Find the best title — skip generic ones
-        let generic: Set<String> = [
-            "zoom", "zoom meeting", "microsoft teams", "teams",
-            "facetime", "webex", "slack", "discord", ""
-        ]
-
-        for title in titles {
-            let cleaned = title
-                .replacingOccurrences(of: " | Microsoft Teams", with: "")
-                .replacingOccurrences(of: " - Microsoft Teams", with: "")
-                .replacingOccurrences(of: " – Microsoft Teams", with: "")
-                .replacingOccurrences(of: " - Zoom", with: "")
-                .replacingOccurrences(of: " | Zoom", with: "")
-                .replacingOccurrences(of: " - Cisco Webex", with: "")
-                .replacingOccurrences(of: " | Slack", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if !generic.contains(cleaned.lowercased()) && !cleaned.isEmpty {
-                transcript.meetingName = cleaned
-                print("MeetingSession: auto-updated title to '\(cleaned)'")
-                autoSave()
-                return
-            }
-        }
+        transcript.meetingName = cleaned
+        print("MeetingSession: auto-updated title to '\(cleaned)'")
+        autoSave()
     }
 
     // MARK: - Attendee capture
@@ -275,6 +261,59 @@ final class MeetingSession: ObservableObject {
             }
         } catch {
             print("MeetingSession: failed to save transcript — \(error.localizedDescription)")
+        }
+    }
+
+    private func startMeetingEndMonitorIfNeeded() {
+        guard supportsAutomaticEndDetection else { return }
+
+        meetingEndCheckTimer?.invalidate()
+        meetingEndCheckTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.checkForMeetingEnd()
+            }
+        }
+    }
+
+    private var supportsAutomaticEndDetection: Bool {
+        detectedMeetingAppName == "Zoom" &&
+            (detectedMeetingBundleIdentifier?.hasPrefix("us.zoom.") ?? false)
+    }
+
+    private func checkForMeetingEnd() {
+        guard isActive,
+              let detectedMeetingAppName,
+              let detectedMeetingBundleIdentifier else { return }
+
+        guard let meetingApp = NSRunningApplication.runningApplications(withBundleIdentifier: detectedMeetingBundleIdentifier).first else {
+            requestAutomaticStop(reason: "Zoom is no longer running")
+            return
+        }
+
+        let titles = AccessibilityWindowTitles.all(for: meetingApp)
+        if MeetingWindowHeuristics.indicatesActiveMeeting(in: titles, appName: detectedMeetingAppName) {
+            inactiveMeetingPollCount = 0
+            return
+        }
+
+        inactiveMeetingPollCount += 1
+        guard inactiveMeetingPollCount >= 2 else { return }
+        requestAutomaticStop(reason: "meeting windows no longer look active")
+    }
+
+    private func requestAutomaticStop(reason: String) {
+        guard isActive else { return }
+        meetingEndCheckTimer?.invalidate()
+        meetingEndCheckTimer = nil
+        inactiveMeetingPollCount = 0
+        print("MeetingSession: automatic stop requested — \(reason)")
+        if let onAutoStopRequested {
+            onAutoStopRequested(self)
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            await self?.stop()
         }
     }
 }

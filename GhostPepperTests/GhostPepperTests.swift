@@ -49,11 +49,66 @@ private final class FakeAppRelauncher: AppRelaunching {
 
 @MainActor
 final class GhostPepperTests: XCTestCase {
+    private let pepperChatAppStorageKeys = [
+        "pepperChatEnabled",
+        "pepperChatApiKey"
+    ]
+
     private func makeDebugLogStore() -> DebugLogStore {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("debug-log.json")
         return DebugLogStore(storageURL: fileURL)
+    }
+
+    private func withClearedPepperChatAppStorage<T>(
+        _ body: () throws -> T
+    ) rethrows -> T {
+        let defaults = UserDefaults.standard
+        let originalValues = pepperChatAppStorageKeys.map { key in
+            (key, defaults.object(forKey: key))
+        }
+
+        for key in pepperChatAppStorageKeys {
+            defaults.removeObject(forKey: key)
+        }
+
+        defer {
+            for (key, value) in originalValues {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        return try body()
+    }
+
+    private func withClearedPepperChatAppStorage<T>(
+        _ body: () async throws -> T
+    ) async rethrows -> T {
+        let defaults = UserDefaults.standard
+        let originalValues = pepperChatAppStorageKeys.map { key in
+            (key, defaults.object(forKey: key))
+        }
+
+        for key in pepperChatAppStorageKeys {
+            defaults.removeObject(forKey: key)
+        }
+
+        defer {
+            for (key, value) in originalValues {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        return try await body()
     }
 
     override func tearDown() {
@@ -233,6 +288,90 @@ final class GhostPepperTests: XCTestCase {
         )
 
         XCTAssertEqual(appState.cleanupBackend, .localModels)
+    }
+
+    func testAppStateDefaultsPepperChatToEnabledWhenZoTokenAlreadyStored() throws {
+        try withClearedPepperChatAppStorage {
+            UserDefaults.standard.set("zo_sk_existing", forKey: "pepperChatApiKey")
+
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+            defaults.removePersistentDomain(forName: #function)
+            let appState = AppState(
+                hotkeyMonitor: FakeHotkeyMonitor(),
+                chordBindingStore: ChordBindingStore(defaults: defaults),
+                cleanupSettingsDefaults: defaults
+            )
+
+            XCTAssertTrue(appState.pepperChatEnabled)
+        }
+    }
+
+    func testAppStateDefaultsPepperChatToDisabledWithoutZoToken() throws {
+        try withClearedPepperChatAppStorage {
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+            defaults.removePersistentDomain(forName: #function)
+            let appState = AppState(
+                hotkeyMonitor: FakeHotkeyMonitor(),
+                chordBindingStore: ChordBindingStore(defaults: defaults),
+                cleanupSettingsDefaults: defaults
+            )
+
+            XCTAssertFalse(appState.pepperChatEnabled)
+        }
+    }
+
+    func testAppStateUsesStoredPepperChatToggleOverZoTokenBackCompatDefault() throws {
+        try withClearedPepperChatAppStorage {
+            UserDefaults.standard.set("zo_sk_existing", forKey: "pepperChatApiKey")
+            UserDefaults.standard.set(false, forKey: "pepperChatEnabled")
+
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+            defaults.removePersistentDomain(forName: #function)
+            let appState = AppState(
+                hotkeyMonitor: FakeHotkeyMonitor(),
+                chordBindingStore: ChordBindingStore(defaults: defaults),
+                cleanupSettingsDefaults: defaults
+            )
+
+            XCTAssertFalse(appState.pepperChatEnabled)
+        }
+    }
+
+    func testAppStateStartHotkeyMonitorOmitsPepperChatBindingWhenDisabled() async throws {
+        try await withClearedPepperChatAppStorage {
+            UserDefaults.standard.set(false, forKey: "pepperChatEnabled")
+
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+            defaults.removePersistentDomain(forName: #function)
+            let monitor = FakeHotkeyMonitor()
+            let appState = AppState(
+                hotkeyMonitor: monitor,
+                chordBindingStore: ChordBindingStore(defaults: defaults)
+            )
+
+            await appState.startHotkeyMonitor()
+
+            XCTAssertNil(monitor.updatedBindings[.pepperChat])
+        }
+    }
+
+    func testAppStateDoesNotStartPepperChatRecordingWhenDisabled() throws {
+        try withClearedPepperChatAppStorage {
+            UserDefaults.standard.set(false, forKey: "pepperChatEnabled")
+            UserDefaults.standard.set("zo_sk_existing", forKey: "pepperChatApiKey")
+
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+            defaults.removePersistentDomain(forName: #function)
+            let appState = AppState(
+                hotkeyMonitor: FakeHotkeyMonitor(),
+                chordBindingStore: ChordBindingStore(defaults: defaults),
+                cleanupSettingsDefaults: defaults
+            )
+
+            appState.beginPepperChatRecording()
+
+            XCTAssertFalse(appState.pepperChatSession.isRecording)
+        }
     }
 
     func testSpeechModelPresentationDoesNotExposeManagerLoadFailureInMenuErrorMessage() {
