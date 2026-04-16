@@ -62,6 +62,17 @@ final class DebugLogWindowController: NSObject, NSWindowDelegate {
         debugLogStore?.endLiveViewing()
         isLiveViewing = false
     }
+
+    func shutdown() {
+        endLiveViewingIfNeeded()
+        guard let window else { return }
+
+        window.delegate = nil
+        window.contentViewController = nil
+        window.orderOut(nil)
+        self.window = nil
+        debugLogStore = nil
+    }
 }
 
 private struct DebugLogWindowView: View {

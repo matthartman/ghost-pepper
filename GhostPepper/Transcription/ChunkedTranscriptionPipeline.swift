@@ -80,6 +80,19 @@ final class ChunkedTranscriptionPipeline {
         drainAndTranscribe()
     }
 
+    /// Cancels the pipeline without draining buffered audio.
+    func cancel() {
+        guard isRunning else { return }
+        isRunning = false
+        chunkTimer?.invalidate()
+        chunkTimer = nil
+
+        bufferLock.lock()
+        micBuffer = []
+        systemBuffer = []
+        bufferLock.unlock()
+    }
+
     /// Feed audio chunks from DualStreamCapture into the pipeline.
     func appendAudio(_ chunk: TaggedAudioChunk) {
         bufferLock.lock()

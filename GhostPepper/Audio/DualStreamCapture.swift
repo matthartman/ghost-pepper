@@ -70,6 +70,18 @@ final class DualStreamCapture {
         return (micBuffer, systemBuffer)
     }
 
+    /// Cancels both streams without waiting for buffered audio to flush.
+    func cancelImmediately() {
+        guard isActive else { return }
+        isActive = false
+
+        micRecorder.cancelRecordingImmediately()
+        systemRecorder.cancelRecordingImmediately()
+        micRecorder.onConvertedAudioChunk = nil
+        systemRecorder.onConvertedAudioChunk = nil
+        startTime = nil
+    }
+
     /// Whether dual-stream capture is currently active.
     var capturing: Bool { isActive }
 

@@ -38,6 +38,15 @@ final class PromptEditorController: NSObject, NSWindowDelegate {
         }
     }
 
+    func shutdown() {
+        guard let window else { return }
+        window.delegate = nil
+        window.makeFirstResponder(nil)
+        window.contentViewController = nil
+        window.orderOut(nil)
+        self.window = nil
+    }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         hide(sender)
         return false
@@ -91,6 +100,16 @@ final class CleanupTranscriptWindowController: NSObject, NSWindowDelegate {
         if let window {
             hide(window)
         }
+    }
+
+    func shutdown() {
+        guard let window else { return }
+        window.delegate = nil
+        window.makeFirstResponder(nil)
+        window.contentViewController = nil
+        window.orderOut(nil)
+        self.window = nil
+        hostingController = nil
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

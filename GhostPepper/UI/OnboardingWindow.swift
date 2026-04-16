@@ -100,6 +100,11 @@ class OnboardingWindowController {
         window?.close()
         window = nil
     }
+
+    func shutdown() {
+        dismiss()
+        NSApp.setActivationPolicy(.accessory)
+    }
 }
 
 // MARK: - Main Onboarding View

@@ -14,7 +14,7 @@ struct DetectedMeeting {
 /// Monitors for running meeting/video call apps and notifies when one is detected.
 /// Off by default — must be explicitly enabled via Settings.
 @MainActor
-final class MeetingDetector {
+final class MeetingDetector: MeetingDetecting {
     var onMeetingDetected: ((DetectedMeeting) -> Void)?
 
     private var pollTimer: Timer?

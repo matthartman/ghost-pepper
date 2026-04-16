@@ -61,6 +61,7 @@ struct GhostPepperApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 ProcessInfo.processInfo.enableAutomaticTermination(Self.automaticTerminationReason)
+                onboardingController.shutdown()
                 appState.prepareForTermination()
             }
         }

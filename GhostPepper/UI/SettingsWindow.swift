@@ -1,10 +1,24 @@
 import SwiftUI
 import AppKit
+import Combine
 import CoreAudio
 import ServiceManagement
 
+final class SettingsWindowLifecycle {
+    private let shutdownSubject = PassthroughSubject<Void, Never>()
+
+    var shutdownPublisher: AnyPublisher<Void, Never> {
+        shutdownSubject.eraseToAnyPublisher()
+    }
+
+    func requestShutdown() {
+        shutdownSubject.send(())
+    }
+}
+
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    private let lifecycle = SettingsWindowLifecycle()
 
     func show(appState: AppState) {
         if let window = window {
@@ -13,7 +27,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             return
         }
 
-        let view = SettingsView(appState: appState)
+        let view = SettingsView(appState: appState, lifecycle: lifecycle)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 720),
@@ -31,6 +45,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         self.window = window
+    }
+
+    func shutdown() {
+        lifecycle.requestShutdown()
+        guard let window else { return }
+
+        window.delegate = nil
+        window.makeFirstResponder(nil)
+        window.contentViewController = nil
+        window.orderOut(nil)
+        self.window = nil
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -151,6 +176,7 @@ struct RecordingSpeakerFilteringToggleState {
 
 struct SettingsView: View {
     @ObservedObject var appState: AppState
+    let lifecycle: SettingsWindowLifecycle
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -163,8 +189,9 @@ struct SettingsView: View {
     @StateObject private var dictationTestController: SettingsDictationTestController
     @StateObject private var transcriptionLabController: TranscriptionLabController
 
-    init(appState: AppState) {
+    init(appState: AppState, lifecycle: SettingsWindowLifecycle) {
         self.appState = appState
+        self.lifecycle = lifecycle
         _dictationTestController = StateObject(
             wrappedValue: SettingsDictationTestController(transcriber: appState.transcriber)
         )
@@ -322,12 +349,21 @@ struct SettingsView: View {
             syncTranscriptionLabRerunDefaults()
         }
         .onDisappear {
-            if dictationTestController.isRecording {
-                dictationTestController.stop()
-            }
-            permissionPollTimer?.invalidate()
-            permissionPollTimer = nil
+            stopTransientRuntimeState()
         }
+        .onReceive(lifecycle.shutdownPublisher) { _ in
+            stopTransientRuntimeState()
+        }
+    }
+
+    private func stopTransientRuntimeState() {
+        if dictationTestController.isRecording {
+            dictationTestController.stop()
+        }
+        permissionPollTimer?.invalidate()
+        permissionPollTimer = nil
+        transcriptionLabPreviewSound?.stop()
+        transcriptionLabPreviewSound = nil
     }
 
     private func refreshScreenRecordingPermission() {

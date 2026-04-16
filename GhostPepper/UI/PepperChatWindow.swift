@@ -111,6 +111,15 @@ final class PepperChatWindowController: NSObject, NSWindowDelegate {
         minimize()
         return false
     }
+
+    func shutdown() {
+        guard let window else { return }
+        window.delegate = nil
+        window.contentViewController = nil
+        window.orderOut(nil)
+        self.window = nil
+        isMinimized = false
+    }
 }
 
 private struct PepperChatWindowView: View {

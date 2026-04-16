@@ -43,6 +43,20 @@ final class FocusedElementLocator {
             syncFrontmostApplication()
         }
 
+        func stop() {
+            guard isStarted else {
+                return
+            }
+
+            isStarted = false
+            if let activationObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+                self.activationObserver = nil
+            }
+            uninstallObserver()
+            clearObservation()
+        }
+
         func syncFrontmostApplication() {
             guard let application = NSWorkspace.shared.frontmostApplication else {
                 clearObservation()
@@ -152,6 +166,10 @@ final class FocusedElementLocator {
 
     static func startPasteTargetTracking() {
         pasteTargetMonitor.start()
+    }
+
+    static func stopPasteTargetTracking() {
+        pasteTargetMonitor.stop()
     }
 
     static func canPasteIntoObservedTarget(

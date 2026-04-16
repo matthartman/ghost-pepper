@@ -17,6 +17,7 @@ private final class FakeHotkeyMonitor: HotkeyMonitoring {
     var updatedBindings: [ChordAction: KeyChord] = [:]
     var startResult = true
     var startCallCount = 0
+    var stopCallCount = 0
     var suspendedStates: [Bool] = []
 
     func start() -> Bool {
@@ -24,7 +25,9 @@ private final class FakeHotkeyMonitor: HotkeyMonitoring {
         return startResult
     }
 
-    func stop() {}
+    func stop() {
+        stopCallCount += 1
+    }
 
     func updateBindings(_ bindings: [ChordAction: KeyChord]) {
         updatedBindings = bindings
@@ -32,6 +35,30 @@ private final class FakeHotkeyMonitor: HotkeyMonitoring {
 
     func setSuspended(_ suspended: Bool) {
         suspendedStates.append(suspended)
+    }
+}
+
+private final class FakeMeetingDetector: MeetingDetecting {
+    var onMeetingDetected: ((DetectedMeeting) -> Void)?
+    var startCallCount = 0
+    var stopCallCount = 0
+    var dismissedBundleIDs: [String] = []
+    var resetDismissalsCallCount = 0
+
+    func start() {
+        startCallCount += 1
+    }
+
+    func stop() {
+        stopCallCount += 1
+    }
+
+    func dismiss(bundleID: String) {
+        dismissedBundleIDs.append(bundleID)
+    }
+
+    func resetDismissals() {
+        resetDismissalsCallCount += 1
     }
 }
 
@@ -168,6 +195,64 @@ final class GhostPepperTests: XCTestCase {
         await appState.startHotkeyMonitor()
 
         XCTAssertEqual(monitor.startCallCount, 1)
+    }
+
+    func testPrepareForTerminationStopsRuntimeMonitorsAndIsIdempotent() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let monitor = FakeHotkeyMonitor()
+        let meetingDetector = FakeMeetingDetector()
+        var pasteStopCallCount = 0
+        let appState = AppState(
+            hotkeyMonitor: monitor,
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            meetingDetector: meetingDetector,
+            pasteTargetTrackingStarter: {},
+            pasteTargetTrackingStopper: { pasteStopCallCount += 1 }
+        )
+
+        appState.prepareForTermination()
+        appState.prepareForTermination()
+
+        XCTAssertEqual(monitor.stopCallCount, 1)
+        XCTAssertEqual(meetingDetector.stopCallCount, 1)
+        XCTAssertEqual(pasteStopCallCount, 1)
+    }
+
+    func testPrepareForTerminationCancelsPepperChatReviewState() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            meetingDetector: FakeMeetingDetector(),
+            pasteTargetTrackingStarter: {},
+            pasteTargetTrackingStopper: {}
+        )
+
+        appState.pepperChatSession.isRecording = true
+        appState.pepperChatSession.isTranscribing = true
+        appState.pepperChatSession.isReviewingContext = true
+        appState.pepperChatSession.pendingInput = "Summarize this"
+        appState.pepperChatSession.pendingScreenContext = "Screen"
+        appState.pepperChatSession.capturedCommand = "Command"
+        appState.pepperChatSession.capturedScreenContext = "Context"
+        appState.pepperChatSession.capturedContextTexts = ["A", "B"]
+        appState.pepperChatSession.capturedAppNames = ["Safari"]
+        appState.pepperChatSession.preCapturedScreenContexts = ["Window 1"]
+
+        appState.prepareForTermination()
+
+        XCTAssertFalse(appState.pepperChatSession.isRecording)
+        XCTAssertFalse(appState.pepperChatSession.isTranscribing)
+        XCTAssertFalse(appState.pepperChatSession.isReviewingContext)
+        XCTAssertEqual(appState.pepperChatSession.pendingInput, "")
+        XCTAssertNil(appState.pepperChatSession.pendingScreenContext)
+        XCTAssertNil(appState.pepperChatSession.capturedCommand)
+        XCTAssertNil(appState.pepperChatSession.capturedScreenContext)
+        XCTAssertTrue(appState.pepperChatSession.capturedContextTexts.isEmpty)
+        XCTAssertTrue(appState.pepperChatSession.capturedAppNames.isEmpty)
+        XCTAssertTrue(appState.pepperChatSession.preCapturedScreenContexts.isEmpty)
     }
 
     func testAppStateStartHotkeyMonitorPromptsForInputMonitoringButStillStartsWhenMonitorCanRun() async throws {

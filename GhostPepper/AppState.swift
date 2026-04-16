@@ -2,6 +2,14 @@ import SwiftUI
 import Combine
 import ServiceManagement
 
+protocol MeetingDetecting: AnyObject {
+    var onMeetingDetected: ((DetectedMeeting) -> Void)? { get set }
+    func start()
+    func stop()
+    func dismiss(bundleID: String)
+    func resetDismissals()
+}
+
 enum AppStatus: String {
     case ready = "Ready"
     case loading = "Loading model..."
@@ -146,7 +154,10 @@ class AppState: ObservableObject {
     private let cleanupSettingsDefaults: UserDefaults
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
+    private let pasteTargetTrackingStarter: () -> Void
+    private let pasteTargetTrackingStopper: () -> Void
     private var hotkeyMonitorStarted = false
+    private var isTerminating = false
 
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
@@ -191,8 +202,11 @@ class AppState: ObservableObject {
         debugLogStore: DebugLogStore = DebugLogStore(),
         transcriptionLabStore: TranscriptionLabStore = TranscriptionLabStore(),
         appRelauncher: AppRelaunching? = nil,
+        meetingDetector: MeetingDetecting = MeetingDetector(),
         inputMonitoringChecker: @escaping () -> Bool = PermissionChecker.checkInputMonitoring,
-        inputMonitoringPrompter: @escaping () -> Void = PermissionChecker.promptInputMonitoring
+        inputMonitoringPrompter: @escaping () -> Void = PermissionChecker.promptInputMonitoring,
+        pasteTargetTrackingStarter: @escaping () -> Void = FocusedElementLocator.startPasteTargetTracking,
+        pasteTargetTrackingStopper: @escaping () -> Void = FocusedElementLocator.stopPasteTargetTracking
     ) {
         self.hotkeyMonitor = hotkeyMonitor
         self.chordBindingStore = chordBindingStore
@@ -202,8 +216,11 @@ class AppState: ObservableObject {
         self.debugLogStore = debugLogStore
         self.transcriptionLabStore = transcriptionLabStore
         self.appRelauncher = appRelauncher ?? AppRelauncher()
+        self.meetingDetector = meetingDetector
         self.inputMonitoringChecker = inputMonitoringChecker
         self.inputMonitoringPrompter = inputMonitoringPrompter
+        self.pasteTargetTrackingStarter = pasteTargetTrackingStarter
+        self.pasteTargetTrackingStopper = pasteTargetTrackingStopper
         self.pushToTalkChord = chordBindingStore.binding(for: .pushToTalk) ?? AppState.defaultPushToTalkChord
         self.toggleToTalkChord = chordBindingStore.binding(for: .toggleToTalk) ?? AppState.defaultToggleToTalkChord
         self.pepperChatChord = chordBindingStore.binding(for: .pepperChat) ?? AppState.defaultPepperChatChord
@@ -424,7 +441,7 @@ class AppState: ObservableObject {
 
         // Pre-warm audio engine so first recording starts faster
         audioRecorder.prewarm()
-        FocusedElementLocator.startPasteTargetTracking()
+        pasteTargetTrackingStarter()
 
         status = .loading
         let showOverlay = UserDefaults.standard.bool(forKey: "onboardingCompleted")
@@ -844,7 +861,7 @@ class AppState: ObservableObject {
         }
         return controller
     }()
-    private let meetingDetector = MeetingDetector()
+    private let meetingDetector: MeetingDetecting
     @Published var activeMeetingSession: MeetingSession?
     private(set) lazy var pepperChatSession: PepperChatSession = {
         let session = PepperChatSession(transcriber: transcriber)
@@ -1411,12 +1428,63 @@ class AppState: ObservableObject {
     }
 
     func prepareForTermination() {
+        guard !isTerminating else {
+            return
+        }
+
+        isTerminating = true
         recordingOCRPrefetch.cancel()
+        clearRecordingSessionCoordinator()
+        pipelineOwner = nil
+        hotkeyMonitor.stop()
+        hotkeyMonitorStarted = false
+        pasteTargetTrackingStopper()
+        cancelActiveRecordingForTermination()
+        cancelPepperChatForTermination()
+        overlay.dismiss()
+        soundEffects.stopAll()
+        settingsController.shutdown()
+        promptEditorController.shutdown()
+        cleanupTranscriptWindowController.shutdown()
+        debugLogWindowController.shutdown()
+        pepperChatWindowController.shutdown()
+        meetingTranscriptWindowController.shutdown()
         textCleanupManager.shutdownBackend()
         meetingDetector.stop()
         if let session = activeMeetingSession {
-            Task { await session.stop() }
+            session.terminateImmediately()
+            activeMeetingSession = nil
         }
+    }
+
+    private func cancelActiveRecordingForTermination() {
+        guard isRecording || status == .recording || isTranscribing || status == .transcribing || status == .cleaningUp else {
+            mediaPlaybackController.resumeIfPaused()
+            return
+        }
+
+        audioRecorder.cancelRecordingImmediately()
+        mediaPlaybackController.resumeIfPaused()
+        isRecording = false
+        isTranscribing = false
+        activePerformanceTrace = nil
+        activeCleanupAttempted = false
+        if status != .error {
+            status = .ready
+        }
+    }
+
+    private func cancelPepperChatForTermination() {
+        if let recorder = pepperChatRecorder {
+            recorder.cancelRecordingImmediately()
+            pepperChatRecorder = nil
+        }
+        if let monitor = contextCaptureMonitor {
+            NSEvent.removeMonitor(monitor)
+            contextCaptureMonitor = nil
+        }
+        lastCapturedWindowTitle = nil
+        pepperChatSession.cancelForTermination()
     }
 
     func acquirePipeline(for owner: PipelineOwner) -> Bool {

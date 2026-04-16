@@ -34,4 +34,9 @@ class SoundEffects {
         guard isEnabled() else { return }
         stopPlayer()
     }
+
+    func stopAll() {
+        startSound?.stop()
+        stopSound?.stop()
+    }
 }

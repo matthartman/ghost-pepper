@@ -77,6 +77,20 @@ final class SystemAudioRecorder: NSObject {
         return result
     }
 
+    /// Stops capture immediately without waiting for buffered audio to flush.
+    func cancelRecordingImmediately() {
+        guard isRecording else { return }
+
+        if let stream {
+            Task {
+                try? await stream.stopCapture()
+            }
+        }
+        stream = nil
+        isRecording = false
+        onRecordingStopped?()
+    }
+
     /// Thread-safe copy of the current buffer.
     private func copyBuffer() -> [Float] {
         bufferLock.lock()

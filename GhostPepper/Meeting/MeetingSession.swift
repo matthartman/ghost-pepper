@@ -131,6 +131,20 @@ final class MeetingSession: ObservableObject {
         print("MeetingSession: stopped '\(transcript.meetingName)' — \(transcript.segments.count) segments, \(transcript.formattedDuration)")
     }
 
+    /// Cancels capture and timers immediately without processing remaining audio.
+    func terminateImmediately() {
+        guard isActive else { return }
+        isActive = false
+
+        pipeline?.cancel()
+        capture.cancelImmediately()
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+        silenceCheckTimer?.invalidate()
+        silenceCheckTimer = nil
+        transcript.endDate = Date()
+    }
+
     /// Elapsed time since meeting started.
     var elapsed: TimeInterval {
         capture.elapsed

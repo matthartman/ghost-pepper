@@ -16,6 +16,7 @@ final class AudioRecorder {
     /// + EAGAIN on the next start. A fresh instance per session avoids that.
     private var engine = AVAudioEngine()
     private let bufferLock = NSLock()
+    private var isRecording = false
 
     /// The accumulated audio samples captured during recording.
     /// Accessible for reading within the module (internal) so tests can inspect it.
@@ -177,6 +178,7 @@ final class AudioRecorder {
         }
 
         try engine.start()
+        isRecording = true
         onRecordingStarted?()
     }
 
@@ -202,11 +204,16 @@ final class AudioRecorder {
     /// Stops capturing audio and returns the recorded buffer.
     /// Waits briefly to flush any remaining audio in the engine's buffer.
     func stopRecording() async -> [Float] {
+        guard isRecording else {
+            return snapshotBuffer()
+        }
+
         // Wait 200ms to let the last audio buffers flush through
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        isRecording = false
         onRecordingStopped?()
 
         let result = snapshotBuffer()
@@ -216,6 +223,17 @@ final class AudioRecorder {
             print("AudioRecorder: max amplitude = \(maxAmplitude)")
         }
         return result
+    }
+
+    /// Stops capture immediately without waiting for buffered audio to flush.
+    /// Intended for termination and cancellation flows.
+    func cancelRecordingImmediately() {
+        guard isRecording else { return }
+
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        isRecording = false
+        onRecordingStopped?()
     }
 
     // MARK: - Private

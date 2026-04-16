@@ -188,6 +188,20 @@ final class PepperChatSession: ObservableObject {
         isReviewingContext = false
     }
 
+    func cancelForTermination() {
+        isRecording = false
+        isTranscribing = false
+        isReviewingContext = false
+        pendingInput = ""
+        pendingScreenContext = nil
+        capturedCommand = nil
+        capturedScreenContext = nil
+        capturedScreenshots = []
+        capturedContextTexts = []
+        capturedAppNames = []
+        preCapturedScreenContexts = []
+    }
+
     /// Build a prompt that includes prior conversation as context.
     private func buildPromptWithHistory(newMessage: String, screenContext: String?) -> String {
         var parts: [String] = []

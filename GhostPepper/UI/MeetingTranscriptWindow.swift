@@ -73,6 +73,16 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
     }
 
+    func shutdown() {
+        guard let window else { return }
+        window.delegate = nil
+        window.contentViewController = nil
+        window.orderOut(nil)
+        self.window = nil
+        windowState = nil
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     /// Request a recording — shows consent dialog first (or starts immediately if user opted out).
     func requestRecording(name: String, skipConsent: Bool = false, sourceURL: String? = nil) {
         guard let state = windowState else { return }
