@@ -20,7 +20,7 @@
 		1A9C394F69A8A0E9DCA48219 /* ModelManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A098A2516C7563B1E4FDD3 /* ModelManagerTests.swift */; };
 		1AB34878C4E7E375F34A1339 /* CleanupModelProbeRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7201BD31C20BC2B1D0E51DB6 /* CleanupModelProbeRunner.swift */; };
 		1AECB19E0AD630641AE8649B /* TranscriptionLabRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F0BBC9BB83FDC0739EF319 /* TranscriptionLabRunner.swift */; };
-		1BA7D7D7A6F2FBFE95CC7206 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 28AB9D6DD22DB83ADFC3F6F3 /* LLM */; };
+		1BA7D7D7A6F2FBFE95CC7206 /* RunAnywhere in Frameworks */ = {isa = PBXBuildFile; productRef = 8C0F72A120BA00C4043240D6 /* RunAnywhere */; };
 		1D533340C55B7F67AE1B4E94 /* CleanupPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 948064EDD38AFB0872A99BD6 /* CleanupPromptBuilder.swift */; };
 		1EF06A7EA54855634307E6A8 /* sprite_frame_4@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = E0BBD0F5DD1B827D03F0F8F6 /* sprite_frame_4@2x.png */; };
 		2230B29BF920D15E5150B97E /* ChordAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E725F86E5430DC36EB03272 /* ChordAction.swift */; };
@@ -62,11 +62,13 @@
 		5AC883ADFD11721A8E9E4D37 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAE65A5741A98AEADF6498D /* ModelManager.swift */; };
 		5AFD58B50823656E71CF3AA9 /* OCRContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDB3BCEA6FF268C1759D1F20 /* OCRContext.swift */; };
 		5CCF5560BDC9AD0982A69F3D /* OCRContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27D1ADB87391BB00E156008 /* OCRContext.swift */; };
+		62C067F8A0502C41C6D419C9 /* RunAnywhereLlamaCPP in Frameworks */ = {isa = PBXBuildFile; productRef = 22958C4850621A5BA4171069 /* RunAnywhereLlamaCPP */; };
 		635E00F7C849159760D86642 /* CleanupModelProbeCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 397AC156E3D2AF040A998E68 /* CleanupModelProbeCLI.swift */; };
 		637A68B05AD8479E0B5D52A7 /* HotkeyMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 589AC554EEF132B519736D92 /* HotkeyMonitorTests.swift */; };
 		6585677AF7949BEA14C0B3B2 /* CleanupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3252290627807046966D956B /* CleanupSettings.swift */; };
 		660FCA13EFCA0BC0B8A1FA8E /* TrelloBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A8F478894D0A3A49A91C8CC /* TrelloBackend.swift */; };
-		666D2339FC0689F41A3AE715 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 985AD96FDE69D89C0B2DA245 /* LLM */; };
+		666D2339FC0689F41A3AE715 /* RunAnywhere in Frameworks */ = {isa = PBXBuildFile; productRef = F2B984625D0C385B526C7CC7 /* RunAnywhere */; };
+		66CFEC09452F5F23E9747669 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 52CD995A5FADA02097BCD33F /* Sparkle */; };
 		6EA6ACF174AAA398586CC03A /* ChordEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518567C8CE0F7841ACE62BD1 /* ChordEngine.swift */; };
 		6F3DA53FA7B4119405D86DE8 /* CleanupModelProbeRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853418773B99673FB27791AC /* CleanupModelProbeRunner.swift */; };
 		6F9B246766050DABB6DE046A /* MeetingTranscriptSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624731D133FE2A9EB3A12740 /* MeetingTranscriptSettings.swift */; };
@@ -94,7 +96,7 @@
 		9BE17BC60B1F9CFD3747A844 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 43A2B55CB980E02EC1E16BF2 /* Assets.xcassets */; };
 		9FF4377D176BB2AE30E4B08B /* sprite_frame_3@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = FA48EF56983A55149A084D1B /* sprite_frame_3@2x.png */; };
 		A3183D30BAD0A1C2712E033F /* PermissionChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1BDC9C549491AC003117EC /* PermissionChecker.swift */; };
-		A31E9987608164A53D5255EB /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 52CD995A5FADA02097BCD33F /* Sparkle */; };
+		A31E9987608164A53D5255EB /* RunAnywhereLlamaCPP in Frameworks */ = {isa = PBXBuildFile; productRef = DEDC23BED7D0C4FB10440F02 /* RunAnywhereLlamaCPP */; };
 		A4826C92959DD203D5239B8E /* CleanupPromptBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F36633332009332F588C183E /* CleanupPromptBuilderTests.swift */; };
 		A9826A25D65BE571100B792C /* ChunkedTranscriptionPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CAEC58BA358D8ED4206D550 /* ChunkedTranscriptionPipeline.swift */; };
 		A9E5AB4DC4D58FB4C50A1B23 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A4D4E875210CD0DADAF5D7E /* AppState.swift */; };
@@ -301,7 +303,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1BA7D7D7A6F2FBFE95CC7206 /* LLM in Frameworks */,
+				1BA7D7D7A6F2FBFE95CC7206 /* RunAnywhere in Frameworks */,
+				62C067F8A0502C41C6D419C9 /* RunAnywhereLlamaCPP in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -311,8 +314,9 @@
 			files = (
 				D0C9E92678ECFF9228D0B7F0 /* WhisperKit in Frameworks */,
 				9965C422E2E6A1F48E717C28 /* FluidAudio in Frameworks */,
-				666D2339FC0689F41A3AE715 /* LLM in Frameworks */,
-				A31E9987608164A53D5255EB /* Sparkle in Frameworks */,
+				666D2339FC0689F41A3AE715 /* RunAnywhere in Frameworks */,
+				A31E9987608164A53D5255EB /* RunAnywhereLlamaCPP in Frameworks */,
+				66CFEC09452F5F23E9747669 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -641,7 +645,8 @@
 			packageProductDependencies = (
 				51FBB4B31E8E9293DC11143E /* WhisperKit */,
 				23213B149CFD96C7F4B7B0F5 /* FluidAudio */,
-				985AD96FDE69D89C0B2DA245 /* LLM */,
+				F2B984625D0C385B526C7CC7 /* RunAnywhere */,
+				DEDC23BED7D0C4FB10440F02 /* RunAnywhereLlamaCPP */,
 				52CD995A5FADA02097BCD33F /* Sparkle */,
 			);
 			productName = GhostPepper;
@@ -679,7 +684,8 @@
 			);
 			name = CleanupModelProbe;
 			packageProductDependencies = (
-				28AB9D6DD22DB83ADFC3F6F3 /* LLM */,
+				8C0F72A120BA00C4043240D6 /* RunAnywhere */,
+				22958C4850621A5BA4171069 /* RunAnywhereLlamaCPP */,
 			);
 			productName = CleanupModelProbe;
 			productReference = 5D68EDD354F149B2EF3963B7 /* CleanupModelProbe */;
@@ -701,7 +707,6 @@
 				};
 			};
 			buildConfigurationList = 4DD304029FEB6147483470FD /* Build configuration list for PBXProject "GhostPepper" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -712,11 +717,12 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				3BC7A258ECE1E44892C0C351 /* XCRemoteSwiftPackageReference "FluidAudio" */,
-				FF5143DA3A0A948A0A7F982D /* XCRemoteSwiftPackageReference "LLM.swift" */,
+				B8FF39BC03225C03D949DA85 /* XCRemoteSwiftPackageReference "runanywhere-sdks" */,
 				7193259C7B8193E12A21EF21 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
 			preferredProjectObjectVersion = 77;
+			productRefGroup = 3705D6F7BCD01CB7D37DF812 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -1185,6 +1191,14 @@
 				minimumVersion = 2.6.0;
 			};
 		};
+		B8FF39BC03225C03D949DA85 /* XCRemoteSwiftPackageReference "runanywhere-sdks" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RunanywhereAI/runanywhere-sdks";
+			requirement = {
+				kind = exactVersion;
+				version = 0.19.1;
+			};
+		};
 		E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
@@ -1193,26 +1207,18 @@
 				minimumVersion = 0.16.0;
 			};
 		};
-		FF5143DA3A0A948A0A7F982D /* XCRemoteSwiftPackageReference "LLM.swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/obra/LLM.swift.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		22958C4850621A5BA4171069 /* RunAnywhereLlamaCPP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B8FF39BC03225C03D949DA85 /* XCRemoteSwiftPackageReference "runanywhere-sdks" */;
+			productName = RunAnywhereLlamaCPP;
+		};
 		23213B149CFD96C7F4B7B0F5 /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 3BC7A258ECE1E44892C0C351 /* XCRemoteSwiftPackageReference "FluidAudio" */;
 			productName = FluidAudio;
-		};
-		28AB9D6DD22DB83ADFC3F6F3 /* LLM */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = FF5143DA3A0A948A0A7F982D /* XCRemoteSwiftPackageReference "LLM.swift" */;
-			productName = LLM;
 		};
 		51FBB4B31E8E9293DC11143E /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1224,10 +1230,20 @@
 			package = 7193259C7B8193E12A21EF21 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
-		985AD96FDE69D89C0B2DA245 /* LLM */ = {
+		8C0F72A120BA00C4043240D6 /* RunAnywhere */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = FF5143DA3A0A948A0A7F982D /* XCRemoteSwiftPackageReference "LLM.swift" */;
-			productName = LLM;
+			package = B8FF39BC03225C03D949DA85 /* XCRemoteSwiftPackageReference "runanywhere-sdks" */;
+			productName = RunAnywhere;
+		};
+		DEDC23BED7D0C4FB10440F02 /* RunAnywhereLlamaCPP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B8FF39BC03225C03D949DA85 /* XCRemoteSwiftPackageReference "runanywhere-sdks" */;
+			productName = RunAnywhereLlamaCPP;
+		};
+		F2B984625D0C385B526C7CC7 /* RunAnywhere */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B8FF39BC03225C03D949DA85 /* XCRemoteSwiftPackageReference "runanywhere-sdks" */;
+			productName = RunAnywhere;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

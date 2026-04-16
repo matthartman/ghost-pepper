@@ -53,7 +53,34 @@ Ghost Pepper uses open-source models that run entirely on your Mac. Models downl
 | Qwen 3.5 2B | ~1.3 GB | Fast (~4-5s) |
 | Qwen 3.5 4B | ~2.8 GB | Full quality (~5-7s) |
 
-Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit). Cleanup models powered by [LLM.swift](https://github.com/eastriverlee/LLM.swift). All models served by [Hugging Face](https://huggingface.co/).
+Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit). Cleanup models powered by [RunAnywhere Swift SDK](https://github.com/RunanywhereAI/runanywhere-sdks) with `RunAnywhereLlamaCPP` (Metal-accelerated local llama.cpp runtime). All models served by [Hugging Face](https://huggingface.co/).
+
+### MetalRT cleanup backend (this fork)
+
+This fork keeps the same hold-to-talk flow and cleanup prompt, but replaces the cleanup inference backend from LLM.swift to RunAnywhere's Swift SDK.
+
+- Backend swap: `LLM.swift` cleanup calls were replaced with `RunAnywhere.generateStream(...)` in `GhostPepper/Cleanup/TextCleanupManager.swift`
+- Prompt parity: cleanup prompt and prompt-construction path remain unchanged (`TextCleaner` + `CleanupPromptBuilder`)
+- Model parity: same Qwen family and quantization are preserved:
+  - `Qwen3.5-0.8B-Q4_K_M.gguf` (default)
+  - `Qwen3.5-2B-Q4_K_M.gguf`
+  - `Qwen3.5-4B-Q4_K_M.gguf`
+- Latency logging: set `SHOW_LATENCY_BADGE = true` in `TextCleanupManager.swift` to print per-cleanup latency in ms:
+  - `[MetalRT] Cleanup: 347ms (Qwen 3.5 0.8B Q4_K_M (Very fast))`
+
+#### Hardware and OS for testing
+
+- macOS 14+
+- Apple Silicon Mac (M1+)
+- Xcode 16+
+
+#### Latency comparison workflow
+
+To produce a visible before/after latency comparison in this fork:
+
+1. Build and run upstream Ghost Pepper (LLM.swift backend), run identical dictation samples, and capture cleanup latency
+2. Build and run this fork (RunAnywhere backend), run the same samples, and capture the `[MetalRT] Cleanup: ...ms` lines
+3. Compare median / p95 cleanup latency across both runs
 
 ## Getting started
 
@@ -84,7 +111,7 @@ Every core feature runs 100% on your Mac — verified by AI code review. No trus
 | Feature | Status | What was checked |
 |---|---|---|
 | Speech-to-text | :white_check_mark: Local | WhisperKit/FluidAudio inference, no audio sent anywhere |
-| Text cleanup | :white_check_mark: Local | Qwen LLM runs on-device via LLM.swift |
+| Text cleanup | :white_check_mark: Local | Qwen LLM runs on-device via RunAnywhere (`RunAnywhereLlamaCPP`) |
 | Audio recording | :white_check_mark: Local | AVAudioEngine + ScreenCaptureKit, no streaming |
 | Meeting transcription & storage | :white_check_mark: Local | Chunked transcription, markdown files on disk |
 | Summary generation | :white_check_mark: Local | Local LLM summarization, no cloud API |
@@ -103,7 +130,7 @@ Every core feature runs 100% on your Mac — verified by AI code review. No trus
 
 ## Acknowledgments
 
-Built with [WhisperKit](https://github.com/argmaxinc/WhisperKit), [LLM.swift](https://github.com/eastriverlee/LLM.swift), [Hugging Face](https://huggingface.co/), and [Sparkle](https://sparkle-project.org/).
+Built with [WhisperKit](https://github.com/argmaxinc/WhisperKit), [RunAnywhere Swift SDK](https://github.com/RunanywhereAI/runanywhere-sdks), [Hugging Face](https://huggingface.co/), and [Sparkle](https://sparkle-project.org/).
 
 ## License
 

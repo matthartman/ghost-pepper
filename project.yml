@@ -12,9 +12,9 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
     from: "0.13.6"
-  LLM.swift:
-    url: https://github.com/obra/LLM.swift.git
-    branch: main
+  RunAnywhere:
+    url: https://github.com/RunanywhereAI/runanywhere-sdks
+    exactVersion: "0.19.1"
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     from: "2.6.0"
@@ -40,8 +40,10 @@ targets:
     dependencies:
       - package: WhisperKit
       - package: FluidAudio
-      - package: LLM.swift
-        product: LLM
+      - package: RunAnywhere
+        product: RunAnywhere
+      - package: RunAnywhere
+        product: RunAnywhereLlamaCPP
       - package: Sparkle
     entitlements:
       path: GhostPepper/GhostPepper.entitlements
@@ -68,8 +70,10 @@ targets:
       - CleanupModelProbe
       - CleanupModelProbeSupport
     dependencies:
-      - package: LLM.swift
-        product: LLM
+      - package: RunAnywhere
+        product: RunAnywhere
+      - package: RunAnywhere
+        product: RunAnywhereLlamaCPP
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.github.matthartman.ghostpepper.cleanup-model-probe

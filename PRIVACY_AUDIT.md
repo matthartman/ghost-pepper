@@ -33,7 +33,7 @@ Paste the following prompt into Claude Code (or any AI assistant with codebase a
 | # | Feature | Files checked | Result |
 |---|---------|--------------|--------|
 | 1 | Speech-to-text | `SpeechTranscriber.swift`, `ChunkedTranscriptionPipeline.swift` | :white_check_mark: Pass — no network calls. Inference runs via WhisperKit/FluidAudio on-device. |
-| 2 | Text cleanup | `MeetingSummaryGenerator.swift`, `TextCleanupManager.swift` (inference path only) | :white_check_mark: Pass — LLM inference via LLM.swift, fully on-device. `TextCleanupManager` has model download code but that is user-initiated, not part of inference. |
+| 2 | Text cleanup | `MeetingSummaryGenerator.swift`, `TextCleanupManager.swift` (inference path only) | :white_check_mark: Pass — LLM inference via RunAnywhere (`RunAnywhereLlamaCPP`), fully on-device. `TextCleanupManager` has model download code but that is user-initiated, not part of inference. |
 | 3 | Audio recording | `Audio/AudioRecorder.swift`, `Audio/SystemAudioRecorder.swift`, `Audio/DualStreamCapture.swift` | :white_check_mark: Pass — AVAudioEngine (mic) and ScreenCaptureKit (system audio). No network calls. |
 | 4 | Meeting transcription & storage | `MeetingSession.swift`, `MeetingTranscript.swift`, `MeetingMarkdownWriter.swift`, `MeetingHistory.swift`, `MeetingTranscriptSettings.swift` | :white_check_mark: Pass — all local file I/O. Markdown written to user-chosen directory. |
 | 5 | OCR & screen capture | `Input/WindowCaptureService.swift`, Vision framework usage | :white_check_mark: Pass — Apple Vision framework, on-device only. |
