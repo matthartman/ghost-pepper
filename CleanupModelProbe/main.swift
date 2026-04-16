@@ -11,6 +11,7 @@ enum CleanupModelProbeMain {
             try RunAnywhere.initialize(environment: .development)
         } catch {
             fputs("RunAnywhere initialization failed: \(error.localizedDescription)\n", stderr)
+            return EXIT_FAILURE
         }
         LlamaCPP.register()
 

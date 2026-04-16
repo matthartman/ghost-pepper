@@ -346,15 +346,22 @@ class AppState: ObservableObject {
     }
 
     func initialize(skipPermissionPrompts: Bool = false) async {
+        var runAnywhereInitializationFailed = false
         do {
             try RunAnywhere.initialize(environment: .development)
         } catch {
+            runAnywhereInitializationFailed = true
             debugLogStore.record(
                 category: .model,
                 message: "RunAnywhere initialization failed: \(error.localizedDescription)"
             )
+            textCleanupManager.markBackendInitializationFailure(
+                "RunAnywhere initialization failed: \(error.localizedDescription)"
+            )
         }
-        LlamaCPP.register()
+        if runAnywhereInitializationFailed == false {
+            LlamaCPP.register()
+        }
         // Enable launch at login by default on first run
         if !UserDefaults.standard.bool(forKey: "hasSetLaunchAtLogin") {
             UserDefaults.standard.set(true, forKey: "hasSetLaunchAtLogin")

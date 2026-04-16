@@ -178,6 +178,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     private let probeExecutionGate = CleanupProbeExecutionGate()
 
     private var registeredModelIDs: Set<LocalCleanupModelKind> = []
+    private(set) var backendInitializationFailed = false
 
     init(
         defaults: UserDefaults = .standard,
@@ -222,6 +223,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     func deleteCachedModel(kind: LocalCleanupModelKind) {
         Task {
             var didMutatePublishedState = false
+            var deletionError: String?
 
             if activeLoadedModelKind == kind {
                 try? await RunAnywhere.unloadModel()
@@ -230,19 +232,28 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
             do {
                 try await RunAnywhere.deleteStoredModel(kind.rawValue, framework: .llamaCpp)
+            } catch let sdkError as SDKError where sdkError.code == .modelNotFound {
+                debugLogger?(.model, "Cleanup model already absent from cache: \(kind.rawValue)")
             } catch {
-                debugLogger?(.model, "Failed to delete cached cleanup model: \(error.localizedDescription)")
+                deletionError = "Failed to delete cached cleanup model: \(error.localizedDescription)"
+                debugLogger?(.model, deletionError!)
             }
 
-            let nextState: CleanupModelState = activeLoadedModelKind == nil ? .idle : .ready
-            if state != nextState {
-                state = nextState
+            if let deletionError {
+                state = .error
+                errorMessage = deletionError
                 didMutatePublishedState = true
-            }
+            } else {
+                let nextState: CleanupModelState = activeLoadedModelKind == nil ? .idle : .ready
+                if state != nextState {
+                    state = nextState
+                    didMutatePublishedState = true
+                }
 
-            if errorMessage != nil {
-                errorMessage = nil
-                didMutatePublishedState = true
+                if errorMessage != nil {
+                    errorMessage = nil
+                    didMutatePublishedState = true
+                }
             }
 
             if didMutatePublishedState == false {
@@ -406,13 +417,28 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     }
 
     func downloadMissingModels() async {
+        if backendInitializationFailed {
+            state = .error
+            if errorMessage == nil {
+                errorMessage = "Cleanup backend initialization failed."
+            }
+            return
+        }
+
         guard state == .idle || state == .error || state == .ready else { return }
 
         errorMessage = nil
 
         for descriptor in Self.cleanupModels {
             registerIfNeeded(kind: descriptor.kind)
-            await ensureModelRegistration(kind: descriptor.kind)
+            do {
+                try await ensureModelRegistration(kind: descriptor.kind)
+            } catch {
+                self.errorMessage = "Failed to register cleanup model: \(error.localizedDescription)"
+                self.state = .error
+                debugLogger?(.model, self.errorMessage ?? "Failed to register cleanup model.")
+                return
+            }
 
             if !RunAnywhere.isModelDownloaded(descriptor.kind.rawValue, framework: .llamaCpp) {
                 do {
@@ -463,6 +489,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     }
 
     func loadModel(kind: LocalCleanupModelKind) async {
+        if backendInitializationFailed {
+            state = .error
+            if errorMessage == nil {
+                errorMessage = "Cleanup backend initialization failed."
+            }
+            return
+        }
+
         if activeLoadedModelKind == kind {
             state = .ready
             errorMessage = nil
@@ -498,7 +532,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         debugLogger?(.model, "Loading local cleanup model \(desc.displayName).")
 
         registerIfNeeded(kind: kind)
-        await ensureModelRegistration(kind: kind)
+        do {
+            try await ensureModelRegistration(kind: kind)
+        } catch {
+            errorMessage = "Failed to register cleanup model: \(error.localizedDescription)"
+            state = .error
+            debugLogger?(.model, errorMessage ?? "Failed to register cleanup model.")
+            return
+        }
 
         let previouslyLoaded = activeLoadedModelKind
 
@@ -556,6 +597,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         debugLogger?(.model, "Shutdown MetalRT backend.")
     }
 
+    func markBackendInitializationFailure(_ message: String) {
+        backendInitializationFailed = true
+        activeLoadedModelKind = nil
+        state = .error
+        errorMessage = message
+        debugLogger?(.model, message)
+    }
+
     var cachedModelKinds: Set<LocalCleanupModelKind> {
         Set(Self.cleanupModels.compactMap { descriptor in
             if let override = availabilityOverride(for: descriptor.kind) {
@@ -582,7 +631,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         registeredModelIDs.insert(kind)
     }
 
-    private func ensureModelRegistration(kind: LocalCleanupModelKind) async {
+    private func ensureModelRegistration(kind: LocalCleanupModelKind) async throws {
         for _ in 0..<50 {
             if let models = try? await RunAnywhere.availableModels(),
                models.contains(where: { $0.id == kind.rawValue }) {
@@ -590,6 +639,12 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
+
+        throw NSError(
+            domain: "TextCleanupManager",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Timed out while registering cleanup model \(kind.rawValue)."]
+        )
     }
 
     private func descriptor(for modelKind: LocalCleanupModelKind) -> CleanupModelDescriptor {
