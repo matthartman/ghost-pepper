@@ -496,6 +496,7 @@ struct MeetingTabContentView: View {
     @State private var searchText = ""
     @State private var showSearch = false
     @FocusState private var searchFocused: Bool
+    @AppStorage("transcriptExpirationDays") private var transcriptExpirationDays: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -517,6 +518,10 @@ struct MeetingTabContentView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.bottom, 8)
+                }
+
+                if transcriptExpirationDays > 0 {
+                    autoDeleteToggle
                 }
             }
             .padding(.horizontal, 48)
@@ -693,7 +698,9 @@ struct MeetingTabContentView: View {
 
     private var transcriptContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if tab.transcript.segments.isEmpty {
+            if let expiredDate = tab.transcript.transcriptExpiredDate {
+                transcriptExpiredBanner(expiredDate: expiredDate)
+            } else if tab.transcript.segments.isEmpty {
                 if tab.isRecording {
                     HStack(spacing: 8) {
                         ProgressView().scaleEffect(0.6)
@@ -717,6 +724,52 @@ struct MeetingTabContentView: View {
                 }.padding(.top, 4)
             }
         }
+    }
+
+    private var autoDeleteToggle: some View {
+        let days = transcriptExpirationDays
+        let label = days == 1 ? "1 day" : "\(days) days"
+        return Toggle(isOn: Binding(
+            get: { tab.transcript.autoDeleteFlagged },
+            set: { newValue in
+                tab.transcript.autoDeleteFlagged = newValue
+                state.saveActiveTab()
+            }
+        )) {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge.xmark")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                Text("Auto-delete transcript after \(label)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .padding(.bottom, 8)
+    }
+
+    private func transcriptExpiredBanner(expiredDate: Date) -> some View {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        let dateString = formatter.string(from: expiredDate)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "clock.badge.xmark")
+                .foregroundColor(.secondary)
+                .font(.system(size: 18))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Transcript auto-deleted")
+                    .font(.callout.weight(.medium))
+                Text("Removed on \(dateString) per your privacy settings. The summary and notes above are preserved.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.08)))
+        .padding(.vertical, 4)
     }
 
     private var summaryContent: some View {

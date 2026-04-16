@@ -3,6 +3,19 @@ import Foundation
 /// Writes a MeetingTranscript to a markdown file in a date-organized directory.
 struct MeetingMarkdownWriter {
 
+    /// Marker written into the `## Transcript` section when the expiry sweeper deletes a transcript.
+    /// Full form: `<!-- ghost-pepper-transcript-expired: 2026-04-16 -->`
+    static let expiredMarkerPrefix = "<!-- ghost-pepper-transcript-expired: "
+
+    /// Deterministic yyyy-MM-dd formatter used for expiry marker dates. POSIX locale so the
+    /// marker content is independent of the user's regional settings.
+    static let expiredDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
     /// Writes the transcript to a markdown file, creating date subdirectories as needed.
     /// If `existingFileURL` is provided, overwrites that file instead of creating a new one.
     /// Returns the URL of the written file.
@@ -20,10 +33,30 @@ struct MeetingMarkdownWriter {
             fileURL = deduplicatedFileURL(directory: directory, fileName: fileName)
         }
 
+        // Race guard: if the sweeper already stripped this file on disk, the caller's
+        // in-memory transcript may still hold the pre-sweep segments. Honor the on-disk
+        // expiry so autosave never resurrects a deleted transcript.
+        if existingFileURL != nil,
+           transcript.transcriptExpiredDate == nil,
+           let onDiskExpiry = onDiskExpiredDate(at: fileURL) {
+            transcript.transcriptExpiredDate = onDiskExpiry
+            transcript.segments = []
+        }
+
         let markdown = renderMarkdown(transcript: transcript)
         try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
 
         return fileURL
+    }
+
+    /// Quickly scans the existing file for the expiry marker without a full parse.
+    /// Returns the parsed expiry date, or nil if absent/unreadable.
+    private static func onDiskExpiredDate(at url: URL) -> Date? {
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for line in contents.components(separatedBy: .newlines) {
+            if let date = expiredMarkerDate(in: line) { return date }
+        }
+        return nil
     }
 
     // MARK: - Rendering
@@ -31,6 +64,15 @@ struct MeetingMarkdownWriter {
     @MainActor
     static func renderMarkdown(transcript: MeetingTranscript) -> String {
         var lines: [String] = []
+
+        // Opt-in per-meeting flag: persisted as YAML frontmatter so it survives parse
+        // round-trips and is greppable from the command line.
+        if transcript.autoDeleteFlagged {
+            lines.append("---")
+            lines.append("auto_delete: true")
+            lines.append("---")
+            lines.append("")
+        }
 
         // Title
         lines.append("# \(transcript.meetingName)")
@@ -77,7 +119,15 @@ struct MeetingMarkdownWriter {
         lines.append("## Transcript")
         lines.append("")
 
-        if transcript.segments.isEmpty {
+        // Only render the expired form when there are no segments. If both are set, a
+        // live recording landed on a transcript that was flagged expired — prefer data
+        // preservation. Reaching that state is a bug, but render must not drop content.
+        if let expiredDate = transcript.transcriptExpiredDate, transcript.segments.isEmpty {
+            let ymd = expiredDateFormatter.string(from: expiredDate)
+            lines.append("*Transcript was automatically deleted on \(ymd) per your privacy settings.*")
+            lines.append("")
+            lines.append("\(Self.expiredMarkerPrefix)\(ymd) -->")
+        } else if transcript.segments.isEmpty {
             lines.append("*No transcript yet.*")
         } else {
             for segment in transcript.segments {
@@ -110,6 +160,8 @@ struct MeetingMarkdownWriter {
         var inSummary = false
         var inChapters = false
         var transcriptLines: [String] = []
+        var expiredDate: Date?
+        var autoDeleteFlagged = false
 
         for line in lines {
             // Skip YAML frontmatter (--- blocks)
@@ -123,30 +175,36 @@ struct MeetingMarkdownWriter {
                     continue
                 }
             }
-            if inFrontmatter { continue }
+            if inFrontmatter {
+                if line.trimmingCharacters(in: .whitespaces) == "auto_delete: true" {
+                    autoDeleteFlagged = true
+                }
+                continue
+            }
 
             if line.hasPrefix("# ") && title == fileURL.deletingPathExtension().lastPathComponent {
                 title = String(line.dropFirst(2))
                 continue
             }
 
-            if line == "## Notes" {
+            let trimmedHeader = line.trimmingCharacters(in: .whitespaces)
+            if trimmedHeader == "## Notes" {
                 inNotes = true; inTranscript = false; inSummary = false; inChapters = false
                 continue
             }
-            if line == "## Transcript" {
+            if trimmedHeader == "## Transcript" {
                 inNotes = false; inTranscript = true; inSummary = false; inChapters = false
                 continue
             }
-            if line == "## Summary" {
+            if trimmedHeader == "## Summary" {
                 inNotes = false; inTranscript = false; inSummary = true; inChapters = false
                 continue
             }
-            if line == "## Chapters" {
+            if trimmedHeader == "## Chapters" {
                 inNotes = false; inTranscript = false; inSummary = false; inChapters = true
                 continue
             }
-            if line.hasPrefix("## ") {
+            if trimmedHeader.hasPrefix("## ") {
                 inNotes = false; inTranscript = false; inSummary = false; inChapters = false
                 continue
             }
@@ -157,6 +215,10 @@ struct MeetingMarkdownWriter {
             }
             if inTranscript {
                 if line == "*No transcript yet.*" { continue }
+                if let date = expiredMarkerDate(in: line) {
+                    expiredDate = date
+                    continue
+                }
                 if !line.isEmpty {
                     transcriptLines.append(line)
                 }
@@ -170,6 +232,15 @@ struct MeetingMarkdownWriter {
         transcript.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript.summary = trimmedSummary.isEmpty ? nil : trimmedSummary
+        transcript.transcriptExpiredDate = expiredDate
+        transcript.autoDeleteFlagged = autoDeleteFlagged
+
+        // If the transcript was deleted by the expiry sweeper, the `## Transcript`
+        // section only contains an italic notice. Skip segment parsing so we don't
+        // resurrect phantom segments through the Granola fallback path below.
+        if expiredDate != nil {
+            return transcript
+        }
 
         // Parse transcript lines: **[00:00] Me:** text
         for line in transcriptLines {
@@ -256,6 +327,17 @@ struct MeetingMarkdownWriter {
     }
 
     // MARK: - Helpers
+
+    /// Parses a line such as `<!-- ghost-pepper-transcript-expired: 2026-04-16 -->`
+    /// and returns the embedded date. Returns nil if the line is not the marker.
+    static func expiredMarkerDate(in line: String) -> Date? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix(expiredMarkerPrefix) else { return nil }
+        let afterPrefix = trimmed.dropFirst(expiredMarkerPrefix.count)
+        guard let endRange = afterPrefix.range(of: " -->") else { return nil }
+        let dateString = String(afterPrefix[..<endRange.lowerBound])
+        return expiredDateFormatter.date(from: dateString)
+    }
 
     /// Formats a date as "2026-04-07" for folder names.
     private static func dateFolderName(for date: Date) -> String {

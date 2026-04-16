@@ -1562,6 +1562,37 @@ struct SettingsView: View {
                     }
                 }
 
+                SettingsCard("Privacy") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Auto-delete flagged transcripts after:")
+                                .font(.body)
+
+                            Spacer()
+
+                            Picker("", selection: $appState.transcriptExpirationDays) {
+                                Text("Never").tag(0)
+                                Text("7 days").tag(7)
+                                Text("14 days").tag(14)
+                                Text("30 days").tag(30)
+                                Text("60 days").tag(60)
+                                Text("90 days").tag(90)
+                                Text("180 days").tag(180)
+                                Text("1 year").tag(365)
+                            }
+                            .labelsHidden()
+                            .frame(width: 140)
+                            .onChange(of: appState.transcriptExpirationDays) { _, _ in
+                                appState.runTranscriptExpirySweep()
+                            }
+                        }
+
+                        Text("When this is set, each meeting window shows an \"auto-delete\" checkbox. Flagged meetings have their full transcript removed after the chosen window; notes and summary are kept. Nothing is deleted unless you flag it. Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written transcript bytes in free space or backups until overwritten.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 SettingsCard("Summary Prompt") {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("This prompt is used to generate a summary after a meeting ends. The transcript is sent to your local cleanup model.")

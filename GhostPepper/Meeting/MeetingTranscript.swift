@@ -47,6 +47,13 @@ final class MeetingTranscript: ObservableObject {
     @Published var attendees: [String]
     @Published var summary: String?
     @Published var isGeneratingSummary = false
+    /// Set when the transcript has been auto-deleted by the expiry sweeper.
+    /// Non-nil means `segments` is intentionally empty and the UI should show the deletion notice.
+    @Published var transcriptExpiredDate: Date?
+    /// User-controlled flag: when true, this meeting's transcript is eligible for the
+    /// expiry sweeper (which still gates on the global retention window). Persisted as
+    /// `auto_delete: true` in the markdown's YAML frontmatter.
+    @Published var autoDeleteFlagged: Bool = false
 
     let sessionID: UUID
 

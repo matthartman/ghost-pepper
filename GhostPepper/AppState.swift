@@ -76,6 +76,9 @@ class AppState: ObservableObject {
     @AppStorage("meetingTranscriptEnabled") var meetingTranscriptEnabled: Bool = false
     @AppStorage("meetingAutoDetectEnabled") var meetingAutoDetectEnabled: Bool = true
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
+    /// Retention window in days for meeting transcripts. 0 = keep forever.
+    /// Summaries and notes are always kept; only the `## Transcript` section is stripped.
+    @AppStorage("transcriptExpirationDays") var transcriptExpirationDays: Int = 0
     @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
@@ -147,6 +150,7 @@ class AppState: ObservableObject {
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
     private var hotkeyMonitorStarted = false
+    private var transcriptExpirySweepTimer: Timer?
 
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
@@ -449,6 +453,42 @@ class AppState: ObservableObject {
 
         // Start meeting detection if enabled
         setupMeetingDetector()
+
+        // Sweep expired transcripts once on launch, then every 6 hours thereafter.
+        runTranscriptExpirySweep()
+        startTranscriptExpirySweepTimer()
+    }
+
+    /// Scans the meetings directory and strips transcripts whose folder date
+    /// is older than `transcriptExpirationDays`. Safe to call repeatedly.
+    func runTranscriptExpirySweep() {
+        let days = transcriptExpirationDays
+        guard days > 0 else { return }
+        let baseDirectory = MeetingTranscriptSettings.effectiveSaveDirectory()
+        // Filesystem I/O off the main actor; hop back to log on main.
+        Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                TranscriptExpirySweeper.run(baseDirectory: baseDirectory, daysToKeep: days)
+            }.value
+            guard let self, result.expiredCount > 0 || !result.errors.isEmpty else { return }
+            if result.expiredCount > 0 {
+                self.debugLogStore.record(
+                    category: .model,
+                    message: "Transcript expiry: deleted \(result.expiredCount) transcript(s) older than \(days) day(s)."
+                )
+            }
+            for error in result.errors {
+                self.debugLogStore.record(category: .model, message: error)
+            }
+        }
+    }
+
+    private func startTranscriptExpirySweepTimer() {
+        transcriptExpirySweepTimer?.invalidate()
+        // Every 6 hours: catches long-running sessions without busy-polling.
+        transcriptExpirySweepTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.runTranscriptExpirySweep() }
+        }
     }
 
     func relaunchApp() {
