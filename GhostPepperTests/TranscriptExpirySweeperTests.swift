@@ -308,6 +308,36 @@ final class TranscriptExpirySweeperTests: XCTestCase {
         XCTAssertEqual(after, before, "Unflagged file must be untouched")
     }
 
+    func testGlobalModeSweepsUnflaggedOldMeetings() throws {
+        // In global mode (onlyFlagged = false), the flag is ignored — every old
+        // meeting gets swept, not just flagged ones.
+        let file = try writeMeeting(folder: "2026-01-01", name: "unflagged", content: unflaggedMeetingMarkdown)
+        let result = TranscriptExpirySweeper.run(
+            baseDirectory: baseDirectory,
+            daysToKeep: 30,
+            onlyFlagged: false,
+            now: localDate("2026-04-16")
+        )
+        XCTAssertEqual(result.expiredCount, 1, "Global mode must sweep unflagged old meetings")
+        let after = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertFalse(after.contains("**[00:00] Me:** Hello."))
+        XCTAssertTrue(after.contains("<!-- ghost-pepper-transcript-expired:"))
+    }
+
+    func testGlobalModeStillRespectsAgeWindow() throws {
+        // Global mode only ignores the flag — it still honors the age window.
+        let file = try writeMeeting(folder: "2026-04-11", name: "fresh-unflagged", content: unflaggedMeetingMarkdown)
+        let before = try String(contentsOf: file, encoding: .utf8)
+        let result = TranscriptExpirySweeper.run(
+            baseDirectory: baseDirectory,
+            daysToKeep: 30,
+            onlyFlagged: false,
+            now: localDate("2026-04-16")
+        )
+        XCTAssertEqual(result.expiredCount, 0)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), before)
+    }
+
     func testMixedFlaggedAndUnflaggedFolder() throws {
         // Same folder, same age; only the flagged file should be swept.
         let flagged = try writeMeeting(folder: "2026-01-01", name: "flagged", content: fullMeetingMarkdown)

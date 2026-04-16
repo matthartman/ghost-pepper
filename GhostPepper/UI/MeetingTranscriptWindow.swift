@@ -11,6 +11,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     var onStartRecording: ((_ name: String) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onRequestTranscriptSweep: (() -> Void)?
 
     private(set) var windowState: MeetingWindowState?
 
@@ -30,6 +31,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         state.onStartRecording = onStartRecording
         state.onStopRecording = onStopRecording
         state.onGenerateSummary = onGenerateSummary
+        state.onRequestTranscriptSweep = onRequestTranscriptSweep
         windowState = state
 
         if let session = session {
@@ -147,6 +149,7 @@ final class MeetingWindowState: ObservableObject {
     var onStartRecording: ((_ name: String) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onRequestTranscriptSweep: (() -> Void)?
 
     var activeTab: OpenMeetingTab? {
         tabs.first { $0.id == activeTabID }
@@ -497,6 +500,7 @@ struct MeetingTabContentView: View {
     @State private var showSearch = false
     @FocusState private var searchFocused: Bool
     @AppStorage("transcriptExpirationDays") private var transcriptExpirationDays: Int = 0
+    @AppStorage("transcriptAutoDeleteAllMeetings") private var transcriptAutoDeleteAllMeetings: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -520,7 +524,7 @@ struct MeetingTabContentView: View {
                         .padding(.bottom, 8)
                 }
 
-                if transcriptExpirationDays > 0 {
+                if transcriptExpirationDays > 0 && !transcriptAutoDeleteAllMeetings {
                     autoDeleteToggle
                 }
             }
@@ -734,6 +738,11 @@ struct MeetingTabContentView: View {
             set: { newValue in
                 tab.transcript.autoDeleteFlagged = newValue
                 state.saveActiveTab()
+                // Fire a sweep immediately so users see the effect without waiting for
+                // the 6h timer or a settings toggle.
+                if newValue {
+                    state.onRequestTranscriptSweep?()
+                }
             }
         )) {
             HStack(spacing: 6) {

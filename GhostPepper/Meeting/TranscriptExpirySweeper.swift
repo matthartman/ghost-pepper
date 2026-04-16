@@ -28,11 +28,15 @@ enum TranscriptExpirySweeper {
     /// - Parameters:
     ///   - baseDirectory: The meetings root (e.g. `~/Documents/Ghost Pepper Meetings/`).
     ///   - daysToKeep: Retention window in days. `0` (or negative) disables the sweep.
+    ///   - onlyFlagged: When true (default, opt-in), only files with `auto_delete: true`
+    ///     frontmatter are swept. When false (global mode), every old meeting is swept
+    ///     regardless of flag. The age window always applies.
     ///   - now: Current time, injectable for testing.
     /// - Returns: A `Result` with the expired count and any non-fatal error messages.
     static func run(
         baseDirectory: URL,
         daysToKeep: Int,
+        onlyFlagged: Bool = true,
         now: Date = Date()
     ) -> Result {
         var result = Result()
@@ -66,14 +70,14 @@ enum TranscriptExpirySweeper {
             guard let folderDate = parseDateFolder(folder.lastPathComponent) else { continue }
             guard daysBetween(folderDate, now) >= daysToKeep else { continue }
 
-            sweepFolder(folder, now: now, into: &result)
+            sweepFolder(folder, onlyFlagged: onlyFlagged, now: now, into: &result)
         }
         return result
     }
 
     // MARK: - Per-folder sweep
 
-    private static func sweepFolder(_ folder: URL, now: Date, into result: inout Result) {
+    private static func sweepFolder(_ folder: URL, onlyFlagged: Bool, now: Date, into result: inout Result) {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(
             at: folder,
@@ -84,15 +88,16 @@ enum TranscriptExpirySweeper {
         }
 
         for file in files where file.pathExtension.lowercased() == "md" {
-            expireTranscriptFile(at: file, now: now, into: &result)
+            expireTranscriptFile(at: file, onlyFlagged: onlyFlagged, now: now, into: &result)
         }
     }
 
     /// Rewrites a single markdown file if it has a `## Transcript` section that
     /// hasn't already been expired. Increments `result.expiredCount` on success,
-    /// appends to `result.errors` on failure. Files that haven't been flagged for
-    /// auto-delete (`auto_delete: true` in YAML frontmatter) are skipped silently.
-    static func expireTranscriptFile(at url: URL, now: Date, into result: inout Result) {
+    /// appends to `result.errors` on failure. When `onlyFlagged` is true, files that
+    /// haven't been flagged for auto-delete (`auto_delete: true` in YAML frontmatter)
+    /// are skipped silently.
+    static func expireTranscriptFile(at url: URL, onlyFlagged: Bool = true, now: Date, into result: inout Result) {
         let original: String
         do {
             original = try String(contentsOf: url, encoding: .utf8)
@@ -100,7 +105,7 @@ enum TranscriptExpirySweeper {
             result.errors.append("Transcript expiry: failed to read \(url.lastPathComponent): \(error.localizedDescription)")
             return
         }
-        guard hasAutoDeleteFlag(in: original) else { return }
+        if onlyFlagged && !hasAutoDeleteFlag(in: original) { return }
         guard let rewritten = rewrite(markdown: original, expiredOn: now) else { return }
         guard rewritten != original else { return }
         do {

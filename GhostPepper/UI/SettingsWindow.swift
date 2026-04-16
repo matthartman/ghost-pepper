@@ -1565,7 +1565,7 @@ struct SettingsView: View {
                 SettingsCard("Privacy") {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text("Auto-delete flagged transcripts after:")
+                            Text("Auto-delete transcripts after:")
                                 .font(.body)
 
                             Spacer()
@@ -1587,7 +1587,28 @@ struct SettingsView: View {
                             }
                         }
 
-                        Text("When this is set, each meeting window shows an \"auto-delete\" checkbox. Flagged meetings have their full transcript removed after the chosen window; notes and summary are kept. Nothing is deleted unless you flag it. Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written transcript bytes in free space or backups until overwritten.")
+                        if appState.transcriptExpirationDays > 0 {
+                            HStack {
+                                Text("Applies to:")
+                                    .font(.body)
+
+                                Spacer()
+
+                                Picker("", selection: $appState.transcriptAutoDeleteAllMeetings) {
+                                    Text("Flagged meetings only").tag(false)
+                                    Text("All meetings").tag(true)
+                                }
+                                .labelsHidden()
+                                .frame(width: 200)
+                                .onChange(of: appState.transcriptAutoDeleteAllMeetings) { _, _ in
+                                    appState.runTranscriptExpirySweep()
+                                }
+                            }
+                        }
+
+                        Text(appState.transcriptAutoDeleteAllMeetings
+                            ? "Every meeting's transcript is removed after the chosen window. Notes and summary are kept. Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written bytes in free space or backups until overwritten."
+                            : "Only meetings you flag via the \"auto-delete\" checkbox on the meeting window are removed after the chosen window. Notes and summary are kept. Note: this is not secure erasure — APFS copy-on-write and Time Machine snapshots can leave previously written bytes in free space or backups until overwritten.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

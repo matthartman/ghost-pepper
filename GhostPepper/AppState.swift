@@ -79,6 +79,9 @@ class AppState: ObservableObject {
     /// Retention window in days for meeting transcripts. 0 = keep forever.
     /// Summaries and notes are always kept; only the `## Transcript` section is stripped.
     @AppStorage("transcriptExpirationDays") var transcriptExpirationDays: Int = 0
+    /// When false (default), only meetings the user has flagged are swept. When true,
+    /// every meeting older than the retention window is swept. Stored per-machine.
+    @AppStorage("transcriptAutoDeleteAllMeetings") var transcriptAutoDeleteAllMeetings: Bool = false
     @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
@@ -465,10 +468,11 @@ class AppState: ObservableObject {
         let days = transcriptExpirationDays
         guard days > 0 else { return }
         let baseDirectory = MeetingTranscriptSettings.effectiveSaveDirectory()
+        let onlyFlagged = !transcriptAutoDeleteAllMeetings
         // Filesystem I/O off the main actor; hop back to log on main.
         Task { [weak self] in
             let result = await Task.detached(priority: .utility) {
-                TranscriptExpirySweeper.run(baseDirectory: baseDirectory, daysToKeep: days)
+                TranscriptExpirySweeper.run(baseDirectory: baseDirectory, daysToKeep: days, onlyFlagged: onlyFlagged)
             }.value
             guard let self, result.expiredCount > 0 || !result.errors.isEmpty else { return }
             if result.expiredCount > 0 {
@@ -881,6 +885,9 @@ class AppState: ObservableObject {
         }
         controller.onGenerateSummary = { [weak self] transcript in
             Task { await self?.generateMeetingSummary(for: transcript) }
+        }
+        controller.onRequestTranscriptSweep = { [weak self] in
+            self?.runTranscriptExpirySweep()
         }
         return controller
     }()
