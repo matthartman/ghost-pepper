@@ -9,12 +9,11 @@ final class AudioRecorder {
     /// The device ID to record from. If nil, uses the system default.
     var targetDeviceID: AudioDeviceID?
 
-    /// Recreated for every recording session. AVAudioEngine does not reliably
-    /// recover when the default input device or its sample rate changes between
-    /// sessions (Bluetooth mics flipping between HFP/A2DP profiles is the common
-    /// trigger), and the symptom is `HALB_IOThread: there already is a thread`
-    /// + EAGAIN on the next start. A fresh instance per session avoids that.
+    /// Kept alive across recordings so AVFAudio does not have to re-run device
+    /// discovery on every hotkey press. We only rebuild when the user explicitly
+    /// changes the target input device or asks for an audio reset.
     private var engine = AVAudioEngine()
+    private var configuredTargetDeviceID: AudioDeviceID?
     private let bufferLock = NSLock()
 
     /// The accumulated audio samples captured during recording.
@@ -28,15 +27,15 @@ final class AudioRecorder {
 
     /// Pre-warm the audio engine so the first recording starts faster.
     func prewarm() {
+        applyTargetDeviceIfNeeded()
         _ = engine.inputNode // Force node initialization
         engine.prepare()
     }
 
-    /// Reset the audio engine to pick up a new default input device.
-    /// Call this after changing the system default input device in Settings.
+    /// Reset the audio engine to pick up a newly selected input route.
+    /// Call this after changing the microphone selection in Settings.
     func resetForDeviceChange() {
-        engine.stop()
-        engine.reset()
+        rebuildEngine()
         prewarm()
     }
 
@@ -120,31 +119,9 @@ final class AudioRecorder {
     func startRecording() throws {
         resetBuffer()
 
-        // Tear down any leftover state from the previous session and rebuild the
-        // engine from scratch. See the engine property's doc comment for why.
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-        engine = AVAudioEngine()
-
-        // Set the specific input device on the audio unit if one is targeted.
-        // This avoids changing the system-wide default input device.
-        if let deviceID = targetDeviceID {
-            let audioUnit = engine.inputNode.audioUnit!
-            var devID = deviceID
-            let status = AudioUnitSetProperty(
-                audioUnit,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global,
-                0,
-                &devID,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            if status != noErr {
-                print("AudioRecorder: failed to set device \(deviceID) on audio unit, status=\(status)")
-            } else {
-                print("AudioRecorder: targeting device \(deviceID) directly on audio unit")
-            }
-        }
+        applyTargetDeviceIfNeeded()
 
         let inputNode = engine.inputNode
         // `inputFormat(forBus:)` reflects the bus's *actual* HW input format.
@@ -182,6 +159,41 @@ final class AudioRecorder {
 
     private var cachedConverter: AVAudioConverter?
     private var cachedConverterSourceFormat: AVAudioFormat?
+
+    private func rebuildEngine() {
+        engine.stop()
+        engine = AVAudioEngine()
+        configuredTargetDeviceID = nil
+    }
+
+    private func applyTargetDeviceIfNeeded() {
+        if targetDeviceID == nil, configuredTargetDeviceID != nil {
+            rebuildEngine()
+        }
+
+        guard configuredTargetDeviceID != targetDeviceID,
+              let deviceID = targetDeviceID else {
+            return
+        }
+
+        let audioUnit = engine.inputNode.audioUnit!
+        var devID = deviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &devID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if status != noErr {
+            print("AudioRecorder: failed to set device \(deviceID) on audio unit, status=\(status)")
+            return
+        }
+
+        configuredTargetDeviceID = deviceID
+        print("AudioRecorder: targeting device \(deviceID) directly on audio unit")
+    }
 
     private func converter(for sourceFormat: AVAudioFormat) -> AVAudioConverter? {
         if let cachedConverter, let cachedConverterSourceFormat,

@@ -126,25 +126,28 @@ final class GhostPepperTests: XCTestCase {
 
     func testEmptyTranscriptionDispositionCancelsShortRecordings() {
         XCTAssertEqual(
-            AppState.emptyTranscriptionDisposition(forAudioSampleCount: 79_999),
+            AppState.emptyTranscriptionDisposition(forAudioSampleCount: 7_999),
             .cancel
         )
     }
 
     func testEmptyTranscriptionDispositionShowsNoSoundForFiveSecondsOrLonger() {
         XCTAssertEqual(
-            AppState.emptyTranscriptionDisposition(forAudioSampleCount: 80_000),
+            AppState.emptyTranscriptionDisposition(forAudioSampleCount: 8_000),
             .showNoSoundDetected
         )
         XCTAssertEqual(
-            AppState.emptyTranscriptionDisposition(forAudioSampleCount: 96_000),
+            AppState.emptyTranscriptionDisposition(forAudioSampleCount: 9_600),
             .showNoSoundDetected
         )
     }
 
     func testNoSoundDetectedOverlayMessageUsesExpectedCopy() {
         XCTAssertEqual(OverlayMessage.noSoundDetected.primaryText, "No sound detected")
-        XCTAssertNil(OverlayMessage.noSoundDetected.secondaryText)
+        XCTAssertEqual(
+            OverlayMessage.noSoundDetected.secondaryText,
+            "Check your mic in Settings → Recording"
+        )
     }
 
     func testClipboardFallbackOverlayMessageUsesExpectedCopy() {
