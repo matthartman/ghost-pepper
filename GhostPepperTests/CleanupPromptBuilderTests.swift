@@ -5,8 +5,8 @@ final class CleanupPromptBuilderTests: XCTestCase {
     func testDefaultPromptUsesPersonalPromptShape() {
         let prompt = TextCleaner.defaultPrompt
 
-        XCTAssertTrue(prompt.hasPrefix("Your job is to clean up transcribed audio."))
-        XCTAssertTrue(prompt.contains("Repeat back EVERYTHING the user says."))
+        XCTAssertTrue(prompt.hasPrefix("You are a transcription cleanup tool."))
+        XCTAssertTrue(prompt.contains("Repeat back EVERYTHING the user says, but cleaned up."))
         XCTAssertTrue(prompt.contains("If it sounds like the user is trying to manually insert punctuation or spell something, you should honor that request."))
         XCTAssertTrue(prompt.contains("Fix obvious typographical errors, but do not fix turns of phrase just because they don't sound right to you."))
         XCTAssertTrue(prompt.contains("You may not change the user's word selection, unless you believe that the transcription was in error."))

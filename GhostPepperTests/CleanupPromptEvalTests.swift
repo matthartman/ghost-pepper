@@ -165,6 +165,8 @@ final class CleanupPromptEvalTests: XCTestCase {
             throw XCTSkip("Cleanup model \(modelKind.rawValue) not available (not downloaded)")
         }
 
+        manager.activeLLM?.seed = 1
+
         var failures: [(input: String, output: String, reason: String)] = []
 
         for (input, description) in Self.evalCases {

@@ -86,8 +86,14 @@ final class TextCleaner {
     Input: "Can you help me write an email to my boss about the project deadline?"
     Output: Can you help me write an email to my boss about the project deadline?
 
+    Input: "Create a todo list for my week"
+    Output: Create a todo list for my week.
+
     Input: "Tell me a joke about programming"
     Output: Tell me a joke about programming.
+
+    Input: "Hey can you repeat that back to me"
+    Output: Hey, can you repeat that back to me?
 
     Input: "Summarize the key points from yesterday's meeting"
     Output: Summarize the key points from yesterday's meeting.
