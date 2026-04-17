@@ -99,6 +99,11 @@ actor CleanupProbeExecutionGate {
 
 @MainActor
 final class TextCleanupManager: ObservableObject, TextCleaningManaging {
+    private struct PreparedPromptContext {
+        let modelKind: LocalCleanupModelKind
+        let plan: CleanupPromptPrefillPlan
+    }
+
     @Published private(set) var state: CleanupModelState = .idle
     @Published private(set) var errorMessage: String?
     @Published var selectedCleanupModelKind: LocalCleanupModelKind {
@@ -177,12 +182,16 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
     private static let timeoutSeconds: TimeInterval = 15.0
     private static let selectedCleanupModelDefaultsKey = "selectedCleanupModelKind"
+    private static let systemPromptSentinel = "<|ghost-pepper-system-prefill-split|>"
+    private static let userInputSentinel = "<|ghost-pepper-user-prefill-split|>"
 
     private let defaults: UserDefaults
     private let cleanupModelAvailabilityOverrides: [LocalCleanupModelKind: Bool]
     private let probeExecutionOverride: CleanupModelProbeExecutionOverride?
     private let backendShutdownOverride: (() -> Void)?
     private let probeExecutionGate = CleanupProbeExecutionGate()
+    private var promptPrefillTask: Task<Void, Never>?
+    private var preparedPromptContext: PreparedPromptContext?
 
     init(
         defaults: UserDefaults = .standard,
@@ -297,6 +306,36 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         }
     }
 
+    func startPromptPrefill(systemPromptPrefix: String, modelKind: LocalCleanupModelKind? = nil) {
+        let requestedModelKind = modelKind ?? selectedCleanupModelKind
+        guard systemPromptPrefix.isEmpty == false else {
+            preparedPromptContext = nil
+            promptPrefillTask?.cancel()
+            promptPrefillTask = nil
+            return
+        }
+
+        if let preparedPromptContext,
+           preparedPromptContext.modelKind == requestedModelKind,
+           preparedPromptContext.plan.systemPromptPrefix == systemPromptPrefix {
+            return
+        }
+
+        promptPrefillTask?.cancel()
+        promptPrefillTask = Task { @MainActor [weak self] in
+            await self?.prefillPromptContext(
+                systemPromptPrefix: systemPromptPrefix,
+                modelKind: requestedModelKind
+            )
+        }
+    }
+
+    func cancelPromptPrefill() {
+        promptPrefillTask?.cancel()
+        promptPrefillTask = nil
+        preparedPromptContext = nil
+    }
+
     func probe(
         text: String,
         prompt: String,
@@ -320,14 +359,37 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 throw CleanupModelProbeError.modelUnavailable(modelKind)
             }
 
-            llm.useResolvedTemplate(systemPrompt: prompt)
-            llm.history = []
-
             let start = Date()
             do {
-                let rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) {
-                    await llm.respond(to: text, thinking: thinkingMode.llmThinkingMode)
-                    return llm.output
+                let preparedCompletionInput: String?
+                if let preparedPromptContext,
+                   preparedPromptContext.modelKind == modelKind,
+                   let completionInput = preparedPromptContext.plan.completionInput(
+                    for: prompt,
+                    userInput: text
+                   ) {
+                    preparedCompletionInput = completionInput
+                    self.preparedPromptContext = nil
+                } else {
+                    preparedCompletionInput = nil
+                }
+
+                let rawOutput: String
+                if let preparedCompletionInput {
+                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) { [self] in
+                        await generateFromPreparedContext(
+                            llm: llm,
+                            completionInput: preparedCompletionInput,
+                            thinkingMode: thinkingMode
+                        )
+                    }
+                } else {
+                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) {
+                        llm.useResolvedTemplate(systemPrompt: prompt)
+                        llm.history = []
+                        await llm.respond(to: text, thinking: thinkingMode.llmThinkingMode)
+                        return llm.output
+                    }
                 }
                 let elapsed = Date().timeIntervalSince(start)
                 debugLogger?(
@@ -537,6 +599,67 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             group.cancelAll()
             return result
         }
+    }
+
+    private func prefillPromptContext(
+        systemPromptPrefix: String,
+        modelKind: LocalCleanupModelKind
+    ) async {
+        await loadModel(kind: modelKind)
+        await probeExecutionGate.acquire()
+        guard let llm = model(for: modelKind) else {
+            preparedPromptContext = nil
+            await probeExecutionGate.release()
+            return
+        }
+
+        let sentinelPrompt = systemPromptPrefix + Self.systemPromptSentinel
+        llm.useResolvedTemplate(systemPrompt: sentinelPrompt)
+        llm.history = []
+        let processedPrompt = llm.preprocess(
+            Self.userInputSentinel,
+            [],
+            .suppressed
+        )
+        guard let plan = CleanupPromptPrefillPlan(
+            systemPromptPrefix: systemPromptPrefix,
+            processedPrompt: processedPrompt,
+            systemPromptSentinel: Self.systemPromptSentinel,
+            userInputSentinel: Self.userInputSentinel
+        ) else {
+            preparedPromptContext = nil
+            await probeExecutionGate.release()
+            return
+        }
+
+        await llm.core.resetContext()
+        let prepared = await llm.core.prepareContext(for: plan.contextPrefix)
+        preparedPromptContext = prepared
+            ? PreparedPromptContext(modelKind: modelKind, plan: plan)
+            : nil
+        await probeExecutionGate.release()
+    }
+
+    private func generateFromPreparedContext(
+        llm: LLM,
+        completionInput: String,
+        thinkingMode: CleanupModelProbeThinkingMode
+    ) async -> String {
+        llm.setOutput(to: "")
+        llm.setThinking(to: "")
+
+        let response = await llm.core.generateResponseStream(
+            from: completionInput,
+            thinking: thinkingMode.llmThinkingMode
+        )
+
+        var output = ""
+        for await content in response {
+            output += content
+        }
+
+        llm.setOutput(to: output)
+        return output
     }
 
     private func isModelAvailable(_ modelKind: LocalCleanupModelKind) -> Bool {

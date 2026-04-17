@@ -127,9 +127,11 @@ class AppState: ObservableObject {
     let transcriptionLabStore: TranscriptionLabStore
     let appRelauncher: AppRelaunching
     var recordingSessionCoordinatorFactory: (() -> RecordingSessionCoordinator?)?
+    var recordingTranscriptionSessionFactory: ((SpeechModelDescriptor) -> RecordingTranscriptionSession?)?
     var transcribeAudioBufferOverride: (([Float]) -> String?)?
     var cleanedTranscriptionResultOverride: ((String, OCRContext?) async -> CleanupResult)?
     private(set) var activeRecordingSessionCoordinator: RecordingSessionCoordinator?
+    private(set) var activeRecordingTranscriptionSession: RecordingTranscriptionSession?
 
     var isReady: Bool {
         status == .ready
@@ -555,8 +557,28 @@ class AppState: ObservableObject {
     func prepareRecordingSessionIfNeeded() async {
         audioRecorder.onConvertedAudioChunk = nil
         activeRecordingSessionCoordinator = nil
+        activeRecordingTranscriptionSession = nil
+
+        if let speechModelDescriptor = SpeechModelCatalog.model(named: speechModel) {
+            if let recordingTranscriptionSessionFactory {
+                activeRecordingTranscriptionSession = recordingTranscriptionSessionFactory(
+                    speechModelDescriptor
+                )
+            } else if speechModelDescriptor.backend == .fluidAudio {
+                activeRecordingTranscriptionSession = ChunkedRecordingTranscriptionSession(
+                    transcribeChunk: { [weak self] samples in
+                        await self?.transcribeAudioBuffer(samples)
+                    }
+                )
+            }
+        }
 
         guard ignoreOtherSpeakers, selectedSpeechModelSupportsSpeakerFiltering else {
+            if let activeRecordingTranscriptionSession {
+                audioRecorder.onConvertedAudioChunk = { [weak activeRecordingTranscriptionSession] samples in
+                    activeRecordingTranscriptionSession?.appendAudioChunk(samples)
+                }
+            }
             return
         }
 
@@ -568,18 +590,26 @@ class AppState: ObservableObject {
         }
 
         guard let coordinator else {
+            if let activeRecordingTranscriptionSession {
+                audioRecorder.onConvertedAudioChunk = { [weak activeRecordingTranscriptionSession] samples in
+                    activeRecordingTranscriptionSession?.appendAudioChunk(samples)
+                }
+            }
             return
         }
 
         activeRecordingSessionCoordinator = coordinator
-        audioRecorder.onConvertedAudioChunk = { [weak coordinator] samples in
+        audioRecorder.onConvertedAudioChunk = {
+            [weak coordinator, weak activeRecordingTranscriptionSession] samples in
             coordinator?.appendAudioChunk(samples)
+            activeRecordingTranscriptionSession?.appendAudioChunk(samples)
         }
     }
 
     private func clearRecordingSessionCoordinator() {
         audioRecorder.onConvertedAudioChunk = nil
         activeRecordingSessionCoordinator = nil
+        activeRecordingTranscriptionSession = nil
     }
 
     private var selectedSpeechModelSupportsSpeakerFiltering: Bool {
@@ -616,6 +646,15 @@ class AppState: ObservableObject {
             } else {
                 recordingOCRPrefetch.cancel()
             }
+            if cleanupEnabled && canAttemptCleanup {
+                let promptComponents = activeCleanupPromptComponents(windowContext: nil)
+                textCleanupManager.startPromptPrefill(
+                    systemPromptPrefix: promptComponents.stablePromptPrefix,
+                    modelKind: textCleanupManager.selectedCleanupModelKind
+                )
+            } else {
+                textCleanupManager.cancelPromptPrefill()
+            }
             mediaPlaybackController.pauseIfPlaying()
             audioRecorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
             try audioRecorder.startRecording()
@@ -643,6 +682,7 @@ class AppState: ObservableObject {
         debugLogStore.record(category: .hotkey, message: "Recording stopped. Starting transcription.")
         let buffer = await audioRecorder.stopRecording()
         let recordingSessionCoordinator = activeRecordingSessionCoordinator
+        let recordingTranscriptionSession = activeRecordingTranscriptionSession
         clearRecordingSessionCoordinator()
         soundEffects.playStop()
         mediaPlaybackController.resumeIfPaused()
@@ -665,6 +705,7 @@ class AppState: ObservableObject {
         let didProduceTranscript = await processRecordingResult(
             audioBuffer: buffer,
             recordingSessionCoordinator: recordingSessionCoordinator,
+            recordingTranscriptionSession: recordingTranscriptionSession,
             archivedWindowContext: archivedWindowContext,
             shouldPaste: true,
             shouldRecordDebugSnapshot: true
@@ -692,11 +733,13 @@ class AppState: ObservableObject {
     func finishRecordingForTesting(
         audioBuffer: [Float],
         recordingSessionCoordinator: RecordingSessionCoordinator?,
+        recordingTranscriptionSession: RecordingTranscriptionSession? = nil,
         archivedWindowContext: OCRContext?
     ) async {
         _ = await processRecordingResult(
             audioBuffer: audioBuffer,
             recordingSessionCoordinator: recordingSessionCoordinator,
+            recordingTranscriptionSession: recordingTranscriptionSession,
             archivedWindowContext: archivedWindowContext,
             shouldPaste: false,
             shouldRecordDebugSnapshot: false
@@ -706,13 +749,15 @@ class AppState: ObservableObject {
     private func processRecordingResult(
         audioBuffer: [Float],
         recordingSessionCoordinator: RecordingSessionCoordinator?,
+        recordingTranscriptionSession: RecordingTranscriptionSession?,
         archivedWindowContext: OCRContext?,
         shouldPaste: Bool,
         shouldRecordDebugSnapshot: Bool
     ) async -> Bool {
         let transcriptionResult = await transcribedTextForRecording(
             audioBuffer,
-            recordingSessionCoordinator: recordingSessionCoordinator
+            recordingSessionCoordinator: recordingSessionCoordinator,
+            recordingTranscriptionSession: recordingTranscriptionSession
         )
 
         guard let text = transcriptionResult.rawTranscription else {
@@ -731,7 +776,7 @@ class AppState: ObservableObject {
         }
 
         activePerformanceTrace?.transcriptionEndAt = Date()
-        var windowContext = archivedWindowContext
+        let windowContext = archivedWindowContext
         if cleanupEnabled && canAttemptCleanup {
             activeCleanupAttempted = true
             activePerformanceTrace?.cleanupStartAt = Date()
@@ -783,7 +828,8 @@ class AppState: ObservableObject {
 
     private func transcribedTextForRecording(
         _ audioBuffer: [Float],
-        recordingSessionCoordinator: RecordingSessionCoordinator?
+        recordingSessionCoordinator: RecordingSessionCoordinator?,
+        recordingTranscriptionSession: RecordingTranscriptionSession?
     ) async -> RecordingTranscriptionResult {
         var diarizationSummary: DiarizationSummary?
 
@@ -794,12 +840,24 @@ class AppState: ObservableObject {
             if summary.usedFallback == false,
                let filteredTranscript = recordingSessionCoordinator.filteredTranscript,
                filteredTranscript.isEmpty == false {
+                recordingTranscriptionSession?.cancel()
                 return RecordingTranscriptionResult(
                     rawTranscription: filteredTranscript,
                     speakerFilteringRan: true,
                     diarizationSummary: summary
                 )
             }
+        }
+
+        if let recordingTranscriptionSession,
+           let streamedTranscript = await recordingTranscriptionSession.finishTranscription()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           streamedTranscript.isEmpty == false {
+            return RecordingTranscriptionResult(
+                rawTranscription: streamedTranscript,
+                speakerFilteringRan: recordingSessionCoordinator != nil,
+                diarizationSummary: diarizationSummary
+            )
         }
 
         return RecordingTranscriptionResult(
@@ -1182,27 +1240,13 @@ class AppState: ObservableObject {
             return (text: text, prompt: cleanupPrompt, attemptedCleanup: false, cleanupUsedFallback: false)
         }
 
-        let languageAwarePrompt: String
-        if preferredLanguage != "auto" && preferredLanguage != "en" {
-            let langName = Locale.current.localizedString(forLanguageCode: preferredLanguage) ?? preferredLanguage
-            languageAwarePrompt = cleanupPrompt + "\n\nThe transcription is in \(langName). Preserve the original language — do not translate to English."
-        } else {
-            languageAwarePrompt = cleanupPrompt
-        }
-
         let activeCleanupPrompt: String
         if canAttemptCleanup {
             let promptBuildStart = Date()
-            activeCleanupPrompt = cleanupPromptBuilder.buildPrompt(
-                basePrompt: languageAwarePrompt,
-                windowContext: windowContext,
-                preferredTranscriptions: correctionStore.preferredTranscriptions,
-                commonlyMisheard: correctionStore.commonlyMisheard,
-                includeWindowContext: frontmostWindowContextEnabled
-            )
+            activeCleanupPrompt = activeCleanupPromptComponents(windowContext: windowContext).fullPrompt
             activePerformanceTrace?.promptBuildDuration = Date().timeIntervalSince(promptBuildStart)
         } else {
-            activeCleanupPrompt = languageAwarePrompt
+            activeCleanupPrompt = languageAwareCleanupPrompt
         }
 
         let cleanedResult = await textCleaner.cleanWithPerformance(
@@ -1217,6 +1261,25 @@ class AppState: ObservableObject {
             prompt: activeCleanupPrompt,
             attemptedCleanup: canAttemptCleanup,
             cleanupUsedFallback: cleanedResult.usedFallback
+        )
+    }
+
+    private var languageAwareCleanupPrompt: String {
+        if preferredLanguage != "auto" && preferredLanguage != "en" {
+            let langName = Locale.current.localizedString(forLanguageCode: preferredLanguage) ?? preferredLanguage
+            return cleanupPrompt + "\n\nThe transcription is in \(langName). Preserve the original language — do not translate to English."
+        }
+
+        return cleanupPrompt
+    }
+
+    private func activeCleanupPromptComponents(windowContext: OCRContext?) -> CleanupPromptComponents {
+        cleanupPromptBuilder.buildPromptComponents(
+            basePrompt: languageAwareCleanupPrompt,
+            windowContext: windowContext,
+            preferredTranscriptions: correctionStore.preferredTranscriptions,
+            commonlyMisheard: correctionStore.commonlyMisheard,
+            includeWindowContext: frontmostWindowContextEnabled
         )
     }
 

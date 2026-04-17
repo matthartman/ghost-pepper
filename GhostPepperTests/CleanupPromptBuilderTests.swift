@@ -102,4 +102,89 @@ final class CleanupPromptBuilderTests: XCTestCase {
         XCTAssertFalse(prompt.contains("<HEARD>"))
         XCTAssertFalse(prompt.contains("<INTENDED>"))
     }
+
+    func testBuilderSeparatesStablePromptPrefixFromOCRSuffix() {
+        let builder = CleanupPromptBuilder()
+        let components = builder.buildPromptComponents(
+            basePrompt: "Base prompt",
+            windowContext: OCRContext(windowContents: "Frontmost text"),
+            preferredTranscriptions: ["Ghost Pepper"],
+            commonlyMisheard: [MisheardReplacement(wrong: "just see", right: "Jesse")],
+            includeWindowContext: true
+        )
+
+        XCTAssertTrue(components.stablePromptPrefix.contains("Base prompt"))
+        XCTAssertTrue(components.stablePromptPrefix.contains("<CORRECTION-HINTS>"))
+        XCTAssertFalse(components.stablePromptPrefix.contains("<OCR-RULES>"))
+        XCTAssertTrue(components.promptSuffix.contains("<OCR-RULES>"))
+        XCTAssertTrue(components.promptSuffix.contains("Frontmost text"))
+        XCTAssertEqual(components.fullPrompt, builder.buildPrompt(
+            basePrompt: "Base prompt",
+            windowContext: OCRContext(windowContents: "Frontmost text"),
+            preferredTranscriptions: ["Ghost Pepper"],
+            commonlyMisheard: [MisheardReplacement(wrong: "just see", right: "Jesse")],
+            includeWindowContext: true
+        ))
+    }
+
+    func testBuilderReturnsStablePromptOnlyWhenWindowContextIsUnavailable() {
+        let builder = CleanupPromptBuilder()
+        let components = builder.buildPromptComponents(
+            basePrompt: "Base prompt",
+            windowContext: nil,
+            preferredTranscriptions: ["Ghost Pepper"],
+            commonlyMisheard: [],
+            includeWindowContext: true
+        )
+
+        XCTAssertEqual(components.promptSuffix, "")
+        XCTAssertEqual(components.fullPrompt, components.stablePromptPrefix)
+        XCTAssertTrue(components.stablePromptPrefix.contains("Base prompt"))
+        XCTAssertTrue(components.stablePromptPrefix.contains("<CORRECTION-HINTS>"))
+    }
+
+    func testPrefillPlanExtractsContextPrefixAndReconstructsRemainingInput() throws {
+        let processedPrompt = """
+        <|im_start|>system
+        Base prompt
+        <|gp-system-split|>
+        <|im_end|>
+        <|im_start|>user
+        <|gp-user-split|><|im_end|>
+        <|im_start|>assistant
+        """
+
+        let plan = try XCTUnwrap(
+            CleanupPromptPrefillPlan(
+                systemPromptPrefix: "Base prompt",
+                processedPrompt: processedPrompt,
+                systemPromptSentinel: "<|gp-system-split|>",
+                userInputSentinel: "<|gp-user-split|>"
+            )
+        )
+
+        XCTAssertEqual(plan.contextPrefix, "<|im_start|>system\nBase prompt\n")
+        XCTAssertEqual(
+            plan.completionInput(
+                for: "Base prompt\n\n<OCR-RULES>screen context</OCR-RULES>",
+                userInput: "<USER-INPUT>\nhello world\n</USER-INPUT>"
+            ),
+            "\n\n<OCR-RULES>screen context</OCR-RULES>\n<|im_end|>\n<|im_start|>user\n<USER-INPUT>\nhello world\n</USER-INPUT><|im_end|>\n<|im_start|>assistant"
+        )
+    }
+
+    func testPrefillPlanRejectsPromptsThatDoNotShareThePrefilledPrefix() {
+        let processedPrompt = """
+        prefix<|gp-system-split|>middle<|gp-user-split|>suffix
+        """
+
+        let plan = CleanupPromptPrefillPlan(
+            systemPromptPrefix: "Base prompt",
+            processedPrompt: processedPrompt,
+            systemPromptSentinel: "<|gp-system-split|>",
+            userInputSentinel: "<|gp-user-split|>"
+        )
+
+        XCTAssertNil(plan?.completionInput(for: "Different prompt", userInput: "hello"))
+    }
 }
