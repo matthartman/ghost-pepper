@@ -1307,9 +1307,9 @@ struct SettingsView: View {
     private var pepperChatSection: some View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsCard("Availability") {
-                Toggle("Enable Pepper Chat", isOn: $appState.pepperChatEnabled)
+                Toggle("Enable Context Bundler", isOn: $appState.pepperChatEnabled)
 
-                Text("When disabled, Pepper Chat stays out of the menu bar and its shortcut will not start new chats.")
+                Text("When disabled, Context Bundler stays out of the menu bar and its shortcut will not start new chats.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

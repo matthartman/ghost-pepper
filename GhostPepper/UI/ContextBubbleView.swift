@@ -20,7 +20,7 @@ private struct PepperLogo: View {
 
 /// The Ghost Pepper Context Bubble — a branded floating panel that shows
 /// captured screen context + spoken command with action buttons.
-/// Replaces the old Pepper Chat message list UI.
+/// Displays the floating Context Bundler message list UI.
 struct ContextBubbleView: View {
     @ObservedObject var session: PepperChatSession
     var onMinimize: () -> Void

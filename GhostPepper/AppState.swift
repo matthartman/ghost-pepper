@@ -944,7 +944,7 @@ class AppState: ObservableObject {
         pepperChatSession.isRecording = true
         soundEffects.playStart()
         pepperChatWindowController.show(session: pepperChatSession)
-        debugLogStore.record(category: .hotkey, message: "Pepper Chat recording started.")
+        debugLogStore.record(category: .hotkey, message: "Context Bundler recording started.")
     }
 
     /// Capture the current frontmost window's context (if it's a new/different window)
@@ -998,7 +998,7 @@ class AppState: ObservableObject {
         lastCapturedWindowTitle = nil
         hotkeyMonitor.updateBindings(shortcutBindings)
         soundEffects.playStop()
-        debugLogStore.record(category: .hotkey, message: "Pepper Chat recording stopped.")
+        debugLogStore.record(category: .hotkey, message: "Context Bundler recording stopped.")
 
         Task {
             let buffer = await recorder.stopRecording()

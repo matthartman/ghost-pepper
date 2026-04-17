@@ -11,7 +11,7 @@ enum PepperChatBackendError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured: "Pepper Chat requires a Zo API key. Add one in Settings > Pepper Chat."
+        case .notConfigured: "Context Bundler requires a Zo API key. Add one in Settings > Context Bundler."
         case .invalidResponse: "Received an invalid response from Zo."
         case .serverError(let message): "Zo error: \(message)"
         }

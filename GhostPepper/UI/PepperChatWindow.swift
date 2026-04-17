@@ -156,7 +156,7 @@ private struct PepperChatWindowView: View {
         VStack(spacing: 0) {
             // Top bar
             HStack {
-                Text("Pepper Chat")
+                Text("Context Bundler")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -189,7 +189,7 @@ private struct PepperChatWindowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
-                .help("Close Pepper Chat")
+                .help("Close Context Bundler")
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)

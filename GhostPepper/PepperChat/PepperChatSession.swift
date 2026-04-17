@@ -69,7 +69,7 @@ final class PepperChatSession: ObservableObject {
 
     func processRecording(audioBuffer: [Float], includeScreenContext: Bool) async {
         guard !audioBuffer.isEmpty else {
-            debugLogger?(.model, "Pepper Chat: empty audio buffer, skipping.")
+            debugLogger?(.model, "Context Bundler: empty audio buffer, skipping.")
             return
         }
 
@@ -78,7 +78,7 @@ final class PepperChatSession: ObservableObject {
         isTranscribing = false
 
         guard let rawTranscription, !rawTranscription.isEmpty else {
-            debugLogger?(.model, "Pepper Chat: no transcription detected, showing context review anyway.")
+            debugLogger?(.model, "Context Bundler: no transcription detected, showing context review anyway.")
             // Still show context review so user can access captured screenshots
             let allContexts = preCapturedScreenContexts
             preCapturedScreenContexts = []
@@ -93,7 +93,7 @@ final class PepperChatSession: ObservableObject {
         let transcription: String
         if let cleanupProvider {
             transcription = await cleanupProvider(rawTranscription)
-            debugLogger?(.model, "Pepper Chat: cleaned \"\(rawTranscription)\" → \"\(transcription)\"")
+            debugLogger?(.model, "Context Bundler: cleaned \"\(rawTranscription)\" → \"\(transcription)\"")
         } else {
             transcription = rawTranscription
         }
@@ -141,7 +141,7 @@ final class PepperChatSession: ObservableObject {
         guard let backend = backendProvider() else {
             let errorMessage = PepperChatMessage(
                 role: .assistant,
-                text: "Add your Zo API key in Settings > Pepper Chat.",
+                text: "Add your Zo API key in Settings > Context Bundler.",
                 timestamp: Date()
             )
             messages.append(errorMessage)
@@ -161,12 +161,12 @@ final class PepperChatSession: ObservableObject {
                     self.messages[index].text += chunk
                 }
             }
-            debugLogger?(.model, "Pepper Chat: response complete.")
+            debugLogger?(.model, "Context Bundler: response complete.")
         } catch {
             if let index = messages.firstIndex(where: { $0.id == messageID }), messages[index].text.isEmpty {
                 messages[index].text = "Error: \(error.localizedDescription)"
             }
-            debugLogger?(.model, "Pepper Chat: backend error: \(error.localizedDescription)")
+            debugLogger?(.model, "Context Bundler: backend error: \(error.localizedDescription)")
         }
 
         activeProcessingCount -= 1
