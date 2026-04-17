@@ -336,8 +336,10 @@ final class AudioRecorder {
 
         buffer.frameLength = AVAudioFrameCount(samples.count)
         if let channelData = buffer.floatChannelData?.pointee {
-            for (index, sample) in samples.enumerated() {
-                channelData[index] = sample
+            samples.withUnsafeBufferPointer { source in
+                if let baseAddress = source.baseAddress {
+                    channelData.update(from: baseAddress, count: samples.count)
+                }
             }
         }
 
