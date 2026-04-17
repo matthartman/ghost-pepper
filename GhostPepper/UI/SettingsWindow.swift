@@ -48,24 +48,44 @@ final class SettingsDictationTestController: ObservableObject {
 
     private var recorder: AudioRecorder?
     private let transcriber: SpeechTranscriber
+    private var preTestDeviceID: AudioDeviceID?
 
     init(transcriber: SpeechTranscriber) {
         self.transcriber = transcriber
     }
 
-    func start() {
+    func start(inputDeviceID: AudioDeviceID? = nil) {
         guard !isRecording else { return }
-        let recorder = AudioRecorder()
-        recorder.prewarm()
 
-        do {
-            try recorder.startRecording()
-            self.recorder = recorder
-            transcript = nil
-            lastError = nil
-            isRecording = true
-        } catch {
-            lastError = "Could not start recording."
+        var needsDeviceSwitch = false
+        if let inputDeviceID,
+           let currentDefault = AudioDeviceManager.defaultInputDeviceID(),
+           currentDefault != inputDeviceID {
+            preTestDeviceID = currentDefault
+            _ = AudioDeviceManager.setDefaultInputDevice(inputDeviceID)
+            needsDeviceSwitch = true
+        }
+
+        transcript = nil
+        lastError = nil
+        isRecording = true
+
+        Task { @MainActor in
+            if needsDeviceSwitch {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+
+            let recorder = AudioRecorder()
+            recorder.prewarm()
+
+            do {
+                try recorder.startRecording()
+                self.recorder = recorder
+            } catch {
+                self.restoreDevice()
+                self.lastError = "Could not start recording."
+                self.isRecording = false
+            }
         }
     }
 
@@ -77,11 +97,18 @@ final class SettingsDictationTestController: ObservableObject {
 
         Task { @MainActor in
             let buffer = await recorder.stopRecording()
+            self.restoreDevice()
             let text = await transcriber.transcribe(audioBuffer: buffer)
             self.transcript = text
             self.lastError = text == nil ? "Ghost Pepper could not transcribe that sample." : nil
             self.isTranscribing = false
         }
+    }
+
+    private func restoreDevice() {
+        guard let id = preTestDeviceID else { return }
+        _ = AudioDeviceManager.setDefaultInputDevice(id)
+        preTestDeviceID = nil
     }
 }
 
@@ -153,6 +180,7 @@ struct SettingsView: View {
     @ObservedObject var appState: AppState
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
+    @State private var devicePickerReady = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var hasScreenRecordingPermission = PermissionChecker.hasScreenRecordingPermission()
     @State private var hasAccessibilityPermission = PermissionChecker.checkAccessibility()
@@ -298,7 +326,12 @@ struct SettingsView: View {
         .frame(minWidth: 900, minHeight: 680)
         .onAppear {
             inputDevices = AudioDeviceManager.listInputDevices()
-            selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
+            if let preferred = AudioDeviceManager.inputDevice(named: appState.preferredInputDeviceName) {
+                selectedDeviceID = preferred.id
+            } else {
+                selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
+            }
+            DispatchQueue.main.async { devicePickerReady = true }
             refreshScreenRecordingPermission()
             refreshRequiredPermissions()
             startPermissionPollingIfNeeded()
@@ -530,8 +563,11 @@ struct SettingsView: View {
                         .labelsHidden()
                         .frame(maxWidth: 320, alignment: .leading)
                         .onChange(of: selectedDeviceID) { _, newValue in
+                            guard devicePickerReady else { return }
                             AudioDeviceManager.setSelectedInputDevice(newValue)
-                            appState.resetAudioEngine()
+                            if let device = inputDevices.first(where: { $0.id == newValue }) {
+                                appState.preferredInputDeviceName = device.name
+                            }
                         }
                     }
 
@@ -547,6 +583,15 @@ struct SettingsView: View {
                         "Pause media while recording",
                         isOn: $appState.pauseMediaWhileRecording
                     )
+
+                    if appState.pauseMediaWhileRecording {
+                        Toggle(
+                            "Resume media after recording",
+                            isOn: $appState.resumeMediaAfterRecording
+                        )
+                        .padding(.leading, 20)
+                        .foregroundStyle(.secondary)
+                    }
 
                     if speakerFilteringToggleState.isVisible {
                         Toggle(
@@ -573,7 +618,7 @@ struct SettingsView: View {
                             if dictationTestController.isRecording {
                                 dictationTestController.stop()
                             } else {
-                                dictationTestController.start()
+                                dictationTestController.start(inputDeviceID: selectedDeviceID)
                             }
                         }
                         .buttonStyle(.borderedProminent)

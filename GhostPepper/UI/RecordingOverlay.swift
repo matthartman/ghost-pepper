@@ -4,6 +4,7 @@ import AppKit
 enum OverlayMessage: Equatable {
     case recording
     case modelLoading
+    case switchingMicrophone
     case cleaningUp
     case transcribing
     case clipboardFallback
@@ -16,6 +17,8 @@ enum OverlayMessage: Equatable {
             return "Recording..."
         case .modelLoading:
             return "Loading models..."
+        case .switchingMicrophone:
+            return "Switching microphone..."
         case .cleaningUp:
             return "Cleaning up..."
         case .transcribing:
@@ -159,7 +162,7 @@ struct OverlayPillView: View {
         switch message {
         case .recording:
             return .red
-        case .modelLoading:
+        case .modelLoading, .switchingMicrophone:
             return .orange
         case .cleaningUp, .transcribing, .clipboardFallback:
             return .blue

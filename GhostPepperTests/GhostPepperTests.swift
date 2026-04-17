@@ -536,6 +536,88 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertFalse(reloadedAppState.playSounds)
     }
 
+    // MARK: - Preferred Input Device
+
+    func testPreferredInputDeviceNamePersistsAcrossInstances() {
+        let key = "preferredInputDeviceName"
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore()
+        )
+        appState.preferredInputDeviceName = "Test Microphone"
+
+        let reloaded = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore()
+        )
+        XCTAssertEqual(reloaded.preferredInputDeviceName, "Test Microphone")
+    }
+
+    func testPreferredInputDeviceNameCanBeCleared() {
+        let key = "preferredInputDeviceName"
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore()
+        )
+        appState.preferredInputDeviceName = "Some Device"
+        appState.preferredInputDeviceName = ""
+        XCTAssertEqual(appState.preferredInputDeviceName, "")
+    }
+
+    func testAudioDeviceManagerInputDeviceNamedReturnsNilForUnknownDevice() {
+        XCTAssertNil(AudioDeviceManager.inputDevice(named: "Nonexistent Device XYZ 12345"))
+    }
+
+    func testAudioDeviceManagerInputDeviceNamedFindsMatchingDevice() {
+        let allDevices = AudioDeviceManager.listInputDevices()
+        guard let firstDevice = allDevices.first else { return }
+
+        let found = AudioDeviceManager.inputDevice(named: firstDevice.name)
+        XCTAssertEqual(found?.id, firstDevice.id)
+        XCTAssertEqual(found?.name, firstDevice.name)
+    }
+
+    func testAudioDeviceManagerAnyDeviceNamedReturnsNilForUnknownDevice() {
+        XCTAssertNil(AudioDeviceManager.anyDevice(named: "Nonexistent Device XYZ 12345"))
+    }
+
+    func testAudioDeviceManagerAnyDeviceNamedFindsMatchingDevice() {
+        let allIDs = AudioDeviceManager.listAllDeviceIDs()
+        XCTAssertFalse(allIDs.isEmpty, "System should have at least one audio device")
+
+        // Any device found by inputDevice(named:) should also be found by anyDevice(named:)
+        let inputDevices = AudioDeviceManager.listInputDevices()
+        guard let firstInput = inputDevices.first else { return }
+
+        let found = AudioDeviceManager.anyDevice(named: firstInput.name)
+        XCTAssertNotNil(found)
+        XCTAssertEqual(found?.name, firstInput.name)
+    }
+
+    func testListAllDeviceIDsIncludesInputDevices() {
+        let allIDs = AudioDeviceManager.listAllDeviceIDs()
+        let inputDevices = AudioDeviceManager.listInputDevices()
+
+        // Every input device should appear in the full device list
+        for device in inputDevices {
+            XCTAssertTrue(allIDs.contains(device.id), "Input device '\(device.name)' (id:\(device.id)) missing from allDeviceIDs")
+        }
+    }
+
+    func testSwitchingMicrophoneOverlayMessageText() {
+        XCTAssertEqual(OverlayMessage.switchingMicrophone.primaryText, "Switching microphone...")
+    }
+
+    func testSwitchingMicrophoneOverlayIsNotEqualToRecording() {
+        XCTAssertNotEqual(OverlayMessage.switchingMicrophone, OverlayMessage.recording)
+    }
+
     func testAppStatePipelineOwnershipAllowsSingleOwnerAtATime() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)

@@ -85,6 +85,65 @@ class AudioDeviceManager {
         return status == noErr
     }
 
+    /// Returns the input device matching the given name, if any.
+    static func inputDevice(named name: String) -> AudioInputDevice? {
+        listInputDevices().first { $0.name == name }
+    }
+
+    /// Returns any audio device matching the given name, even if it currently has
+    /// no input channels (e.g. a Bluetooth headset on A2DP that hasn't switched
+    /// to HFP yet). Setting such a device as the default input triggers the profile switch.
+    static func anyDevice(named name: String) -> AudioInputDevice? {
+        listAllDeviceIDs().compactMap { deviceID -> AudioInputDevice? in
+            guard let n = deviceName(deviceID: deviceID), n == name else { return nil }
+            return AudioInputDevice(id: deviceID, name: n)
+        }.first
+    }
+
+    /// Returns all system audio device IDs.
+    static func listAllDeviceIDs() -> [AudioDeviceID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else {
+            return []
+        }
+
+        let deviceCount = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceIDs) == noErr else {
+            return []
+        }
+
+        return deviceIDs
+    }
+
+    /// Registers a listener that fires whenever the system audio device list changes
+    /// (e.g. Bluetooth headset connects/disconnects). Returns an opaque ID for removal.
+    @discardableResult
+    static func onDeviceListChanged(_ handler: @escaping () -> Void) -> AudioObjectPropertyListenerBlock {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            handler()
+        }
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            DispatchQueue.main,
+            block
+        )
+        return block
+    }
+
     // MARK: - Private
 
     private static func hasInputChannels(deviceID: AudioDeviceID) -> Bool {
