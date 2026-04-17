@@ -3,10 +3,36 @@ import Foundation
 import FluidAudio
 
 protocol RecordingTranscriptionSession: AnyObject {
+    var allowsBatchFallback: Bool { get }
     var supportsConcurrentFinalization: Bool { get }
     func appendAudioChunk(_ samples: [Float])
     func finishTranscription() async -> String?
     func cancel()
+}
+
+private final class OrderedChunkProcessor {
+    private let queue = DispatchQueue(
+        label: "GhostPepper.OrderedChunkProcessor.queue",
+        qos: .userInitiated
+    )
+    private let group = DispatchGroup()
+
+    func enqueue(_ operation: @escaping () -> Void) {
+        group.enter()
+        queue.async { [group] in
+            defer { group.leave() }
+            operation()
+        }
+    }
+
+    func waitForDrain() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [group] in
+                group.wait()
+                continuation.resume()
+            }
+        }
+    }
 }
 
 struct StreamingRecordingHandle: Sendable {
@@ -34,6 +60,7 @@ final class SlidingWindowRecordingTranscriptionSession: RecordingTranscriptionSe
     private var didCleanup = false
     private var appendTask: Task<Void, Never>?
 
+    let allowsBatchFallback = false
     let supportsConcurrentFinalization = true
 
     init(handleFactory: @escaping @Sendable () async throws -> StreamingRecordingHandle) {
@@ -181,8 +208,10 @@ final class SlidingWindowRecordingTranscriptionSession: RecordingTranscriptionSe
 
         buffer.frameLength = AVAudioFrameCount(samples.count)
         if let channelData = buffer.floatChannelData?.pointee {
-            for (index, sample) in samples.enumerated() {
-                channelData[index] = sample
+            samples.withUnsafeBufferPointer { source in
+                if let baseAddress = source.baseAddress {
+                    channelData.update(from: baseAddress, count: samples.count)
+                }
             }
         }
 
@@ -209,6 +238,7 @@ final class QwenRecordingTranscriptionSession: RecordingTranscriptionSession, @u
     private var isFinishing = false
     private var appendTask: Task<Void, Never>?
 
+    let allowsBatchFallback = false
     let supportsConcurrentFinalization = false
 
     init(asrManager: Qwen3AsrManager) {
@@ -334,6 +364,7 @@ final class ChunkedRecordingTranscriptionSession: RecordingTranscriptionSession,
     private var isCancelled = false
     private var isFinishing = false
 
+    let allowsBatchFallback = true
     let supportsConcurrentFinalization = false
 
     init(
@@ -521,11 +552,15 @@ final class RecordingSessionCoordinator {
         finish: @escaping () -> [DiarizationSummary.Span],
         cleanup: @escaping () -> Void = {}
     ) {
+        let processor = OrderedChunkProcessor()
         appendAudioChunkHandler = { samples in
             session.appendAudioChunk(samples)
-            processAudioChunk(samples)
+            processor.enqueue {
+                processAudioChunk(samples)
+            }
         }
         finishHandler = {
+            await processor.waitForDrain()
             let result = await session.finalize(spans: finish())
             cleanup()
             return (filteredTranscript: result.filteredTranscript, summary: result.summary)

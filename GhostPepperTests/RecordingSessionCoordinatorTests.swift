@@ -81,6 +81,50 @@ final class RecordingSessionCoordinatorTests: XCTestCase {
         ])
     }
 
+    func testSessionBackedCoordinatorWaitsForQueuedChunkProcessingBeforeFinishing() async {
+        let capturedAudio = LockedValue<[Float]>([])
+        let processedChunksQueue = DispatchQueue(label: "RecordingSessionCoordinatorTests.processedChunks")
+        var processedChunks: [[Float]] = []
+        let session = FluidAudioSpeechSession(
+            sampleRate: 10,
+            transcribeFilteredAudio: { audio in
+                await capturedAudio.set(audio)
+                return "coordinator transcript"
+            }
+        )
+        let coordinator = RecordingSessionCoordinator(
+            session: session,
+            processAudioChunk: { samples in
+                Thread.sleep(forTimeInterval: 0.05)
+                processedChunksQueue.sync {
+                    processedChunks.append(samples)
+                }
+            },
+            finish: {
+                [
+                    .init(speakerID: "speaker-a", startTime: 0.0, endTime: 0.4),
+                    .init(speakerID: "speaker-b", startTime: 0.4, endTime: 0.7),
+                    .init(speakerID: "speaker-a", startTime: 0.74, endTime: 1.3),
+                ]
+            }
+        )
+
+        coordinator.appendAudioChunk([0, 1, 2, 3, 4])
+        coordinator.appendAudioChunk([5, 6, 7, 8, 9])
+        coordinator.appendAudioChunk([10, 11, 12, 13, 14])
+        coordinator.appendAudioChunk([15, 16, 17, 18, 19])
+
+        _ = await coordinator.finish()
+
+        let processed = processedChunksQueue.sync { processedChunks }
+        XCTAssertEqual(processed, [
+            [0, 1, 2, 3, 4],
+            [5, 6, 7, 8, 9],
+            [10, 11, 12, 13, 14],
+            [15, 16, 17, 18, 19],
+        ])
+    }
+
     func testChunkedRecordingTranscriptionSessionTranscribesDuringRecordingAndDeduplicatesOverlap() async {
         let transcribedChunks = LockedValue<[String]>([])
         let session = ChunkedRecordingTranscriptionSession(

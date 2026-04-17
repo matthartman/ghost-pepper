@@ -29,6 +29,7 @@ class AppState: ObservableObject {
         attemptedCleanup: Bool,
         cleanupUsedFallback: Bool
     )
+    typealias WindowContextProvider = @MainActor () async -> RecordingOCRPrefetchResult?
 
     private struct RecordingTranscriptionResult {
         let rawTranscription: String?
@@ -692,23 +693,21 @@ class AppState: ObservableObject {
         status = .transcribing
         overlay.show(message: .transcribing)
         activePerformanceTrace?.transcriptionStartAt = Date()
-
-        let archivedWindowContext: OCRContext?
+        let windowContextProvider: WindowContextProvider?
         if frontmostWindowContextEnabled {
-            let prefetchedContext = await recordingOCRPrefetch.resolve()
-            archivedWindowContext = prefetchedContext?.context
-            if activeCleanupAttempted == false {
-                activePerformanceTrace?.ocrCaptureDuration = prefetchedContext?.elapsed
+            windowContextProvider = { [weak self] in
+                await self?.recordingOCRPrefetch.resolve()
             }
         } else {
-            archivedWindowContext = nil
+            windowContextProvider = nil
         }
 
         let didProduceTranscript = await processRecordingResult(
             audioBuffer: buffer,
             recordingSessionCoordinator: recordingSessionCoordinator,
             recordingTranscriptionSession: recordingTranscriptionSession,
-            archivedWindowContext: archivedWindowContext,
+            archivedWindowContext: nil,
+            windowContextProvider: windowContextProvider,
             shouldPaste: true,
             shouldRecordDebugSnapshot: true
         )
@@ -736,13 +735,15 @@ class AppState: ObservableObject {
         audioBuffer: [Float],
         recordingSessionCoordinator: RecordingSessionCoordinator?,
         recordingTranscriptionSession: RecordingTranscriptionSession? = nil,
-        archivedWindowContext: OCRContext?
+        archivedWindowContext: OCRContext?,
+        windowContextProvider: WindowContextProvider? = nil
     ) async {
         _ = await processRecordingResult(
             audioBuffer: audioBuffer,
             recordingSessionCoordinator: recordingSessionCoordinator,
             recordingTranscriptionSession: recordingTranscriptionSession,
             archivedWindowContext: archivedWindowContext,
+            windowContextProvider: windowContextProvider,
             shouldPaste: false,
             shouldRecordDebugSnapshot: false
         )
@@ -753,6 +754,7 @@ class AppState: ObservableObject {
         recordingSessionCoordinator: RecordingSessionCoordinator?,
         recordingTranscriptionSession: RecordingTranscriptionSession?,
         archivedWindowContext: OCRContext?,
+        windowContextProvider: WindowContextProvider?,
         shouldPaste: Bool,
         shouldRecordDebugSnapshot: Bool
     ) async -> Bool {
@@ -763,6 +765,7 @@ class AppState: ObservableObject {
         )
 
         guard let text = transcriptionResult.rawTranscription else {
+            recordingOCRPrefetch.cancel()
             await archiveRecordingForLab(
                 audioBuffer: audioBuffer,
                 windowContext: archivedWindowContext,
@@ -778,9 +781,15 @@ class AppState: ObservableObject {
         }
 
         activePerformanceTrace?.transcriptionEndAt = Date()
-        let windowContext = archivedWindowContext
+        var windowContext = archivedWindowContext
         if cleanupEnabled && canAttemptCleanup {
             activeCleanupAttempted = true
+            if frontmostWindowContextEnabled,
+               windowContext == nil,
+               let resolvedWindowContext = await windowContextProvider?() {
+                windowContext = resolvedWindowContext.context
+                activePerformanceTrace?.ocrCaptureDuration = resolvedWindowContext.elapsed
+            }
             activePerformanceTrace?.cleanupStartAt = Date()
             status = .cleaningUp
             if shouldPaste {
@@ -789,6 +798,8 @@ class AppState: ObservableObject {
             if frontmostWindowContextEnabled, windowContext == nil {
                 debugLogStore.record(category: .ocr, message: "No frontmost-window OCR context was captured.")
             }
+        } else {
+            recordingOCRPrefetch.cancel()
         }
 
         let cleanupResult = await cleanedTranscriptionResult(text, windowContext: windowContext)
@@ -887,6 +898,15 @@ class AppState: ObservableObject {
            streamedTranscript.isEmpty == false {
             return RecordingTranscriptionResult(
                 rawTranscription: streamedTranscript,
+                speakerFilteringRan: recordingSessionCoordinator != nil,
+                diarizationSummary: diarizationSummary
+            )
+        }
+
+        if let recordingTranscriptionSession,
+           recordingTranscriptionSession.allowsBatchFallback == false {
+            return RecordingTranscriptionResult(
+                rawTranscription: nil,
                 speakerFilteringRan: recordingSessionCoordinator != nil,
                 diarizationSummary: diarizationSummary
             )
