@@ -80,6 +80,57 @@ final class RecordingSessionCoordinatorTests: XCTestCase {
             [15, 16, 17, 18, 19],
         ])
     }
+
+    func testChunkedRecordingTranscriptionSessionTranscribesDuringRecordingAndDeduplicatesOverlap() async {
+        let transcribedChunks = LockedValue<[String]>([])
+        let session = ChunkedRecordingTranscriptionSession(
+            chunkSizeSamples: 4,
+            shiftSamples: 2,
+            transcribeChunk: { samples in
+                switch samples {
+                case [1, 2, 3, 4]:
+                    await transcribedChunks.append("hello there")
+                    return "hello there"
+                case [3, 4, 5, 6]:
+                    await transcribedChunks.append("there world")
+                    return "there world"
+                case [5, 6]:
+                    await transcribedChunks.append("world again")
+                    return "world again"
+                default:
+                    return nil
+                }
+            }
+        )
+
+        session.appendAudioChunk([1, 2])
+        session.appendAudioChunk([3, 4])
+        session.appendAudioChunk([5, 6])
+
+        let transcript = await session.finishTranscription()
+
+        XCTAssertEqual(transcript, "hello there world again")
+        let processed = await transcribedChunks.get()
+        XCTAssertEqual(Set(processed), Set(["hello there", "there world", "world again"]))
+    }
+
+    func testChunkedRecordingTranscriptionSessionCancelPreventsPendingTranscriptFromReturning() async {
+        let session = ChunkedRecordingTranscriptionSession(
+            chunkSizeSamples: 4,
+            shiftSamples: 4,
+            transcribeChunk: { _ in
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                return "should not be returned"
+            }
+        )
+
+        session.appendAudioChunk([1, 2, 3, 4])
+        session.cancel()
+
+        let transcript = await session.finishTranscription()
+
+        XCTAssertNil(transcript)
+    }
 }
 
 private actor LockedValue<Value> {
@@ -95,5 +146,9 @@ private actor LockedValue<Value> {
 
     func set(_ value: Value) {
         self.value = value
+    }
+
+    func append<Element>(_ newElement: Element) where Value == [Element] {
+        value.append(newElement)
     }
 }

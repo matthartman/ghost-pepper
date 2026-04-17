@@ -47,6 +47,30 @@ private final class FakeAppRelauncher: AppRelaunching {
     }
 }
 
+private final class FakeRecordingTranscriptionSession: RecordingTranscriptionSession {
+    private(set) var appendedChunks: [[Float]] = []
+    private(set) var finishCallCount = 0
+    private(set) var cancelCallCount = 0
+    var finalTranscript: String?
+
+    init(finalTranscript: String?) {
+        self.finalTranscript = finalTranscript
+    }
+
+    func appendAudioChunk(_ samples: [Float]) {
+        appendedChunks.append(samples)
+    }
+
+    func finishTranscription() async -> String? {
+        finishCallCount += 1
+        return finalTranscript
+    }
+
+    func cancel() {
+        cancelCallCount += 1
+    }
+}
+
 @MainActor
 final class GhostPepperTests: XCTestCase {
     private let pepperChatAppStorageKeys = [
@@ -537,6 +561,127 @@ final class GhostPepperTests: XCTestCase {
         )
 
         XCTAssertFalse(reloadedAppState.playSounds)
+    }
+
+    func testPrepareRecordingSessionStreamsChunksToDiarizationAndTranscriptionSessions() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(finalTranscript: "streamed transcript")
+        var diarizationChunks: [[Float]] = []
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.ignoreOtherSpeakers = true
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.parakeetV3)
+            return transcriptionSession
+        }
+        appState.recordingSessionCoordinatorFactory = {
+            RecordingSessionCoordinator(
+                appendAudioChunk: { samples in
+                    diarizationChunks.append(samples)
+                },
+                finish: {
+                    (nil, Self.makeDiarizationSummary(usedFallback: true))
+                }
+            )
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3, 4])
+
+        XCTAssertNotNil(appState.activeRecordingSessionCoordinator)
+        XCTAssertEqual(diarizationChunks, [[1, 2, 3, 4]])
+        XCTAssertEqual(transcriptionSession.appendedChunks, [[1, 2, 3, 4]])
+    }
+
+    func testAppStateUsesRecordingTranscriptionSessionBeforeBatchFallback() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(finalTranscript: "streamed transcript")
+        let cleanedInputs = LockedValue<[String]>([])
+        var batchTranscriptionCallCount = 0
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.parakeetV3)
+            return transcriptionSession
+        }
+        appState.transcribeAudioBufferOverride = { _ in
+            batchTranscriptionCallCount += 1
+            return "batch transcript"
+        }
+        appState.cleanedTranscriptionResultOverride = { text, _ in
+            await cleanedInputs.append(text)
+            return (text: text, prompt: "", attemptedCleanup: false, cleanupUsedFallback: false)
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3])
+        appState.audioRecorder.onConvertedAudioChunk?([4, 5, 6])
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: appState.activeRecordingTranscriptionSession,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(transcriptionSession.appendedChunks, [[1, 2, 3], [4, 5, 6]])
+        XCTAssertEqual(transcriptionSession.finishCallCount, 1)
+        XCTAssertEqual(batchTranscriptionCallCount, 0)
+        let recordedCleanupInputs = await cleanedInputs.get()
+        XCTAssertEqual(recordedCleanupInputs, ["streamed transcript"])
+    }
+
+    func testAppStatePrefersFilteredSpeakerTranscriptOverStreamedTranscript() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(finalTranscript: "streamed transcript")
+        let cleanedInputs = LockedValue<[String]>([])
+        var batchTranscriptionCallCount = 0
+        let coordinator = RecordingSessionCoordinator(
+            appendAudioChunk: { _ in },
+            finish: {
+                ("speaker filtered transcript", Self.makeDiarizationSummary(usedFallback: false))
+            }
+        )
+
+        appState.transcribeAudioBufferOverride = { _ in
+            batchTranscriptionCallCount += 1
+            return "batch transcript"
+        }
+        appState.cleanedTranscriptionResultOverride = { text, _ in
+            await cleanedInputs.append(text)
+            return (text: text, prompt: "", attemptedCleanup: false, cleanupUsedFallback: false)
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4],
+            recordingSessionCoordinator: coordinator,
+            recordingTranscriptionSession: transcriptionSession,
+            archivedWindowContext: nil
+        )
+
+        let recordedCleanupInputs = await cleanedInputs.get()
+        XCTAssertEqual(recordedCleanupInputs, ["speaker filtered transcript"])
+        XCTAssertEqual(transcriptionSession.cancelCallCount, 1)
+        XCTAssertEqual(transcriptionSession.finishCallCount, 0)
+        XCTAssertEqual(batchTranscriptionCallCount, 0)
     }
 
     func testAppStatePipelineOwnershipAllowsSingleOwnerAtATime() throws {
