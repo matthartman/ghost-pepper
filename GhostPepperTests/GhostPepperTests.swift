@@ -149,14 +149,14 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(AppStatus.error.rawValue, "Error")
     }
 
-    func testEmptyTranscriptionDispositionCancelsShortRecordings() {
+    func testEmptyTranscriptionDispositionCancelsSubThresholdRecordings() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 7_999),
             .cancel
         )
     }
 
-    func testEmptyTranscriptionDispositionShowsNoSoundForFiveSecondsOrLonger() {
+    func testEmptyTranscriptionDispositionShowsNoSoundDetectedAtThresholdAndAbove() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 8_000),
             .showNoSoundDetected
