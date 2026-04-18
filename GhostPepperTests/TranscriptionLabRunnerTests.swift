@@ -122,6 +122,86 @@ final class TranscriptionLabRunnerTests: XCTestCase {
         }
     }
 
+    func testRunnerLoadsWhisperCppLargeV3TurboQuantizedForRerunTranscription() async throws {
+        let entry = TranscriptionLabEntry(
+            id: UUID(),
+            createdAt: Date(),
+            audioFileName: "sample.bin",
+            audioDuration: 1.5,
+            windowContext: OCRContext(windowContents: "whisper.cpp"),
+            rawTranscription: "raw",
+            correctedTranscription: "corrected",
+            speechModelID: "openai_whisper-small.en",
+            cleanupModelName: "Qwen 3.5 4B (full cleanup)",
+            cleanupUsedFallback: false
+        )
+        var loadedSpeechModels: [String] = []
+        let runner = TranscriptionLabRunner(
+            loadAudioBuffer: { _ in [0.1, 0.2] },
+            loadSpeechModel: { modelID in
+                loadedSpeechModels.append(modelID)
+            },
+            transcribe: { _ in "whisper.cpp raw text" },
+            clean: { _, _, _ in
+                TextCleanerResult(
+                    text: "",
+                    performance: TextCleanerPerformance(modelCallDuration: nil, postProcessDuration: nil)
+                )
+            },
+            correctionStore: CorrectionStore(defaults: UserDefaults(suiteName: #function)!)
+        )
+
+        let rawTranscription = try await runner.rerunTranscription(
+            entry: entry,
+            speechModelID: "ggml-large-v3-turbo-q5_0",
+            acquirePipeline: { true },
+            releasePipeline: {}
+        )
+
+        XCTAssertEqual(loadedSpeechModels, ["ggml-large-v3-turbo-q5_0"])
+        XCTAssertEqual(rawTranscription, "whisper.cpp raw text")
+    }
+
+    func testRunnerLoadsWhisperCppLargeV3TurboForRerunTranscription() async throws {
+        let entry = TranscriptionLabEntry(
+            id: UUID(),
+            createdAt: Date(),
+            audioFileName: "sample.bin",
+            audioDuration: 1.5,
+            windowContext: OCRContext(windowContents: "whisper.cpp full"),
+            rawTranscription: "raw",
+            correctedTranscription: "corrected",
+            speechModelID: "openai_whisper-small.en",
+            cleanupModelName: "Qwen 3.5 4B (full cleanup)",
+            cleanupUsedFallback: false
+        )
+        var loadedSpeechModels: [String] = []
+        let runner = TranscriptionLabRunner(
+            loadAudioBuffer: { _ in [0.1, 0.2] },
+            loadSpeechModel: { modelID in
+                loadedSpeechModels.append(modelID)
+            },
+            transcribe: { _ in "whisper.cpp full raw text" },
+            clean: { _, _, _ in
+                TextCleanerResult(
+                    text: "",
+                    performance: TextCleanerPerformance(modelCallDuration: nil, postProcessDuration: nil)
+                )
+            },
+            correctionStore: CorrectionStore(defaults: UserDefaults(suiteName: #function)!)
+        )
+
+        let rawTranscription = try await runner.rerunTranscription(
+            entry: entry,
+            speechModelID: "ggml-large-v3-turbo",
+            acquirePipeline: { true },
+            releasePipeline: {}
+        )
+
+        XCTAssertEqual(loadedSpeechModels, ["ggml-large-v3-turbo"])
+        XCTAssertEqual(rawTranscription, "whisper.cpp full raw text")
+    }
+
     func testRunnerReportsCleanupFallbackWhenModelDidNotRun() async throws {
         let runner = TranscriptionLabRunner(
             loadAudioBuffer: { _ in [0.1] },
