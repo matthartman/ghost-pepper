@@ -892,7 +892,8 @@ class AppState: ObservableObject {
             )
         }
 
-        if let recordingTranscriptionSession,
+        if concurrentRecordingTranscriptionSession == nil,
+           let recordingTranscriptionSession,
            let streamedTranscript = await recordingTranscriptionSession.finishTranscription()?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            streamedTranscript.isEmpty == false {

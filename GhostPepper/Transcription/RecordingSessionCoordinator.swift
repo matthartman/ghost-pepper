@@ -60,7 +60,7 @@ final class SlidingWindowRecordingTranscriptionSession: RecordingTranscriptionSe
     private var didCleanup = false
     private var appendTask: Task<Void, Never>?
 
-    let allowsBatchFallback = false
+    let allowsBatchFallback = true
     let supportsConcurrentFinalization = true
 
     init(handleFactory: @escaping @Sendable () async throws -> StreamingRecordingHandle) {
