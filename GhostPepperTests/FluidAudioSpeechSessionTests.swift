@@ -2,7 +2,7 @@ import XCTest
 @testable import GhostPepper
 
 final class FluidAudioSpeechSessionTests: XCTestCase {
-    func testFinalizeSelectsEarliestSubstantialSpeakerKeepsTargetSpansAndMergesNearbyGaps() async {
+    func testFinalizeSelectsDominantSpeakerKeepsTargetSpansAndMergesNearbyGaps() async {
         let capturedAudio = LockedValue<[Float]>([])
         let session = FluidAudioSpeechSession(
             sampleRate: 10,
@@ -42,6 +42,67 @@ final class FluidAudioSpeechSessionTests: XCTestCase {
         ])
         let captured = await capturedAudio.get()
         XCTAssertEqual(captured, [0, 1, 8, 9, 10, 13, 14, 15, 16, 17])
+    }
+
+    func testFinalizeSelectsDominantSpeakerWhenAnEarlierSpeakerCrossesThreshold() async {
+        let capturedAudio = LockedValue<[Float]>([])
+        let session = FluidAudioSpeechSession(
+            sampleRate: 10,
+            transcribeFilteredAudio: { audio in
+                await capturedAudio.set(audio)
+                return "dominant speaker transcript"
+            }
+        )
+
+        session.appendAudioChunk(Array(0..<50).map(Float.init))
+
+        let result = await session.finalize(
+            spans: [
+                .init(speakerID: "speaker-a", startTime: 0.4, endTime: 0.9),
+                .init(speakerID: "speaker-a", startTime: 1.2, endTime: 1.7),
+                .init(speakerID: "speaker-b", startTime: 2.0, endTime: 4.4),
+            ]
+        )
+
+        XCTAssertEqual(result.filteredTranscript, "dominant speaker transcript")
+        XCTAssertEqual(result.summary.targetSpeakerID, "speaker-b")
+        XCTAssertEqual(result.summary.targetSpeakerDuration, 2.4, accuracy: 0.0001)
+        XCTAssertEqual(result.summary.keptAudioDuration, 2.4, accuracy: 0.0001)
+        XCTAssertFalse(result.summary.usedFallback)
+        XCTAssertEqual(result.summary.spans.map(\.isKept), [false, false, true])
+        XCTAssertEqual(result.summary.mergedKeptSpans, [
+            .init(startTime: 2.0, endTime: 4.4),
+        ])
+        let captured = await capturedAudio.get()
+        XCTAssertEqual(captured, Array(20..<44).map(Float.init))
+    }
+
+    func testFinalizeFallsBackWhenSpeakerDurationsAreTooCloseToCall() async {
+        let transcriptionCallCount = LockedValue(0)
+        let session = FluidAudioSpeechSession(
+            sampleRate: 10,
+            transcribeFilteredAudio: { _ in
+                await transcriptionCallCount.withValue { $0 += 1 }
+                return "unexpected"
+            }
+        )
+
+        session.appendAudioChunk(Array(0..<40).map(Float.init))
+
+        let result = await session.finalize(
+            spans: [
+                .init(speakerID: "speaker-a", startTime: 0.0, endTime: 1.8),
+                .init(speakerID: "speaker-b", startTime: 1.8, endTime: 3.4),
+            ]
+        )
+
+        XCTAssertNil(result.filteredTranscript)
+        XCTAssertTrue(result.summary.usedFallback)
+        XCTAssertEqual(result.summary.fallbackReason, .ambiguousDominantSpeaker)
+        XCTAssertNil(result.summary.targetSpeakerID)
+        XCTAssertTrue(result.summary.mergedKeptSpans.isEmpty)
+        let transcriptionCallCountValue = await transcriptionCallCount.get()
+        XCTAssertEqual(transcriptionCallCountValue, 0)
     }
 
     func testFinalizeFallsBackWhenNoSpeakerReachesThreshold() async {

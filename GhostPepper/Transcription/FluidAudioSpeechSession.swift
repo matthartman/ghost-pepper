@@ -6,8 +6,15 @@ final class FluidAudioSpeechSession {
         let summary: DiarizationSummary
     }
 
+    private enum TargetSpeakerSelection {
+        case selected(String)
+        case noSpeakerReachedThreshold
+        case ambiguousDominantSpeaker
+    }
+
     private let sampleRate: Int
     private let substantialSpeakerThreshold: TimeInterval
+    private let dominantSpeakerRatioThreshold: Double
     private let minimumKeptAudioDuration: TimeInterval
     private let mergeGapTolerance: TimeInterval
     private let transcribeFilteredAudio: @Sendable ([Float]) async -> String?
@@ -18,12 +25,14 @@ final class FluidAudioSpeechSession {
     init(
         sampleRate: Int = 16_000,
         substantialSpeakerThreshold: TimeInterval = 0.5,
+        dominantSpeakerRatioThreshold: Double = 1.25,
         minimumKeptAudioDuration: TimeInterval = 0.75,
         mergeGapTolerance: TimeInterval = 0.05,
         transcribeFilteredAudio: @escaping @Sendable ([Float]) async -> String?
     ) {
         self.sampleRate = sampleRate
         self.substantialSpeakerThreshold = substantialSpeakerThreshold
+        self.dominantSpeakerRatioThreshold = dominantSpeakerRatioThreshold
         self.minimumKeptAudioDuration = minimumKeptAudioDuration
         self.mergeGapTolerance = mergeGapTolerance
         self.transcribeFilteredAudio = transcribeFilteredAudio
@@ -62,7 +71,87 @@ final class FluidAudioSpeechSession {
             )
         }
 
-        guard let targetSpeakerID = selectTargetSpeakerID(from: sortedSpans) else {
+        switch selectTargetSpeaker(in: sortedSpans) {
+        case .selected(let targetSpeakerID):
+            let keptSpans = sortedSpans.map { span in
+                DiarizationSummary.Span(
+                    speakerID: span.speakerID,
+                    startTime: span.startTime,
+                    endTime: span.endTime,
+                    isKept: span.speakerID == targetSpeakerID
+                )
+            }
+            let targetSpeakerDuration = keptSpans
+                .filter(\.isKept)
+                .reduce(into: 0.0) { total, span in
+                    total += span.duration
+                }
+            let mergedKeptSpans = mergeKeptSpans(in: keptSpans)
+            let keptAudioDuration = mergedKeptSpans.reduce(into: 0.0) { total, span in
+                total += span.duration
+            }
+
+            guard keptAudioDuration >= minimumKeptAudioDuration else {
+                return FinalizationResult(
+                    filteredTranscript: nil,
+                    summary: DiarizationSummary(
+                        spans: keptSpans,
+                        mergedKeptSpans: mergedKeptSpans,
+                        targetSpeakerID: targetSpeakerID,
+                        targetSpeakerDuration: targetSpeakerDuration,
+                        keptAudioDuration: keptAudioDuration,
+                        usedFallback: true,
+                        fallbackReason: .insufficientKeptAudio
+                    )
+                )
+            }
+
+            guard let filteredAudio = extractAudio(from: mergedKeptSpans) else {
+                return FinalizationResult(
+                    filteredTranscript: nil,
+                    summary: DiarizationSummary(
+                        spans: keptSpans,
+                        mergedKeptSpans: mergedKeptSpans,
+                        targetSpeakerID: targetSpeakerID,
+                        targetSpeakerDuration: targetSpeakerDuration,
+                        keptAudioDuration: keptAudioDuration,
+                        usedFallback: true,
+                        fallbackReason: .filteredAudioExtractionFailed
+                    )
+                )
+            }
+
+            let filteredTranscript = await transcribeFilteredAudio(filteredAudio)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard let filteredTranscript, filteredTranscript.isEmpty == false else {
+                return FinalizationResult(
+                    filteredTranscript: nil,
+                    summary: DiarizationSummary(
+                        spans: keptSpans,
+                        mergedKeptSpans: mergedKeptSpans,
+                        targetSpeakerID: targetSpeakerID,
+                        targetSpeakerDuration: targetSpeakerDuration,
+                        keptAudioDuration: keptAudioDuration,
+                        usedFallback: true,
+                        fallbackReason: .emptyFilteredTranscription
+                    )
+                )
+            }
+
+            return FinalizationResult(
+                filteredTranscript: filteredTranscript,
+                summary: DiarizationSummary(
+                    spans: keptSpans,
+                    mergedKeptSpans: mergedKeptSpans,
+                    targetSpeakerID: targetSpeakerID,
+                    targetSpeakerDuration: targetSpeakerDuration,
+                    keptAudioDuration: keptAudioDuration,
+                    usedFallback: false,
+                    fallbackReason: nil
+                )
+            )
+        case .noSpeakerReachedThreshold:
             return FinalizationResult(
                 filteredTranscript: nil,
                 summary: DiarizationSummary(
@@ -75,102 +164,60 @@ final class FluidAudioSpeechSession {
                     fallbackReason: .noSpeakerReachedThreshold
                 )
             )
-        }
-
-        let keptSpans = sortedSpans.map { span in
-            DiarizationSummary.Span(
-                speakerID: span.speakerID,
-                startTime: span.startTime,
-                endTime: span.endTime,
-                isKept: span.speakerID == targetSpeakerID
-            )
-        }
-        let targetSpeakerDuration = keptSpans
-            .filter(\.isKept)
-            .reduce(into: 0.0) { total, span in
-                total += span.duration
-            }
-        let mergedKeptSpans = mergeKeptSpans(in: keptSpans)
-        let keptAudioDuration = mergedKeptSpans.reduce(into: 0.0) { total, span in
-            total += span.duration
-        }
-
-        guard keptAudioDuration >= minimumKeptAudioDuration else {
+        case .ambiguousDominantSpeaker:
             return FinalizationResult(
                 filteredTranscript: nil,
                 summary: DiarizationSummary(
-                    spans: keptSpans,
-                    mergedKeptSpans: mergedKeptSpans,
-                    targetSpeakerID: targetSpeakerID,
-                    targetSpeakerDuration: targetSpeakerDuration,
-                    keptAudioDuration: keptAudioDuration,
+                    spans: sortedSpans,
+                    mergedKeptSpans: [],
+                    targetSpeakerID: nil,
+                    targetSpeakerDuration: 0,
+                    keptAudioDuration: 0,
                     usedFallback: true,
-                    fallbackReason: .insufficientKeptAudio
+                    fallbackReason: .ambiguousDominantSpeaker
                 )
             )
         }
-
-        guard let filteredAudio = extractAudio(from: mergedKeptSpans) else {
-            return FinalizationResult(
-                filteredTranscript: nil,
-                summary: DiarizationSummary(
-                    spans: keptSpans,
-                    mergedKeptSpans: mergedKeptSpans,
-                    targetSpeakerID: targetSpeakerID,
-                    targetSpeakerDuration: targetSpeakerDuration,
-                    keptAudioDuration: keptAudioDuration,
-                    usedFallback: true,
-                    fallbackReason: .filteredAudioExtractionFailed
-                )
-            )
-        }
-
-        let filteredTranscript = await transcribeFilteredAudio(filteredAudio)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard let filteredTranscript, filteredTranscript.isEmpty == false else {
-            return FinalizationResult(
-                filteredTranscript: nil,
-                summary: DiarizationSummary(
-                    spans: keptSpans,
-                    mergedKeptSpans: mergedKeptSpans,
-                    targetSpeakerID: targetSpeakerID,
-                    targetSpeakerDuration: targetSpeakerDuration,
-                    keptAudioDuration: keptAudioDuration,
-                    usedFallback: true,
-                    fallbackReason: .emptyFilteredTranscription
-                )
-            )
-        }
-
-        return FinalizationResult(
-            filteredTranscript: filteredTranscript,
-            summary: DiarizationSummary(
-                spans: keptSpans,
-                mergedKeptSpans: mergedKeptSpans,
-                targetSpeakerID: targetSpeakerID,
-                targetSpeakerDuration: targetSpeakerDuration,
-                keptAudioDuration: keptAudioDuration,
-                usedFallback: false,
-                fallbackReason: nil
-            )
-        )
     }
 
-    private func selectTargetSpeakerID(from spans: [DiarizationSummary.Span]) -> String? {
+    private func selectTargetSpeaker(in spans: [DiarizationSummary.Span]) -> TargetSpeakerSelection {
         var durationsBySpeaker: [String: TimeInterval] = [:]
+        var firstStartBySpeaker: [String: TimeInterval] = [:]
 
         for span in spans {
             durationsBySpeaker[span.speakerID, default: 0] += span.duration
+            firstStartBySpeaker[span.speakerID] = min(
+                firstStartBySpeaker[span.speakerID] ?? span.startTime,
+                span.startTime
+            )
         }
 
-        for span in spans {
-            if let duration = durationsBySpeaker[span.speakerID], duration >= substantialSpeakerThreshold {
-                return span.speakerID
+        let rankedSpeakers = durationsBySpeaker.map { speakerID, duration in
+            (
+                speakerID: speakerID,
+                duration: duration,
+                firstStartTime: firstStartBySpeaker[speakerID] ?? .greatestFiniteMagnitude
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.duration == rhs.duration {
+                return lhs.firstStartTime < rhs.firstStartTime
             }
+
+            return lhs.duration > rhs.duration
         }
 
-        return nil
+        guard let targetSpeaker = rankedSpeakers.first,
+              targetSpeaker.duration >= substantialSpeakerThreshold else {
+            return .noSpeakerReachedThreshold
+        }
+
+        if let runnerUpSpeaker = rankedSpeakers.dropFirst().first,
+           targetSpeaker.duration < runnerUpSpeaker.duration * dominantSpeakerRatioThreshold {
+            return .ambiguousDominantSpeaker
+        }
+
+        return .selected(targetSpeaker.speakerID)
     }
 
     private func mergeKeptSpans(in spans: [DiarizationSummary.Span]) -> [DiarizationSummary.MergedSpan] {
