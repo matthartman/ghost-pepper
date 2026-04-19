@@ -282,6 +282,11 @@ struct SettingsView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        // Make the full row (icon + text + surrounding padding + trailing
+                        // whitespace) hit-testable. Without this, SwiftUI hit-tests a plain
+                        // Button against the opaque pixels of its label — so clicks landed only
+                        // on the visible text/icon, not the empty space in the row. (Fixes #74.)
+                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(selectedSection == section ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.22) : .clear)
@@ -297,7 +302,6 @@ struct SettingsView: View {
                         )
                     }
                     .buttonStyle(.plain)
-                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
                 Spacer(minLength: 0)
