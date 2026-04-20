@@ -12,6 +12,7 @@ final class ModelManager: ObservableObject {
     private var fluidAudioManager: AsrManager?
     private var fluidAudioModels: AsrModels?
     private var sortformerModels: SortformerModels?
+    private var diarizerManager: DiarizerManager?
     /// Stored as `Any?` because `Qwen3AsrManager` is `@available(macOS 15, *)`
     /// and the app deploys to macOS 14. Cast at use sites under `#available`.
     private var qwen3AsrManagerStorage: Any?
@@ -297,6 +298,11 @@ final class ModelManager: ObservableObject {
         }
     }
 
+    func extractSpeakerEmbedding(from audioBuffer: [Float]) async throws -> [Float] {
+        let diarizerManager = try await loadDiarizerManager()
+        return try diarizerManager.extractSpeakerEmbedding(from: audioBuffer)
+    }
+
     private func loadWhisperModel(named modelName: String) async throws {
         let modelsDir = Self.whisperModelsDirectory
         try? FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
@@ -423,6 +429,18 @@ final class ModelManager: ObservableObject {
         let models = try await SortformerModels.loadFromHuggingFace(config: .default)
         sortformerModels = models
         return models
+    }
+
+    private func loadDiarizerManager() async throws -> DiarizerManager {
+        if let diarizerManager {
+            return diarizerManager
+        }
+
+        let models = try await DiarizerModels.downloadIfNeeded()
+        let diarizerManager = DiarizerManager()
+        diarizerManager.initialize(models: models)
+        self.diarizerManager = diarizerManager
+        return diarizerManager
     }
 
     private static func diarizationSpans(from segments: [DiarizerSegment]) -> [DiarizationSummary.Span] {

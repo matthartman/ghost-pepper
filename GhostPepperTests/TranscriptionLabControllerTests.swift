@@ -156,7 +156,17 @@ final class TranscriptionLabControllerTests: XCTestCase {
                                 text: "tagged rerun"
                             )
                         ]
-                    )
+                    ),
+                    speakerProfiles: [
+                        TranscriptionLabSpeakerProfile(
+                            entryID: entry.id,
+                            speakerID: "Speaker 0",
+                            displayName: "Jesse",
+                            isMe: true,
+                            recognizedVoiceID: UUID(uuidString: "00000000-0000-0000-0000-0000000000AA"),
+                            evidenceTranscript: "tagged rerun"
+                        )
+                    ]
                 )
             },
             runCleanup: { rerunEntry, rawText, cleanupModelKind, prompt, includeWindowContext in
@@ -205,12 +215,90 @@ final class TranscriptionLabControllerTests: XCTestCase {
         XCTAssertEqual(
             controller.displayedSpeakerTaggedTranscriptText,
             """
-            [Speaker 0 | 0.0s-0.6s]
+            [Jesse | 0.0s-0.6s]
             tagged rerun
             """
         )
         XCTAssertNil(controller.errorMessage)
         XCTAssertNil(controller.runningStage)
+    }
+
+    func testUpdatingLocalSpeakerIdentityCanPushChangesToGlobalVoicePrint() {
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "fluid_parakeet-v3",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)"
+        )
+        let recognizedVoiceID = UUID(uuidString: "00000000-0000-0000-0000-0000000000BB")!
+        var storedProfiles = [
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 0",
+                displayName: "Recognized Voice 1",
+                isMe: false,
+                recognizedVoiceID: recognizedVoiceID,
+                evidenceTranscript: "Original evidence"
+            )
+        ]
+        var recognizedVoices = [
+            makeRecognizedVoiceProfile(
+                id: recognizedVoiceID,
+                displayName: "Recognized Voice 1",
+                isMe: false
+            )
+        ]
+        var savedProfiles: [TranscriptionLabSpeakerProfile] = []
+        var notifyRecognizedVoicesDidChangeCallCount = 0
+
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            defaultSpeakerTaggingEnabled: false,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _, _ in
+                TranscriptionLabTranscriptionResult(rawTranscription: "")
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            loadSpeakerProfiles: { _ in storedProfiles },
+            saveSpeakerProfile: { profile in
+                storedProfiles = [profile]
+                savedProfiles.append(profile)
+            },
+            loadRecognizedVoices: { recognizedVoices },
+            updateGlobalVoiceProfile: { localProfile in
+                var updatedProfile = recognizedVoices[0]
+                updatedProfile.displayName = localProfile.displayName
+                updatedProfile.isMe = localProfile.isMe
+                updatedProfile.updatedAt = Date(timeIntervalSince1970: 200)
+                recognizedVoices[0] = updatedProfile
+                return updatedProfile
+            },
+            notifyRecognizedVoicesDidChange: {
+                notifyRecognizedVoicesDidChangeCallCount += 1
+            }
+        )
+
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+
+        controller.updateSpeakerDisplayName("Jesse", for: "Speaker 0")
+        XCTAssertEqual(savedProfiles.last?.displayName, "Jesse")
+        XCTAssertEqual(controller.displayName(for: "Speaker 0"), "Jesse")
+        XCTAssertTrue(controller.hasPendingGlobalVoiceUpdate(for: "Speaker 0"))
+
+        controller.setSpeakerIsMe(true, for: "Speaker 0")
+        XCTAssertEqual(savedProfiles.last?.isMe, true)
+        XCTAssertTrue(controller.hasPendingGlobalVoiceUpdate(for: "Speaker 0"))
+
+        controller.pushSpeakerProfileToGlobalVoice(for: "Speaker 0")
+
+        XCTAssertEqual(recognizedVoices[0].displayName, "Jesse")
+        XCTAssertTrue(recognizedVoices[0].isMe)
+        XCTAssertFalse(controller.hasPendingGlobalVoiceUpdate(for: "Speaker 0"))
+        XCTAssertEqual(notifyRecognizedVoicesDidChangeCallCount, 1)
     }
 
     func testDisplayedExperimentOutputsDefaultToOriginalOutputs() {
@@ -481,6 +569,23 @@ final class TranscriptionLabControllerTests: XCTestCase {
             speakerFilteringRan: speakerFilteringRan,
             speakerFilteringUsedFallback: speakerFilteringUsedFallback,
             diarizationSummary: diarizationSummary
+        )
+    }
+
+    private func makeRecognizedVoiceProfile(
+        id: UUID,
+        displayName: String,
+        isMe: Bool
+    ) -> RecognizedVoiceProfile {
+        RecognizedVoiceProfile(
+            id: id,
+            displayName: displayName,
+            isMe: isMe,
+            embedding: Array(repeating: 0.25, count: 256),
+            updateCount: 1,
+            createdAt: Date(timeIntervalSince1970: 50),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            evidenceTranscript: "Sample evidence"
         )
     }
 }

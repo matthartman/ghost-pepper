@@ -17,6 +17,11 @@ final class TranscriptionLabController: ObservableObject {
         _ prompt: String,
         _ includeWindowContext: Bool
     ) async throws -> TranscriptionLabCleanupResult
+    typealias SpeakerProfileLoader = (_ entryID: UUID) throws -> [TranscriptionLabSpeakerProfile]
+    typealias SpeakerProfileSaver = (_ profile: TranscriptionLabSpeakerProfile) throws -> Void
+    typealias RecognizedVoiceLoader = () throws -> [RecognizedVoiceProfile]
+    typealias GlobalVoiceProfileUpdater = (_ localProfile: TranscriptionLabSpeakerProfile) throws -> RecognizedVoiceProfile?
+    typealias RecognizedVoicesChangeObserver = () -> Void
     typealias SelectedSpeechModelSynchronizer = (_ speechModelID: String) -> Void
     typealias SpeakerTaggingSynchronizer = (_ speakerTaggingEnabled: Bool) -> Void
     typealias SelectedCleanupModelSynchronizer = (_ cleanupModelKind: LocalCleanupModelKind) -> Void
@@ -29,9 +34,24 @@ final class TranscriptionLabController: ObservableObject {
     struct DiarizationVisualization: Equatable {
         struct Span: Equatable {
             let speakerID: String
+            let displayName: String
             let startTime: TimeInterval
             let endTime: TimeInterval
             let isKept: Bool
+
+            init(
+                speakerID: String,
+                displayName: String? = nil,
+                startTime: TimeInterval,
+                endTime: TimeInterval,
+                isKept: Bool
+            ) {
+                self.speakerID = speakerID
+                self.displayName = displayName ?? speakerID
+                self.startTime = startTime
+                self.endTime = endTime
+                self.isKept = isKept
+            }
         }
 
         let audioDuration: TimeInterval
@@ -50,6 +70,18 @@ final class TranscriptionLabController: ObservableObject {
             }
 
             return speakerIDs
+        }
+
+        func displayName(for speakerID: String) -> String {
+            spans.first(where: { $0.speakerID == speakerID })?.displayName ?? speakerID
+        }
+
+        var targetDisplayName: String? {
+            guard let targetSpeakerID else {
+                return nil
+            }
+
+            return displayName(for: targetSpeakerID)
         }
     }
 
@@ -78,6 +110,7 @@ final class TranscriptionLabController: ObservableObject {
     @Published private(set) var experimentCleanupDuration: TimeInterval?
     @Published private(set) var experimentDiarizationSummary: DiarizationSummary?
     @Published private(set) var experimentSpeakerTaggedTranscript: SpeakerTaggedTranscript?
+    @Published private(set) var speakerProfiles: [TranscriptionLabSpeakerProfile] = []
     @Published private(set) var latestCleanupTranscript: TranscriptionLabCleanupTranscript?
     @Published private(set) var runningStage: RunningStage?
     @Published private(set) var errorMessage: String?
@@ -87,10 +120,16 @@ final class TranscriptionLabController: ObservableObject {
     private let audioURLForEntry: AudioURLProvider
     private let runTranscription: TranscriptionRunner
     private let runCleanup: CleanupRunner
+    private let loadSpeakerProfiles: SpeakerProfileLoader
+    private let saveSpeakerProfile: SpeakerProfileSaver
+    private let loadRecognizedVoices: RecognizedVoiceLoader
+    private let updateGlobalVoiceProfile: GlobalVoiceProfileUpdater
+    private let notifyRecognizedVoicesDidChange: RecognizedVoicesChangeObserver
     private let syncSelectedSpeechModelID: SelectedSpeechModelSynchronizer
     private let syncSpeakerTaggingEnabled: SpeakerTaggingSynchronizer
     private let syncSelectedCleanupModelKind: SelectedCleanupModelSynchronizer
     private var originalStageTimingsByEntryID: [UUID: TranscriptionLabStageTimings] = [:]
+    private var recognizedVoicesByID: [UUID: RecognizedVoiceProfile] = [:]
     private var suppressSelectionSynchronization = false
 
     init(
@@ -102,6 +141,11 @@ final class TranscriptionLabController: ObservableObject {
         audioURLForEntry: @escaping AudioURLProvider,
         runTranscription: @escaping TranscriptionRunner,
         runCleanup: @escaping CleanupRunner,
+        loadSpeakerProfiles: @escaping SpeakerProfileLoader = { _ in [] },
+        saveSpeakerProfile: @escaping SpeakerProfileSaver = { _ in },
+        loadRecognizedVoices: @escaping RecognizedVoiceLoader = { [] },
+        updateGlobalVoiceProfile: @escaping GlobalVoiceProfileUpdater = { _ in nil },
+        notifyRecognizedVoicesDidChange: @escaping RecognizedVoicesChangeObserver = {},
         syncSelectedSpeechModelID: @escaping SelectedSpeechModelSynchronizer = { _ in },
         syncSpeakerTaggingEnabled: @escaping SpeakerTaggingSynchronizer = { _ in },
         syncSelectedCleanupModelKind: @escaping SelectedCleanupModelSynchronizer = { _ in }
@@ -114,6 +158,11 @@ final class TranscriptionLabController: ObservableObject {
         self.audioURLForEntry = audioURLForEntry
         self.runTranscription = runTranscription
         self.runCleanup = runCleanup
+        self.loadSpeakerProfiles = loadSpeakerProfiles
+        self.saveSpeakerProfile = saveSpeakerProfile
+        self.loadRecognizedVoices = loadRecognizedVoices
+        self.updateGlobalVoiceProfile = updateGlobalVoiceProfile
+        self.notifyRecognizedVoicesDidChange = notifyRecognizedVoicesDidChange
         self.syncSelectedSpeechModelID = syncSelectedSpeechModelID
         self.syncSpeakerTaggingEnabled = syncSpeakerTaggingEnabled
         self.syncSelectedCleanupModelKind = syncSelectedCleanupModelKind
@@ -180,6 +229,18 @@ final class TranscriptionLabController: ObservableObject {
         return selectedEntry?.correctedTranscription ?? ""
     }
 
+    var speakerProfilesInDisplayOrder: [TranscriptionLabSpeakerProfile] {
+        let profilesBySpeakerID = Dictionary(uniqueKeysWithValues: speakerProfiles.map { ($0.speakerID, $0) })
+        let orderedSpeakerIDs = diarizationVisualization?.speakerIDsInDisplayOrder ?? speakerProfiles.map(\.speakerID)
+
+        var orderedProfiles = orderedSpeakerIDs.compactMap { profilesBySpeakerID[$0] }
+        let remainingProfiles = speakerProfiles.filter { profile in
+            orderedSpeakerIDs.contains(profile.speakerID) == false
+        }
+        orderedProfiles.append(contentsOf: remainingProfiles)
+        return orderedProfiles
+    }
+
     var displayedSpeakerTaggedTranscriptText: String? {
         guard let experimentSpeakerTaggedTranscript else {
             return nil
@@ -188,7 +249,7 @@ final class TranscriptionLabController: ObservableObject {
         return experimentSpeakerTaggedTranscript.segments
             .map { segment in
                 """
-                [\(segment.speakerID) | \(formattedDuration(segment.startTime))-\(formattedDuration(segment.endTime))]
+                [\(displayName(for: segment.speakerID) ?? segment.speakerID) | \(formattedDuration(segment.startTime))-\(formattedDuration(segment.endTime))]
                 \(segment.text)
                 """
             }
@@ -230,12 +291,88 @@ final class TranscriptionLabController: ObservableObject {
             spans: summary.spans.map {
                 DiarizationVisualization.Span(
                     speakerID: $0.speakerID,
+                    displayName: displayName(for: $0.speakerID) ?? $0.speakerID,
                     startTime: $0.startTime,
                     endTime: $0.endTime,
                     isKept: $0.isKept
                 )
             }
         )
+    }
+
+    func displayName(for speakerID: String) -> String? {
+        if let profile = speakerProfile(for: speakerID) {
+            let normalizedLocalName = normalizedDisplayName(profile.displayName)
+            if normalizedLocalName.isEmpty == false {
+                return normalizedLocalName
+            }
+
+            if let recognizedVoice = recognizedVoice(for: profile) {
+                let normalizedGlobalName = normalizedDisplayName(recognizedVoice.displayName)
+                if normalizedGlobalName.isEmpty == false {
+                    return normalizedGlobalName
+                }
+            }
+        }
+
+        return nil
+    }
+
+    func speakerProfile(for speakerID: String) -> TranscriptionLabSpeakerProfile? {
+        speakerProfiles.first { $0.speakerID == speakerID }
+    }
+
+    func hasPendingGlobalVoiceUpdate(for speakerID: String) -> Bool {
+        guard
+            let localProfile = speakerProfile(for: speakerID),
+            let recognizedVoice = recognizedVoice(for: localProfile)
+        else {
+            return false
+        }
+
+        let normalizedLocalName = normalizedDisplayName(localProfile.displayName)
+        let normalizedGlobalName = normalizedDisplayName(recognizedVoice.displayName)
+
+        if normalizedLocalName.isEmpty == false, normalizedLocalName != normalizedGlobalName {
+            return true
+        }
+
+        return localProfile.isMe != recognizedVoice.isMe
+    }
+
+    func updateSpeakerDisplayName(_ displayName: String, for speakerID: String) {
+        guard var profile = speakerProfile(for: speakerID) else {
+            return
+        }
+
+        profile.displayName = displayName
+        persistSpeakerProfile(profile)
+    }
+
+    func setSpeakerIsMe(_ isMe: Bool, for speakerID: String) {
+        guard var profile = speakerProfile(for: speakerID) else {
+            return
+        }
+
+        profile.isMe = isMe
+        persistSpeakerProfile(profile)
+    }
+
+    func pushSpeakerProfileToGlobalVoice(for speakerID: String) {
+        guard let profile = speakerProfile(for: speakerID) else {
+            return
+        }
+
+        do {
+            guard let updatedRecognizedVoice = try updateGlobalVoiceProfile(profile) else {
+                return
+            }
+
+            recognizedVoicesByID[updatedRecognizedVoice.id] = updatedRecognizedVoice
+            notifyRecognizedVoicesDidChange()
+        } catch {
+            errorMessage = "Could not update the global voice print."
+        }
     }
 
     func audioURL(for entry: TranscriptionLabEntry) -> URL {
@@ -246,10 +383,14 @@ final class TranscriptionLabController: ObservableObject {
         do {
             let loadedEntries = try loadEntries().sorted { $0.createdAt > $1.createdAt }
             originalStageTimingsByEntryID = try loadStageTimings()
+            recognizedVoicesByID = Dictionary(
+                uniqueKeysWithValues: try loadRecognizedVoices().map { ($0.id, $0) }
+            )
             entries = loadedEntries
 
             if let selectedEntryID,
                loadedEntries.contains(where: { $0.id == selectedEntryID }) {
+                loadSelectedEntrySpeakerProfiles()
                 return
             }
 
@@ -261,6 +402,7 @@ final class TranscriptionLabController: ObservableObject {
             experimentCleanupDuration = nil
             experimentDiarizationSummary = nil
             experimentSpeakerTaggedTranscript = nil
+            speakerProfiles = []
             latestCleanupTranscript = nil
             errorMessage = nil
         } catch {
@@ -273,8 +415,10 @@ final class TranscriptionLabController: ObservableObject {
             experimentCleanupDuration = nil
             experimentDiarizationSummary = nil
             experimentSpeakerTaggedTranscript = nil
+            speakerProfiles = []
             latestCleanupTranscript = nil
             originalStageTimingsByEntryID = [:]
+            recognizedVoicesByID = [:]
             errorMessage = "Could not load saved recordings."
         }
     }
@@ -292,6 +436,7 @@ final class TranscriptionLabController: ObservableObject {
         experimentCleanupDuration = nil
         experimentDiarizationSummary = nil
         experimentSpeakerTaggedTranscript = nil
+        loadSelectedEntrySpeakerProfiles()
         latestCleanupTranscript = nil
         errorMessage = nil
     }
@@ -305,6 +450,7 @@ final class TranscriptionLabController: ObservableObject {
         experimentCleanupDuration = nil
         experimentDiarizationSummary = nil
         experimentSpeakerTaggedTranscript = nil
+        speakerProfiles = []
         latestCleanupTranscript = nil
         errorMessage = nil
     }
@@ -334,6 +480,7 @@ final class TranscriptionLabController: ObservableObject {
         experimentTranscriptionDuration = nil
         experimentDiarizationSummary = nil
         experimentSpeakerTaggedTranscript = nil
+        speakerProfiles = []
         latestCleanupTranscript = nil
         let start = Date()
 
@@ -347,6 +494,8 @@ final class TranscriptionLabController: ObservableObject {
             experimentCorrectedTranscription = ""
             experimentDiarizationSummary = result.diarizationSummary
             experimentSpeakerTaggedTranscript = result.speakerTaggedTranscript
+            speakerProfiles = result.speakerProfiles
+            reloadRecognizedVoices()
             experimentTranscriptionDuration = Date().timeIntervalSince(start)
             experimentCleanupDuration = nil
         } catch let error as TranscriptionLabRunnerError {
@@ -436,6 +585,72 @@ final class TranscriptionLabController: ObservableObject {
         }
 
         syncSpeakerTaggingEnabled(usesSpeakerTagging)
+    }
+
+    private func loadSelectedEntrySpeakerProfiles() {
+        guard let selectedEntryID else {
+            speakerProfiles = []
+            return
+        }
+
+        do {
+            speakerProfiles = try loadSpeakerProfiles(selectedEntryID)
+        } catch {
+            speakerProfiles = []
+            errorMessage = "Could not load speaker identities for this recording."
+        }
+    }
+
+    private func reloadRecognizedVoices() {
+        do {
+            recognizedVoicesByID = Dictionary(
+                uniqueKeysWithValues: try loadRecognizedVoices().map { ($0.id, $0) }
+            )
+        } catch {
+            recognizedVoicesByID = [:]
+        }
+    }
+
+    private func persistSpeakerProfile(_ profile: TranscriptionLabSpeakerProfile) {
+        do {
+            try saveSpeakerProfile(profile)
+            speakerProfiles = replacingSpeakerProfile(profile)
+        } catch {
+            errorMessage = "Could not save the speaker identity."
+        }
+    }
+
+    private func replacingSpeakerProfile(
+        _ updatedProfile: TranscriptionLabSpeakerProfile
+    ) -> [TranscriptionLabSpeakerProfile] {
+        var updatedProfiles = speakerProfiles.filter { $0.speakerID != updatedProfile.speakerID }
+        updatedProfiles.append(updatedProfile)
+
+        let orderedSpeakerIDs = diarizationVisualization?.speakerIDsInDisplayOrder ?? speakerProfiles.map(\.speakerID)
+        return updatedProfiles.sorted { lhs, rhs in
+            let lhsIndex = orderedSpeakerIDs.firstIndex(of: lhs.speakerID) ?? Int.max
+            let rhsIndex = orderedSpeakerIDs.firstIndex(of: rhs.speakerID) ?? Int.max
+
+            if lhsIndex == rhsIndex {
+                return lhs.speakerID.localizedStandardCompare(rhs.speakerID) == .orderedAscending
+            }
+
+            return lhsIndex < rhsIndex
+        }
+    }
+
+    private func recognizedVoice(
+        for localProfile: TranscriptionLabSpeakerProfile
+    ) -> RecognizedVoiceProfile? {
+        guard let recognizedVoiceID = localProfile.recognizedVoiceID else {
+            return nil
+        }
+
+        return recognizedVoicesByID[recognizedVoiceID]
+    }
+
+    private func normalizedDisplayName(_ displayName: String) -> String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func formattedDuration(_ duration: TimeInterval) -> String {

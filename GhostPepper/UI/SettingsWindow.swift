@@ -93,6 +93,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case corrections
     case models
     case transcriptionLab
+    case recognizedVoices
     case pepperChat
     case meetingTranscript
     case general
@@ -106,6 +107,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .corrections: "Corrections"
         case .models: "Models"
         case .transcriptionLab: "History"
+        case .recognizedVoices: "Recognized Voices"
         case .pepperChat: "Context Bundler"
         case .meetingTranscript: "Meeting Transcript"
         case .general: "General"
@@ -119,6 +121,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .corrections: "Words and replacements Ghost Pepper should preserve."
         case .models: "Speech and cleanup model downloads and runtime status."
         case .transcriptionLab: "Saved recordings, reruns, and cleanup experiments."
+        case .recognizedVoices: "Reusable speaker labels and 'this is me' voice prints."
         case .pepperChat: "Capture screen context and send to Zo, Trello, or clipboard."
         case .meetingTranscript: "Auto-detect calls and transcribe meetings locally."
         case .general: "Startup behavior and app-wide preferences."
@@ -132,6 +135,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .corrections: "text.badge.checkmark"
         case .models: "brain"
         case .transcriptionLab: "waveform.badge.magnifyingglass"
+        case .recognizedVoices: "person.crop.circle.badge.checkmark"
         case .pepperChat: "bubble.right"
         case .meetingTranscript: "waveform.badge.mic"
         case .general: "gearshape"
@@ -160,6 +164,8 @@ struct SettingsView: View {
     @State private var permissionPollTimer: Timer?
     @State private var selectedSection: SettingsSection = .recording
     @State private var transcriptionLabPreviewSound: NSSound?
+    @State private var recognizedVoices: [RecognizedVoiceProfile] = []
+    @State private var recognizedVoicesErrorMessage: String?
     @StateObject private var dictationTestController: SettingsDictationTestController
     @StateObject private var transcriptionLabController: TranscriptionLabController
 
@@ -197,6 +203,18 @@ struct SettingsView: View {
                         prompt: prompt,
                         includeWindowContext: includeWindowContext
                     )
+                },
+                loadSpeakerProfiles: { entryID in
+                    try appState.loadTranscriptionLabSpeakerProfiles(for: entryID)
+                },
+                saveSpeakerProfile: { profile in
+                    try appState.upsertTranscriptionLabSpeakerProfile(profile)
+                },
+                loadRecognizedVoices: {
+                    try appState.loadRecognizedVoiceProfiles()
+                },
+                updateGlobalVoiceProfile: { localProfile in
+                    try appState.updateGlobalVoiceProfile(from: localProfile)
                 },
                 syncSelectedSpeechModelID: { speechModelID in
                     appState.speechModel = speechModelID
@@ -309,6 +327,7 @@ struct SettingsView: View {
             startPermissionPollingIfNeeded()
             syncTranscriptionLabRerunDefaults()
             transcriptionLabController.reloadEntries()
+            reloadRecognizedVoices()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshScreenRecordingPermission()
@@ -318,6 +337,8 @@ struct SettingsView: View {
             if newSection == .transcriptionLab {
                 syncTranscriptionLabRerunDefaults()
                 transcriptionLabController.reloadEntries()
+            } else if newSection == .recognizedVoices {
+                reloadRecognizedVoices()
             }
         }
         .onChange(of: appState.speechModel) { _, _ in
@@ -390,6 +411,35 @@ struct SettingsView: View {
         )
     }
 
+    private func reloadRecognizedVoices() {
+        do {
+            recognizedVoices = try appState.loadRecognizedVoiceProfiles()
+            recognizedVoicesErrorMessage = nil
+        } catch {
+            recognizedVoices = []
+            recognizedVoicesErrorMessage = "Could not load recognized voices."
+        }
+    }
+
+    private func upsertRecognizedVoiceProfile(_ profile: RecognizedVoiceProfile) {
+        do {
+            try appState.upsertRecognizedVoiceProfile(profile)
+            replaceRecognizedVoiceProfile(profile)
+            recognizedVoicesErrorMessage = nil
+        } catch {
+            recognizedVoicesErrorMessage = "Could not save that recognized voice."
+        }
+    }
+
+    private func replaceRecognizedVoiceProfile(_ updatedProfile: RecognizedVoiceProfile) {
+        guard let existingIndex = recognizedVoices.firstIndex(where: { $0.id == updatedProfile.id }) else {
+            recognizedVoices.append(updatedProfile)
+            return
+        }
+
+        recognizedVoices[existingIndex] = updatedProfile
+    }
+
     private func playTranscriptionLabAudio(for entry: TranscriptionLabEntry) {
         let sound = NSSound(contentsOf: transcriptionLabController.audioURL(for: entry), byReference: false)
         transcriptionLabPreviewSound?.stop()
@@ -457,6 +507,8 @@ struct SettingsView: View {
                 modelsSection
             case .transcriptionLab:
                 transcriptionLabSection
+            case .recognizedVoices:
+                recognizedVoicesSection
             case .pepperChat:
                 pepperChatSection
             case .meetingTranscript:
@@ -863,6 +915,41 @@ struct SettingsView: View {
         }
     }
 
+    private var recognizedVoicesSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Ghost Pepper auto-creates reusable voice prints from speaker-tagged lab reruns. Marking more than one voice print as \"This is me\" is allowed.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let recognizedVoicesErrorMessage {
+                Text(recognizedVoicesErrorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
+
+            if recognizedVoices.isEmpty {
+                ContentUnavailableView(
+                    "No Recognized Voices",
+                    systemImage: "person.crop.circle.badge.questionmark",
+                    description: Text("Run speaker tagging in History to create reusable voice prints.")
+                )
+                .frame(maxWidth: .infinity, minHeight: 280)
+            } else {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(recognizedVoices) { profile in
+                        RecognizedVoiceProfileEditor(
+                            profile: profile,
+                            onChange: { updatedProfile in
+                                upsertRecognizedVoiceProfile(updatedProfile)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     @State private var showClearHistoryConfirmation = false
 
     private var transcriptionLabBrowser: some View {
@@ -968,6 +1055,38 @@ struct SettingsView: View {
 
                 if let diarizationVisualization = transcriptionLabController.diarizationVisualization {
                     TranscriptionLabDiarizationSummaryView(visualization: diarizationVisualization)
+                }
+
+                if transcriptionLabController.speakerProfilesInDisplayOrder.isEmpty == false {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Speaker identities")
+                            .font(.subheadline.weight(.medium))
+
+                        ForEach(transcriptionLabController.speakerProfilesInDisplayOrder, id: \.speakerID) { profile in
+                            TranscriptionLabSpeakerProfileEditor(
+                                profile: profile,
+                                effectiveDisplayName: transcriptionLabController.displayName(for: profile.speakerID) ?? profile.speakerID,
+                                showsGlobalUpdateButton: transcriptionLabController.hasPendingGlobalVoiceUpdate(for: profile.speakerID),
+                                onDisplayNameChange: { updatedDisplayName in
+                                    transcriptionLabController.updateSpeakerDisplayName(
+                                        updatedDisplayName,
+                                        for: profile.speakerID
+                                    )
+                                },
+                                onIsMeChange: { isMe in
+                                    transcriptionLabController.setSpeakerIsMe(isMe, for: profile.speakerID)
+                                },
+                                onUpdateGlobalVoice: {
+                                    transcriptionLabController.pushSpeakerProfileToGlobalVoice(for: profile.speakerID)
+                                    reloadRecognizedVoices()
+                                }
+                            )
+                        }
+                    }
+                } else if transcriptionLabController.diarizationVisualization != nil {
+                    Text("Run speaker tagging again on this recording to attach editable speaker names and reusable voice prints.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 HStack(alignment: .center, spacing: 12) {
@@ -1681,6 +1800,241 @@ struct SettingsView: View {
     }
 }
 
+private struct TranscriptionLabSpeakerProfileEditor: View {
+    let profile: TranscriptionLabSpeakerProfile
+    let effectiveDisplayName: String
+    let showsGlobalUpdateButton: Bool
+    let onDisplayNameChange: (String) -> Void
+    let onIsMeChange: (Bool) -> Void
+    let onUpdateGlobalVoice: () -> Void
+
+    @State private var draftDisplayName: String
+    @FocusState private var isNameFieldFocused: Bool
+
+    init(
+        profile: TranscriptionLabSpeakerProfile,
+        effectiveDisplayName: String,
+        showsGlobalUpdateButton: Bool,
+        onDisplayNameChange: @escaping (String) -> Void,
+        onIsMeChange: @escaping (Bool) -> Void,
+        onUpdateGlobalVoice: @escaping () -> Void
+    ) {
+        self.profile = profile
+        self.effectiveDisplayName = effectiveDisplayName
+        self.showsGlobalUpdateButton = showsGlobalUpdateButton
+        self.onDisplayNameChange = onDisplayNameChange
+        self.onIsMeChange = onIsMeChange
+        self.onUpdateGlobalVoice = onUpdateGlobalVoice
+        _draftDisplayName = State(initialValue: profile.displayName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(profile.speakerID)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                if profile.recognizedVoiceID != nil {
+                    Text("Reusable voice print")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color(nsColor: .controlBackgroundColor))
+                        )
+                }
+
+                Spacer()
+            }
+
+            HStack(alignment: .center, spacing: 12) {
+                TextField(
+                    "Name this speaker",
+                    text: $draftDisplayName,
+                    prompt: Text(effectiveDisplayName)
+                )
+                .textFieldStyle(.roundedBorder)
+                .focused($isNameFieldFocused)
+                .onSubmit(commitDisplayName)
+                .onChange(of: isNameFieldFocused) { _, isFocused in
+                    if !isFocused {
+                        commitDisplayName()
+                    }
+                }
+
+                Toggle(
+                    "This is me",
+                    isOn: Binding(
+                        get: { profile.isMe },
+                        set: onIsMeChange
+                    )
+                )
+                .toggleStyle(.checkbox)
+                .fixedSize()
+            }
+
+            if profile.evidenceTranscript.isEmpty == false {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tagged transcript evidence")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    ReadOnlyTextPane(
+                        text: profile.evidenceTranscript,
+                        minimumHeight: 52,
+                        maximumHeight: 110,
+                        monospaced: false
+                    )
+                }
+            }
+
+            if profile.recognizedVoiceID == nil {
+                Text("This speaker only has a recording-local label because Ghost Pepper could not build a reusable voice print from this sample.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if showsGlobalUpdateButton {
+                Button("Update global voice print") {
+                    commitDisplayName()
+                    onUpdateGlobalVoice()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+        .onChange(of: profile.displayName) { _, newValue in
+            if newValue != draftDisplayName {
+                draftDisplayName = newValue
+            }
+        }
+    }
+
+    private func commitDisplayName() {
+        guard draftDisplayName != profile.displayName else {
+            return
+        }
+
+        onDisplayNameChange(draftDisplayName)
+    }
+}
+
+private struct RecognizedVoiceProfileEditor: View {
+    let profile: RecognizedVoiceProfile
+    let onChange: (RecognizedVoiceProfile) -> Void
+
+    @State private var draftDisplayName: String
+    @FocusState private var isNameFieldFocused: Bool
+
+    init(
+        profile: RecognizedVoiceProfile,
+        onChange: @escaping (RecognizedVoiceProfile) -> Void
+    ) {
+        self.profile = profile
+        self.onChange = onChange
+        _draftDisplayName = State(initialValue: profile.displayName)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                TextField("Recognized voice name", text: $draftDisplayName)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isNameFieldFocused)
+                    .onSubmit(commitDisplayName)
+                    .onChange(of: isNameFieldFocused) { _, isFocused in
+                        if !isFocused {
+                            commitDisplayName()
+                        }
+                    }
+
+                Toggle(
+                    "This is me",
+                    isOn: Binding(
+                        get: { profile.isMe },
+                        set: { isMe in
+                            var updatedProfile = profile
+                            updatedProfile.isMe = isMe
+                            updatedProfile.updatedAt = Date()
+                            onChange(updatedProfile)
+                        }
+                    )
+                )
+                .toggleStyle(.checkbox)
+                .fixedSize()
+            }
+
+            HStack(alignment: .center, spacing: 12) {
+                Text("Updated \(profile.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("\(profile.updateCount) matches")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            if profile.evidenceTranscript.isEmpty == false {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Latest transcript evidence")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    ReadOnlyTextPane(
+                        text: profile.evidenceTranscript,
+                        minimumHeight: 52,
+                        maximumHeight: 110,
+                        monospaced: false
+                    )
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+        .onChange(of: profile.displayName) { _, newValue in
+            if newValue != draftDisplayName {
+                draftDisplayName = newValue
+            }
+        }
+    }
+
+    private func commitDisplayName() {
+        guard draftDisplayName != profile.displayName else {
+            return
+        }
+
+        let normalizedName = draftDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedName.isEmpty == false else {
+            draftDisplayName = profile.displayName
+            return
+        }
+
+        var updatedProfile = profile
+        updatedProfile.displayName = normalizedName
+        updatedProfile.updatedAt = Date()
+        onChange(updatedProfile)
+    }
+}
+
 private struct ScreenRecordingRecoveryView: View {
     let onOpenSettings: () -> Void
 
@@ -2060,7 +2414,7 @@ private struct TranscriptionLabDiarizationSummaryView: View {
         }
 
         if let targetSpeakerID = visualization.targetSpeakerID {
-            return "\(speakerText) and kept \(formattedDuration(visualization.keptAudioDuration)) from \(targetSpeakerID)."
+            return "\(speakerText) and kept \(formattedDuration(visualization.keptAudioDuration)) from \(visualization.displayName(for: targetSpeakerID))."
         }
 
         return "\(speakerText)."
@@ -2082,14 +2436,22 @@ private struct TranscriptionLabDiarizationSummaryView: View {
             GeometryReader { geometry in
                 HStack(spacing: 2) {
                     ForEach(Array(visualization.spans.enumerated()), id: \.offset) { _, span in
-                        Rectangle()
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(speakerColor(for: span.speakerID))
                             .frame(width: segmentWidth(for: span, totalWidth: geometry.size.width))
+                            .overlay {
+                                Text(span.displayName)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(span.isKept ? Color.white : Color.primary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.65)
+                                    .padding(.horizontal, 6)
+                            }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
-            .frame(height: 8)
+            .frame(height: 22)
             .clipShape(RoundedRectangle(cornerRadius: 999, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 999, style: .continuous)
@@ -2105,7 +2467,7 @@ private struct TranscriptionLabDiarizationSummaryView: View {
                                     .fill(speakerColor(for: speakerID))
                                     .frame(width: 8, height: 8)
 
-                                Text(speakerID)
+                                Text(visualization.displayName(for: speakerID))
 
                                 if speakerID == visualization.targetSpeakerID {
                                     Text(visualization.usedFallback ? "Target" : "Kept")
@@ -2131,7 +2493,11 @@ private struct TranscriptionLabDiarizationSummaryView: View {
 
             HStack(alignment: .center, spacing: 12) {
                 if let targetSpeakerID = visualization.targetSpeakerID {
-                    Text(visualization.usedFallback ? "Target: \(targetSpeakerID)" : "Kept: \(targetSpeakerID)")
+                    Text(
+                        visualization.usedFallback
+                            ? "Target: \(visualization.displayName(for: targetSpeakerID))"
+                            : "Kept: \(visualization.displayName(for: targetSpeakerID))"
+                    )
                 }
 
                 Text("Kept \(formattedDuration(visualization.keptAudioDuration))")

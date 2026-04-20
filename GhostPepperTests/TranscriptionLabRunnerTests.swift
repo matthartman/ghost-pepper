@@ -230,6 +230,17 @@ final class TranscriptionLabRunnerTests: XCTestCase {
         )
         var transcribeCallCount = 0
         var speakerTaggingCallCount = 0
+        let entry = makeEntry()
+        let resolvedProfiles = [
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 0",
+                displayName: "Jesse",
+                isMe: true,
+                recognizedVoiceID: UUID(uuidString: "00000000-0000-0000-0000-0000000000CC"),
+                evidenceTranscript: "filtered transcript"
+            )
+        ]
         let runner = TranscriptionLabRunner(
             loadAudioBuffer: { _ in [0.1, 0.2, 0.3] },
             loadSpeechModel: { _ in },
@@ -255,6 +266,25 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                     )
                 )
             },
+            resolveSpeakerProfiles: { entryID, audioBuffer, summary, speakerTaggedTranscript in
+                XCTAssertEqual(entryID, entry.id)
+                XCTAssertEqual(audioBuffer, [0.1, 0.2, 0.3])
+                XCTAssertEqual(summary, diarizationSummary)
+                XCTAssertEqual(
+                    speakerTaggedTranscript,
+                    SpeakerTaggedTranscript(
+                        segments: [
+                            .init(
+                                speakerID: "Speaker 0",
+                                startTime: 0.0,
+                                endTime: 0.6,
+                                text: "filtered transcript"
+                            )
+                        ]
+                    )
+                )
+                return resolvedProfiles
+            },
             clean: { _, _, _ in
                 XCTFail("cleanup should not run in this test")
                 return TextCleanerResult(
@@ -266,7 +296,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
         )
 
         let result = try await runner.rerunTranscription(
-            entry: makeEntry(),
+            entry: entry,
             speechModelID: "fluid_parakeet-v3",
             speakerTaggingEnabled: true,
             acquirePipeline: { true },
@@ -288,6 +318,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                 ]
             )
         )
+        XCTAssertEqual(result.speakerProfiles, resolvedProfiles)
         XCTAssertEqual(speakerTaggingCallCount, 1)
         XCTAssertEqual(transcribeCallCount, 0)
     }

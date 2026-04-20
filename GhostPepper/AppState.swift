@@ -126,6 +126,8 @@ class AppState: ObservableObject {
     let postPasteLearningCoordinator: PostPasteLearningCoordinator
     let debugLogStore: DebugLogStore
     let transcriptionLabStore: TranscriptionLabStore
+    let recognizedVoiceStore: RecognizedVoiceStore
+    let transcriptionLabSpeakerProfileStore: TranscriptionLabSpeakerProfileStore
     let appRelauncher: AppRelaunching
     var recordingSessionCoordinatorFactory: (() -> RecordingSessionCoordinator?)?
     var recordingTranscriptionSessionFactory: ((SpeechModelDescriptor) -> RecordingTranscriptionSession?)?
@@ -149,6 +151,7 @@ class AppState: ObservableObject {
     private var cleanupStateObserver: AnyCancellable?
     private var modelStateObserver: AnyCancellable?
     private let recordingOCRPrefetch: RecordingOCRPrefetch
+    private let speakerIdentityResolver = SpeakerIdentityResolver()
     private var activePerformanceTrace: PerformanceTrace?
     private var activeCleanupAttempted = false
     private var pipelineOwner: PipelineOwner?
@@ -200,6 +203,8 @@ class AppState: ObservableObject {
         textPaster: TextPaster = TextPaster(),
         debugLogStore: DebugLogStore = DebugLogStore(),
         transcriptionLabStore: TranscriptionLabStore = TranscriptionLabStore(),
+        recognizedVoiceStore: RecognizedVoiceStore = RecognizedVoiceStore(),
+        transcriptionLabSpeakerProfileStore: TranscriptionLabSpeakerProfileStore = TranscriptionLabSpeakerProfileStore(),
         appRelauncher: AppRelaunching? = nil,
         inputMonitoringChecker: @escaping () -> Bool = PermissionChecker.checkInputMonitoring,
         inputMonitoringPrompter: @escaping () -> Void = PermissionChecker.promptInputMonitoring
@@ -211,6 +216,8 @@ class AppState: ObservableObject {
         self.textPaster = textPaster
         self.debugLogStore = debugLogStore
         self.transcriptionLabStore = transcriptionLabStore
+        self.recognizedVoiceStore = recognizedVoiceStore
+        self.transcriptionLabSpeakerProfileStore = transcriptionLabSpeakerProfileStore
         self.appRelauncher = appRelauncher ?? AppRelauncher()
         self.inputMonitoringChecker = inputMonitoringChecker
         self.inputMonitoringPrompter = inputMonitoringPrompter
@@ -1464,6 +1471,50 @@ class AppState: ObservableObject {
         try transcriptionLabStore.loadStageTimings()
     }
 
+    func loadRecognizedVoiceProfiles() throws -> [RecognizedVoiceProfile] {
+        try recognizedVoiceStore.loadProfiles()
+    }
+
+    func upsertRecognizedVoiceProfile(_ profile: RecognizedVoiceProfile) throws {
+        try recognizedVoiceStore.upsert(profile)
+    }
+
+    func loadTranscriptionLabSpeakerProfiles(
+        for entryID: UUID
+    ) throws -> [TranscriptionLabSpeakerProfile] {
+        try transcriptionLabSpeakerProfileStore.loadProfiles(for: entryID)
+    }
+
+    func upsertTranscriptionLabSpeakerProfile(_ profile: TranscriptionLabSpeakerProfile) throws {
+        try transcriptionLabSpeakerProfileStore.upsert(profile)
+    }
+
+    func updateGlobalVoiceProfile(
+        from localProfile: TranscriptionLabSpeakerProfile
+    ) throws -> RecognizedVoiceProfile? {
+        guard let recognizedVoiceID = localProfile.recognizedVoiceID else {
+            return nil
+        }
+
+        let normalizedName = localProfile.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            var recognizedVoice = try recognizedVoiceStore.loadProfiles().first(where: { $0.id == recognizedVoiceID })
+        else {
+            return nil
+        }
+
+        if normalizedName.isEmpty == false {
+            recognizedVoice.displayName = normalizedName
+        }
+        recognizedVoice.isMe = localProfile.isMe
+        if localProfile.evidenceTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            recognizedVoice.evidenceTranscript = localProfile.evidenceTranscript
+        }
+        recognizedVoice.updatedAt = Date()
+        try recognizedVoiceStore.upsert(recognizedVoice)
+        return recognizedVoice
+    }
+
     func transcriptionLabAudioURL(for entry: TranscriptionLabEntry) -> URL {
         transcriptionLabStore.audioURL(for: entry.audioFileName)
     }
@@ -1623,6 +1674,145 @@ class AppState: ObservableObject {
         objectWillChange.send()
     }
 
+    private func resolveTranscriptionLabSpeakerProfiles(
+        entryID: UUID,
+        audioBuffer: [Float],
+        diarizationSummary: DiarizationSummary,
+        speakerTaggedTranscript: SpeakerTaggedTranscript?
+    ) async -> [TranscriptionLabSpeakerProfile] {
+        do {
+            let recognizedVoices = try recognizedVoiceStore.loadProfiles()
+            let existingLocalProfiles = try transcriptionLabSpeakerProfileStore.loadProfiles(for: entryID)
+            let speakerInputs = await makeSpeakerIdentityInputs(
+                audioBuffer: audioBuffer,
+                diarizationSummary: diarizationSummary,
+                speakerTaggedTranscript: speakerTaggedTranscript
+            )
+            let resolution = speakerIdentityResolver.resolve(
+                entryID: entryID,
+                speakers: speakerInputs,
+                existingLocalProfiles: existingLocalProfiles,
+                recognizedVoices: recognizedVoices
+            )
+
+            for profile in resolution.recognizedVoices {
+                try recognizedVoiceStore.upsert(profile)
+            }
+            for profile in resolution.localProfiles {
+                try transcriptionLabSpeakerProfileStore.upsert(profile)
+            }
+
+            return resolution.localProfiles
+        } catch {
+            return []
+        }
+    }
+
+    private func makeSpeakerIdentityInputs(
+        audioBuffer: [Float],
+        diarizationSummary: DiarizationSummary,
+        speakerTaggedTranscript: SpeakerTaggedTranscript?
+    ) async -> [SpeakerIdentityInput] {
+        let speakerIDs = diarizationSummary.spans.reduce(into: [String]()) { orderedIDs, span in
+            if orderedIDs.contains(span.speakerID) == false {
+                orderedIDs.append(span.speakerID)
+            }
+        }
+
+        var inputs: [SpeakerIdentityInput] = []
+        inputs.reserveCapacity(speakerIDs.count)
+
+        for speakerID in speakerIDs {
+            let speakerSpans = mergedSpeakerSpans(
+                from: diarizationSummary.spans.filter { $0.speakerID == speakerID }
+            )
+            let speakerAudio = extractSpeakerAudio(
+                from: audioBuffer,
+                spans: speakerSpans
+            )
+            let evidenceTranscript = speakerTaggedTranscript?.segments
+                .filter { $0.speakerID == speakerID }
+                .map(\.text)
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let audioDuration = speakerSpans.reduce(into: 0.0) { total, span in
+                total += span.duration
+            }
+            let embedding: [Float]?
+            if audioDuration >= speakerIdentityResolver.minimumEmbeddingDuration,
+               speakerAudio.isEmpty == false {
+                embedding = try? await modelManager.extractSpeakerEmbedding(from: speakerAudio)
+            } else {
+                embedding = nil
+            }
+
+            inputs.append(
+                SpeakerIdentityInput(
+                    speakerID: speakerID,
+                    audioDuration: audioDuration,
+                    evidenceTranscript: evidenceTranscript,
+                    embedding: embedding
+                )
+            )
+        }
+
+        return inputs
+    }
+
+    private func mergedSpeakerSpans(
+        from spans: [DiarizationSummary.Span]
+    ) -> [DiarizationSummary.MergedSpan] {
+        let sortedSpans = spans.sorted { lhs, rhs in
+            if lhs.startTime == rhs.startTime {
+                return lhs.endTime < rhs.endTime
+            }
+            return lhs.startTime < rhs.startTime
+        }
+
+        var mergedSpans: [DiarizationSummary.MergedSpan] = []
+        for span in sortedSpans where span.duration > 0 {
+            if let lastSpan = mergedSpans.last,
+               span.startTime <= lastSpan.endTime {
+                mergedSpans[mergedSpans.count - 1] = DiarizationSummary.MergedSpan(
+                    startTime: lastSpan.startTime,
+                    endTime: max(lastSpan.endTime, span.endTime)
+                )
+            } else {
+                mergedSpans.append(
+                    DiarizationSummary.MergedSpan(
+                        startTime: span.startTime,
+                        endTime: span.endTime
+                    )
+                )
+            }
+        }
+
+        return mergedSpans
+    }
+
+    private func extractSpeakerAudio(
+        from audioBuffer: [Float],
+        spans: [DiarizationSummary.MergedSpan],
+        sampleRate: Double = 16_000
+    ) -> [Float] {
+        guard audioBuffer.isEmpty == false else {
+            return []
+        }
+
+        var extractedAudio: [Float] = []
+        for span in spans where span.duration > 0 {
+            let startIndex = max(Int((span.startTime * sampleRate).rounded(.down)), 0)
+            let endIndex = min(Int((span.endTime * sampleRate).rounded(.up)), audioBuffer.count)
+            guard startIndex < endIndex else {
+                continue
+            }
+
+            extractedAudio.append(contentsOf: audioBuffer[startIndex..<endIndex])
+        }
+
+        return extractedAudio
+    }
+
     private func makeTranscriptionLabRunner() -> TranscriptionLabRunner {
         TranscriptionLabRunner(
             loadAudioBuffer: { [transcriptionLabStore] entry in
@@ -1639,6 +1829,15 @@ class AppState: ObservableObject {
             runSpeakerTagging: { [weak self] audioBuffer in
                 guard let self else { return nil }
                 return await self.modelManager.transcribeWithSpeakerTagging(audioBuffer: audioBuffer)
+            },
+            resolveSpeakerProfiles: { [weak self] entryID, audioBuffer, diarizationSummary, speakerTaggedTranscript in
+                guard let self else { return [] }
+                return await self.resolveTranscriptionLabSpeakerProfiles(
+                    entryID: entryID,
+                    audioBuffer: audioBuffer,
+                    diarizationSummary: diarizationSummary,
+                    speakerTaggedTranscript: speakerTaggedTranscript
+                )
             },
             clean: { [textCleaner] text, activePrompt, modelKind in
                 await textCleaner.cleanWithPerformance(

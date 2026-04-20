@@ -21,15 +21,18 @@ struct TranscriptionLabTranscriptionResult: Equatable, Sendable {
     let rawTranscription: String
     let diarizationSummary: DiarizationSummary?
     let speakerTaggedTranscript: SpeakerTaggedTranscript?
+    let speakerProfiles: [TranscriptionLabSpeakerProfile]
 
     init(
         rawTranscription: String,
         diarizationSummary: DiarizationSummary? = nil,
-        speakerTaggedTranscript: SpeakerTaggedTranscript? = nil
+        speakerTaggedTranscript: SpeakerTaggedTranscript? = nil,
+        speakerProfiles: [TranscriptionLabSpeakerProfile] = []
     ) {
         self.rawTranscription = rawTranscription
         self.diarizationSummary = diarizationSummary
         self.speakerTaggedTranscript = speakerTaggedTranscript
+        self.speakerProfiles = speakerProfiles
     }
 }
 
@@ -67,12 +70,19 @@ final class TranscriptionLabRunner {
     typealias SpeechModelLoader = (String) async -> Void
     typealias Transcriber = ([Float]) async -> String?
     typealias SpeakerTaggingRunner = ([Float]) async -> SpeakerTaggedTranscriptionResult?
+    typealias SpeakerProfileResolver = (
+        _ entryID: UUID,
+        _ audioBuffer: [Float],
+        _ diarizationSummary: DiarizationSummary,
+        _ speakerTaggedTranscript: SpeakerTaggedTranscript?
+    ) async -> [TranscriptionLabSpeakerProfile]
     typealias Cleaner = (String, String, LocalCleanupModelKind) async -> TextCleanerResult
 
     private let loadAudioBuffer: AudioLoader
     private let loadSpeechModel: SpeechModelLoader
     private let transcribe: Transcriber
     private let runSpeakerTagging: SpeakerTaggingRunner
+    private let resolveSpeakerProfiles: SpeakerProfileResolver
     private let clean: Cleaner
     private let correctionStore: CorrectionStore
     private let cleanupPromptBuilder: CleanupPromptBuilder
@@ -82,6 +92,7 @@ final class TranscriptionLabRunner {
         loadSpeechModel: @escaping SpeechModelLoader,
         transcribe: @escaping Transcriber,
         runSpeakerTagging: @escaping SpeakerTaggingRunner = { _ in nil },
+        resolveSpeakerProfiles: @escaping SpeakerProfileResolver = { _, _, _, _ in [] },
         clean: @escaping Cleaner,
         correctionStore: CorrectionStore,
         cleanupPromptBuilder: CleanupPromptBuilder = CleanupPromptBuilder()
@@ -90,6 +101,7 @@ final class TranscriptionLabRunner {
         self.loadSpeechModel = loadSpeechModel
         self.transcribe = transcribe
         self.runSpeakerTagging = runSpeakerTagging
+        self.resolveSpeakerProfiles = resolveSpeakerProfiles
         self.clean = clean
         self.correctionStore = correctionStore
         self.cleanupPromptBuilder = cleanupPromptBuilder
@@ -116,13 +128,20 @@ final class TranscriptionLabRunner {
 
         if speakerTaggingEnabled,
            let speakerTaggedResult = await runSpeakerTagging(audioBuffer) {
+            let speakerProfiles = await resolveSpeakerProfiles(
+                entry.id,
+                audioBuffer,
+                speakerTaggedResult.diarizationSummary,
+                speakerTaggedResult.speakerTaggedTranscript
+            )
             if let filteredTranscript = speakerTaggedResult.filteredTranscript?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                filteredTranscript.isEmpty == false {
                 return TranscriptionLabTranscriptionResult(
                     rawTranscription: filteredTranscript,
                     diarizationSummary: speakerTaggedResult.diarizationSummary,
-                    speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript
+                    speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript,
+                    speakerProfiles: speakerProfiles
                 )
             }
 
@@ -135,7 +154,8 @@ final class TranscriptionLabRunner {
             return TranscriptionLabTranscriptionResult(
                 rawTranscription: rawTranscription,
                 diarizationSummary: speakerTaggedResult.diarizationSummary,
-                speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript
+                speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript,
+                speakerProfiles: speakerProfiles
             )
         }
 
