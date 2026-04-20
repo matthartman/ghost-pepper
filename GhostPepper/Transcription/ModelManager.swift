@@ -199,7 +199,15 @@ final class ModelManager: ObservableObject {
                     }
                 },
                 finish: {
-                    diarizer.timeline.finalize()
+                    do {
+                        try diarizer.finalizeSession()
+                    } catch {
+                        self.debugLogger?(
+                            .model,
+                            "Speaker filtering diarization finalization failed: \(error.localizedDescription)"
+                        )
+                        return []
+                    }
                     let segments = diarizer.timeline.speakers.values
                         .flatMap { $0.finalizedSegments }
                     return Self.diarizationSpans(from: segments)
@@ -344,16 +352,21 @@ final class ModelManager: ObservableObject {
         segments
             .map { segment in
                 DiarizationSummary.Span(
-                    speakerID: "Speaker \(segment.speakerIndex)",
+                    speakerID: segment.speakerLabel,
                     startTime: TimeInterval(segment.startTime),
                     endTime: TimeInterval(segment.endTime)
                 )
             }
             .sorted { lhs, rhs in
-                if lhs.startTime == rhs.startTime {
+                if lhs.startTime != rhs.startTime {
+                    return lhs.startTime < rhs.startTime
+                }
+
+                if lhs.endTime != rhs.endTime {
                     return lhs.endTime < rhs.endTime
                 }
-                return lhs.startTime < rhs.startTime
+
+                return lhs.speakerID < rhs.speakerID
             }
     }
 

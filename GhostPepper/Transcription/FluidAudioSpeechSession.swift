@@ -41,10 +41,15 @@ final class FluidAudioSpeechSession {
 
     func finalize(spans: [DiarizationSummary.Span]) async -> FinalizationResult {
         let sortedSpans = spans.sorted { lhs, rhs in
-            if lhs.startTime == rhs.startTime {
+            if lhs.startTime != rhs.startTime {
+                return lhs.startTime < rhs.startTime
+            }
+
+            if lhs.endTime != rhs.endTime {
                 return lhs.endTime < rhs.endTime
             }
-            return lhs.startTime < rhs.startTime
+
+            return lhs.speakerID < rhs.speakerID
         }
 
         guard sortedSpans.isEmpty == false else {
