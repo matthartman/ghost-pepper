@@ -32,6 +32,10 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                 transcribedBuffers.append(audioBuffer)
                 return "The default should be Quen three point five four b."
             },
+            runSpeakerTagging: { _ in
+                XCTFail("speaker tagging should be disabled for this rerun")
+                return nil
+            },
             clean: { text, prompt, modelKind in
                 XCTAssertEqual(text, "The default should be Quen three point five four b.")
                 XCTAssertEqual(modelKind, .full)
@@ -54,15 +58,16 @@ final class TranscriptionLabRunnerTests: XCTestCase {
             correctionStore: correctionStore
         )
 
-        let rawTranscription = try await runner.rerunTranscription(
+        let transcriptionResult = try await runner.rerunTranscription(
             entry: entry,
             speechModelID: "fluid_parakeet-v3",
+            speakerTaggingEnabled: false,
             acquirePipeline: { true },
             releasePipeline: {}
         )
         let result = try await runner.rerunCleanup(
             entry: entry,
-            rawTranscription: rawTranscription,
+            rawTranscription: transcriptionResult.rawTranscription,
             cleanupModelKind: .full,
             prompt: TextCleaner.defaultPrompt,
             includeWindowContext: true,
@@ -72,7 +77,9 @@ final class TranscriptionLabRunnerTests: XCTestCase {
 
         XCTAssertEqual(loadedSpeechModels, ["fluid_parakeet-v3"])
         XCTAssertEqual(transcribedBuffers, [[0.1, 0.2, 0.3]])
-        XCTAssertEqual(rawTranscription, "The default should be Quen three point five four b.")
+        XCTAssertEqual(transcriptionResult.rawTranscription, "The default should be Quen three point five four b.")
+        XCTAssertNil(transcriptionResult.diarizationSummary)
+        XCTAssertNil(transcriptionResult.speakerTaggedTranscript)
         XCTAssertEqual(result.correctedTranscription, "The default should be Qwen 3.5 4B.")
         XCTAssertFalse(result.cleanupUsedFallback)
         XCTAssertEqual(
@@ -99,6 +106,10 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                 XCTFail("should not transcribe when busy")
                 return nil
             },
+            runSpeakerTagging: { _ in
+                XCTFail("should not run speaker tagging when busy")
+                return nil
+            },
             clean: { _, _, _ in
                 XCTFail("should not clean when busy")
                 return TextCleanerResult(
@@ -113,6 +124,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
             _ = try await runner.rerunTranscription(
                 entry: makeEntry(),
                 speechModelID: "fluid_parakeet-v3",
+                speakerTaggingEnabled: false,
                 acquirePipeline: { false },
                 releasePipeline: {}
             )
@@ -127,6 +139,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
             loadAudioBuffer: { _ in [0.1] },
             loadSpeechModel: { _ in },
             transcribe: { _ in "raw text" },
+            runSpeakerTagging: { _ in nil },
             clean: { _, _, _ in
                 TextCleanerResult(
                     text: "raw text",
@@ -162,6 +175,7 @@ final class TranscriptionLabRunnerTests: XCTestCase {
             loadAudioBuffer: { _ in [0.1] },
             loadSpeechModel: { _ in },
             transcribe: { _ in "raw text" },
+            runSpeakerTagging: { _ in nil },
             clean: { _, prompt, _ in
                 TextCleanerResult(
                     text: "raw text",
@@ -197,6 +211,134 @@ final class TranscriptionLabRunnerTests: XCTestCase {
             TextCleaner.formatCleanupInput(userInput: "raw text")
         )
         XCTAssertEqual(result.transcript?.rawModelOutput, "...")
+    }
+
+    func testRunnerUsesSpeakerTaggedResultWhenRequested() async throws {
+        let diarizationSummary = DiarizationSummary(
+            spans: [
+                .init(speakerID: "Speaker 0", startTime: 0.0, endTime: 0.6, isKept: true),
+                .init(speakerID: "Speaker 1", startTime: 0.6, endTime: 1.0, isKept: false),
+            ],
+            mergedKeptSpans: [
+                .init(startTime: 0.0, endTime: 0.6),
+            ],
+            targetSpeakerID: "Speaker 0",
+            targetSpeakerDuration: 0.6,
+            keptAudioDuration: 0.6,
+            usedFallback: false,
+            fallbackReason: nil
+        )
+        var transcribeCallCount = 0
+        var speakerTaggingCallCount = 0
+        let runner = TranscriptionLabRunner(
+            loadAudioBuffer: { _ in [0.1, 0.2, 0.3] },
+            loadSpeechModel: { _ in },
+            transcribe: { _ in
+                transcribeCallCount += 1
+                return "full transcript"
+            },
+            runSpeakerTagging: { audioBuffer in
+                speakerTaggingCallCount += 1
+                XCTAssertEqual(audioBuffer, [0.1, 0.2, 0.3])
+                return SpeakerTaggedTranscriptionResult(
+                    filteredTranscript: "filtered transcript",
+                    diarizationSummary: diarizationSummary,
+                    speakerTaggedTranscript: SpeakerTaggedTranscript(
+                        segments: [
+                            .init(
+                                speakerID: "Speaker 0",
+                                startTime: 0.0,
+                                endTime: 0.6,
+                                text: "filtered transcript"
+                            )
+                        ]
+                    )
+                )
+            },
+            clean: { _, _, _ in
+                XCTFail("cleanup should not run in this test")
+                return TextCleanerResult(
+                    text: "",
+                    performance: TextCleanerPerformance(modelCallDuration: nil, postProcessDuration: nil)
+                )
+            },
+            correctionStore: CorrectionStore(defaults: UserDefaults(suiteName: #function)!)
+        )
+
+        let result = try await runner.rerunTranscription(
+            entry: makeEntry(),
+            speechModelID: "fluid_parakeet-v3",
+            speakerTaggingEnabled: true,
+            acquirePipeline: { true },
+            releasePipeline: {}
+        )
+
+        XCTAssertEqual(result.rawTranscription, "filtered transcript")
+        XCTAssertEqual(result.diarizationSummary, diarizationSummary)
+        XCTAssertEqual(
+            result.speakerTaggedTranscript,
+            SpeakerTaggedTranscript(
+                segments: [
+                    .init(
+                        speakerID: "Speaker 0",
+                        startTime: 0.0,
+                        endTime: 0.6,
+                        text: "filtered transcript"
+                    )
+                ]
+            )
+        )
+        XCTAssertEqual(speakerTaggingCallCount, 1)
+        XCTAssertEqual(transcribeCallCount, 0)
+    }
+
+    func testRunnerFallsBackToFullTranscriptionWhenSpeakerTaggingFallsBack() async throws {
+        let diarizationSummary = DiarizationSummary(
+            spans: [],
+            mergedKeptSpans: [],
+            targetSpeakerID: nil,
+            targetSpeakerDuration: 0,
+            keptAudioDuration: 0,
+            usedFallback: true,
+            fallbackReason: .ambiguousDominantSpeaker
+        )
+        var transcribeCallCount = 0
+        let runner = TranscriptionLabRunner(
+            loadAudioBuffer: { _ in [0.1, 0.2, 0.3] },
+            loadSpeechModel: { _ in },
+            transcribe: { _ in
+                transcribeCallCount += 1
+                return "full transcript"
+            },
+            runSpeakerTagging: { _ in
+                SpeakerTaggedTranscriptionResult(
+                    filteredTranscript: nil,
+                    diarizationSummary: diarizationSummary,
+                    speakerTaggedTranscript: nil
+                )
+            },
+            clean: { _, _, _ in
+                XCTFail("cleanup should not run in this test")
+                return TextCleanerResult(
+                    text: "",
+                    performance: TextCleanerPerformance(modelCallDuration: nil, postProcessDuration: nil)
+                )
+            },
+            correctionStore: CorrectionStore(defaults: UserDefaults(suiteName: #function)!)
+        )
+
+        let result = try await runner.rerunTranscription(
+            entry: makeEntry(),
+            speechModelID: "fluid_parakeet-v3",
+            speakerTaggingEnabled: true,
+            acquirePipeline: { true },
+            releasePipeline: {}
+        )
+
+        XCTAssertEqual(result.rawTranscription, "full transcript")
+        XCTAssertEqual(result.diarizationSummary, diarizationSummary)
+        XCTAssertNil(result.speakerTaggedTranscript)
+        XCTAssertEqual(transcribeCallCount, 1)
     }
 
     private func makeEntry() -> TranscriptionLabEntry {

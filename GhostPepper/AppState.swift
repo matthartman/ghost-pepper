@@ -1470,8 +1470,9 @@ class AppState: ObservableObject {
 
     func rerunTranscriptionLabTranscription(
         _ entry: TranscriptionLabEntry,
-        speechModelID: String
-    ) async throws -> String {
+        speechModelID: String,
+        speakerTaggingEnabled: Bool
+    ) async throws -> TranscriptionLabTranscriptionResult {
         guard acquirePipeline(for: .transcriptionLab) else {
             throw TranscriptionLabRunnerError.pipelineBusy
         }
@@ -1483,6 +1484,7 @@ class AppState: ObservableObject {
             let result = try await runner.rerunTranscription(
                 entry: entry,
                 speechModelID: speechModelID,
+                speakerTaggingEnabled: speakerTaggingEnabled,
                 acquirePipeline: { true },
                 releasePipeline: {}
             )
@@ -1633,6 +1635,10 @@ class AppState: ObservableObject {
             },
             transcribe: { [transcriber] audioBuffer in
                 await transcriber.transcribe(audioBuffer: audioBuffer)
+            },
+            runSpeakerTagging: { [weak self] audioBuffer in
+                guard let self else { return nil }
+                return await self.modelManager.transcribeWithSpeakerTagging(audioBuffer: audioBuffer)
             },
             clean: { [textCleaner] text, activePrompt, modelKind in
                 await textCleaner.cleanWithPerformance(

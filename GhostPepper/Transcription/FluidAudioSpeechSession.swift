@@ -1,6 +1,11 @@
 import Foundation
 
 final class FluidAudioSpeechSession {
+    private struct TaggedSpanGroup {
+        let speakerID: String
+        let span: DiarizationSummary.MergedSpan
+    }
+
     struct FinalizationResult {
         let filteredTranscript: String?
         let summary: DiarizationSummary
@@ -180,6 +185,40 @@ final class FluidAudioSpeechSession {
         }
     }
 
+    func speakerTaggedTranscript(spans: [DiarizationSummary.Span]) async -> SpeakerTaggedTranscript? {
+        let taggedSpanGroups = mergeSpeakerSpans(in: spans)
+        guard taggedSpanGroups.isEmpty == false else {
+            return nil
+        }
+
+        var transcriptSegments: [SpeakerTaggedTranscript.Segment] = []
+        transcriptSegments.reserveCapacity(taggedSpanGroups.count)
+
+        for taggedSpanGroup in taggedSpanGroups {
+            guard let audio = extractAudio(from: [taggedSpanGroup.span]),
+                  let transcript = await transcribeFilteredAudio(audio)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  transcript.isEmpty == false else {
+                continue
+            }
+
+            transcriptSegments.append(
+                SpeakerTaggedTranscript.Segment(
+                    speakerID: taggedSpanGroup.speakerID,
+                    startTime: taggedSpanGroup.span.startTime,
+                    endTime: taggedSpanGroup.span.endTime,
+                    text: transcript
+                )
+            )
+        }
+
+        guard transcriptSegments.isEmpty == false else {
+            return nil
+        }
+
+        return SpeakerTaggedTranscript(segments: transcriptSegments)
+    }
+
     private func selectTargetSpeaker(in spans: [DiarizationSummary.Span]) -> TargetSpeakerSelection {
         var durationsBySpeaker: [String: TimeInterval] = [:]
         var firstStartBySpeaker: [String: TimeInterval] = [:]
@@ -218,6 +257,44 @@ final class FluidAudioSpeechSession {
         }
 
         return .selected(targetSpeaker.speakerID)
+    }
+
+    private func mergeSpeakerSpans(in spans: [DiarizationSummary.Span]) -> [TaggedSpanGroup] {
+        guard spans.isEmpty == false else {
+            return []
+        }
+
+        var mergedSpanGroups: [TaggedSpanGroup] = []
+
+        for span in spans {
+            guard span.duration > 0 else {
+                continue
+            }
+
+            if let lastSpanGroup = mergedSpanGroups.last,
+               lastSpanGroup.speakerID == span.speakerID,
+               span.startTime - lastSpanGroup.span.endTime <= mergeGapTolerance {
+                mergedSpanGroups[mergedSpanGroups.count - 1] = TaggedSpanGroup(
+                    speakerID: lastSpanGroup.speakerID,
+                    span: DiarizationSummary.MergedSpan(
+                        startTime: lastSpanGroup.span.startTime,
+                        endTime: max(lastSpanGroup.span.endTime, span.endTime)
+                    )
+                )
+            } else {
+                mergedSpanGroups.append(
+                    TaggedSpanGroup(
+                        speakerID: span.speakerID,
+                        span: DiarizationSummary.MergedSpan(
+                            startTime: span.startTime,
+                            endTime: span.endTime
+                        )
+                    )
+                )
+            }
+        }
+
+        return mergedSpanGroups
     }
 
     private func mergeKeptSpans(in spans: [DiarizationSummary.Span]) -> [DiarizationSummary.MergedSpan] {

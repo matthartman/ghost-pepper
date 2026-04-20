@@ -247,6 +247,56 @@ final class ModelManager: ObservableObject {
         }
     }
 
+    func transcribeWithSpeakerTagging(audioBuffer: [Float]) async -> SpeakerTaggedTranscriptionResult? {
+        guard let model = SpeechModelCatalog.model(named: modelName),
+              model.supportsSpeakerFiltering,
+              audioBuffer.isEmpty == false else {
+            return nil
+        }
+
+        do {
+            let diarizerModels = try await loadSortformerModels()
+            let diarizer = SortformerDiarizer()
+            diarizer.initialize(models: diarizerModels)
+            defer { diarizer.cleanup() }
+
+            let session = FluidAudioSpeechSession { [weak self] filteredAudio in
+                await self?.transcribe(audioBuffer: filteredAudio)
+            }
+            session.appendAudioChunk(audioBuffer)
+
+            for audioChunk in Self.audioChunks(
+                from: audioBuffer,
+                maxCount: Self.speakerTaggingChunkSizeSamples
+            ) {
+                do {
+                    _ = try diarizer.process(samples: audioChunk)
+                } catch {
+                    debugLogger?(
+                        .model,
+                        "Speaker tagging diarization chunk failed: \(error.localizedDescription)"
+                    )
+                }
+            }
+
+            diarizer.timeline.finalize()
+            let segments = diarizer.timeline.speakers.values
+                .flatMap { $0.finalizedSegments }
+            let spans = Self.diarizationSpans(from: segments)
+            let finalizationResult = await session.finalize(spans: spans)
+            let speakerTaggedTranscript = await session.speakerTaggedTranscript(spans: spans)
+
+            return SpeakerTaggedTranscriptionResult(
+                filteredTranscript: finalizationResult.filteredTranscript,
+                diarizationSummary: finalizationResult.summary,
+                speakerTaggedTranscript: speakerTaggedTranscript
+            )
+        } catch {
+            debugLogger?(.model, "Speaker tagging diarizer failed to load: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     private func loadWhisperModel(named modelName: String) async throws {
         let modelsDir = Self.whisperModelsDirectory
         try? FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
@@ -390,6 +440,26 @@ final class ModelManager: ObservableObject {
                 }
                 return lhs.startTime < rhs.startTime
             }
+    }
+
+    private static let speakerTaggingChunkSizeSamples = 16_000
+
+    private static func audioChunks(from audioBuffer: [Float], maxCount: Int) -> [[Float]] {
+        guard maxCount > 0, audioBuffer.isEmpty == false else {
+            return []
+        }
+
+        var audioChunks: [[Float]] = []
+        audioChunks.reserveCapacity((audioBuffer.count + maxCount - 1) / maxCount)
+
+        var startIndex = 0
+        while startIndex < audioBuffer.count {
+            let endIndex = min(startIndex + maxCount, audioBuffer.count)
+            audioChunks.append(Array(audioBuffer[startIndex..<endIndex]))
+            startIndex = endIndex
+        }
+
+        return audioChunks
     }
 
     private static func isRetryableLoadError(_ error: Error) -> Bool {

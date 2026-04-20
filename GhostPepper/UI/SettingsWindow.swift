@@ -171,6 +171,7 @@ struct SettingsView: View {
         _transcriptionLabController = StateObject(
             wrappedValue: TranscriptionLabController(
                 defaultSpeechModelID: appState.speechModel,
+                defaultSpeakerTaggingEnabled: appState.ignoreOtherSpeakers,
                 defaultCleanupModelKind: appState.textCleanupManager.selectedCleanupModelKind,
                 loadStageTimings: {
                     try appState.loadTranscriptionLabStageTimings()
@@ -181,10 +182,11 @@ struct SettingsView: View {
                 audioURLForEntry: { entry in
                     appState.transcriptionLabAudioURL(for: entry)
                 },
-                runTranscription: { entry, speechModelID in
+                runTranscription: { entry, speechModelID, speakerTaggingEnabled in
                     try await appState.rerunTranscriptionLabTranscription(
                         entry,
-                        speechModelID: speechModelID
+                        speechModelID: speechModelID,
+                        speakerTaggingEnabled: speakerTaggingEnabled
                     )
                 },
                 runCleanup: { entry, rawTranscription, cleanupModelKind, prompt, includeWindowContext in
@@ -201,6 +203,9 @@ struct SettingsView: View {
                     Task {
                         await appState.loadSpeechModel(name: speechModelID)
                     }
+                },
+                syncSpeakerTaggingEnabled: { speakerTaggingEnabled in
+                    appState.ignoreOtherSpeakers = speakerTaggingEnabled
                 },
                 syncSelectedCleanupModelKind: { cleanupModelKind in
                     appState.textCleanupManager.selectedCleanupModelKind = cleanupModelKind
@@ -380,6 +385,7 @@ struct SettingsView: View {
     private func syncTranscriptionLabRerunDefaults() {
         transcriptionLabController.applyCurrentRerunDefaults(
             speechModelID: appState.speechModel,
+            speakerTaggingEnabled: appState.ignoreOtherSpeakers,
             cleanupModelKind: appState.textCleanupManager.selectedCleanupModelKind
         )
     }
@@ -1042,6 +1048,27 @@ struct SettingsView: View {
                     }
                 }
 
+                HStack(alignment: .center, spacing: 12) {
+                    Toggle(
+                        "Run speaker tagging",
+                        isOn: $transcriptionLabController.usesSpeakerTagging
+                    )
+                    .toggleStyle(.checkbox)
+                    .disabled(
+                        SpeechModelCatalog.model(named: transcriptionLabController.selectedSpeechModelID)?
+                            .supportsSpeakerFiltering != true || transcriptionLabController.runningStage != nil
+                    )
+
+                    if SpeechModelCatalog.model(named: transcriptionLabController.selectedSpeechModelID)?
+                        .supportsSpeakerFiltering != true {
+                        Text("Speaker tagging is available only for FluidAudio models.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                }
+
                 DiffReadOnlyTextPane(
                     originalText: entry.rawTranscription ?? "",
                     text: transcriptionLabController.displayedExperimentRawTranscription,
@@ -1049,6 +1076,20 @@ struct SettingsView: View {
                     maximumHeight: 140,
                     monospaced: false
                 )
+
+                if let displayedSpeakerTaggedTranscriptText = transcriptionLabController.displayedSpeakerTaggedTranscriptText {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Speaker-tagged transcript")
+                            .font(.subheadline.weight(.medium))
+
+                        ReadOnlyTextPane(
+                            text: displayedSpeakerTaggedTranscriptText,
+                            minimumHeight: 84,
+                            maximumHeight: 220,
+                            monospaced: false
+                        )
+                    }
+                }
 
                 addCorrectionSection
             }
@@ -1985,6 +2026,17 @@ private struct TranscriptionLabMetadataSummary: View {
 }
 
 private struct TranscriptionLabDiarizationSummaryView: View {
+    private static let speakerPalette: [NSColor] = [
+        .systemBlue,
+        .systemGreen,
+        .systemOrange,
+        .systemPink,
+        .systemTeal,
+        .systemRed,
+        .systemIndigo,
+        .systemBrown,
+    ]
+
     let visualization: TranscriptionLabController.DiarizationVisualization
 
     private var totalDuration: TimeInterval {
@@ -1995,25 +2047,29 @@ private struct TranscriptionLabDiarizationSummaryView: View {
     }
 
     private var summaryText: String {
+        let speakerText = visualization.speakerIDsInDisplayOrder.isEmpty
+            ? "Speaker tagging ran"
+            : "Tagged \(formattedSpeakerCount(visualization.speakerIDsInDisplayOrder.count))"
+
         if visualization.usedFallback {
             if let fallbackReason = visualization.fallbackReason {
-                return "Speaker filtering fell back to the full recording (\(fallbackReasonText(for: fallbackReason)))."
+                return "\(speakerText), but transcription fell back to the full recording (\(fallbackReasonText(for: fallbackReason)))."
             }
 
-            return "Speaker filtering fell back to the full recording."
+            return "\(speakerText), but transcription fell back to the full recording."
         }
 
         if let targetSpeakerID = visualization.targetSpeakerID {
-            return "Kept \(formattedDuration(visualization.keptAudioDuration)) from \(targetSpeakerID)."
+            return "\(speakerText) and kept \(formattedDuration(visualization.keptAudioDuration)) from \(targetSpeakerID)."
         }
 
-        return "Speaker filtering ran without a target speaker."
+        return "\(speakerText)."
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
-                Text("Speaker filtering")
+                Text("Speaker tagging")
                     .font(.subheadline.weight(.medium))
 
                 Spacer()
@@ -2027,11 +2083,7 @@ private struct TranscriptionLabDiarizationSummaryView: View {
                 HStack(spacing: 2) {
                     ForEach(Array(visualization.spans.enumerated()), id: \.offset) { _, span in
                         Rectangle()
-                            .fill(
-                                span.isKept
-                                ? Color.accentColor
-                                : Color(nsColor: .quaternaryLabelColor)
-                            )
+                            .fill(speakerColor(for: span.speakerID))
                             .frame(width: segmentWidth(for: span, totalWidth: geometry.size.width))
                     }
                 }
@@ -2044,15 +2096,48 @@ private struct TranscriptionLabDiarizationSummaryView: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
             )
 
+            if visualization.speakerIDsInDisplayOrder.isEmpty == false {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .center, spacing: 8) {
+                        ForEach(visualization.speakerIDsInDisplayOrder, id: \.self) { speakerID in
+                            HStack(alignment: .center, spacing: 6) {
+                                Circle()
+                                    .fill(speakerColor(for: speakerID))
+                                    .frame(width: 8, height: 8)
+
+                                Text(speakerID)
+
+                                if speakerID == visualization.targetSpeakerID {
+                                    Text(visualization.usedFallback ? "Target" : "Kept")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                                    .fill(Color(nsColor: .textBackgroundColor))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 999, style: .continuous)
+                                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                            )
+                        }
+                    }
+                }
+            }
+
             HStack(alignment: .center, spacing: 12) {
                 if let targetSpeakerID = visualization.targetSpeakerID {
-                    Text("Target: \(targetSpeakerID)")
+                    Text(visualization.usedFallback ? "Target: \(targetSpeakerID)" : "Kept: \(targetSpeakerID)")
                 }
 
                 Text("Kept \(formattedDuration(visualization.keptAudioDuration))")
 
                 if visualization.usedFallback {
-                    Text("Used fallback")
+                    Text("Used full recording")
                 }
 
                 Spacer()
@@ -2077,6 +2162,20 @@ private struct TranscriptionLabDiarizationSummaryView: View {
         for span: TranscriptionLabController.DiarizationVisualization.Span
     ) -> CGFloat {
         CGFloat(max(0, span.endTime - span.startTime) / totalDuration)
+    }
+
+    private func speakerColor(for speakerID: String) -> Color {
+        let speakerIDs = visualization.speakerIDsInDisplayOrder
+        guard let speakerIndex = speakerIDs.firstIndex(of: speakerID) else {
+            return Color.accentColor
+        }
+
+        let paletteIndex = speakerIndex % Self.speakerPalette.count
+        return Color(nsColor: Self.speakerPalette[paletteIndex])
+    }
+
+    private func formattedSpeakerCount(_ count: Int) -> String {
+        count == 1 ? "1 speaker" : "\(count) speakers"
     }
 
     private func formattedDuration(_ duration: TimeInterval) -> String {

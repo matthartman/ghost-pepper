@@ -1,5 +1,38 @@
 import Foundation
 
+struct SpeakerTaggedTranscript: Equatable, Sendable {
+    struct Segment: Equatable, Sendable {
+        let speakerID: String
+        let startTime: TimeInterval
+        let endTime: TimeInterval
+        let text: String
+    }
+
+    let segments: [Segment]
+}
+
+struct SpeakerTaggedTranscriptionResult: Equatable, Sendable {
+    let filteredTranscript: String?
+    let diarizationSummary: DiarizationSummary
+    let speakerTaggedTranscript: SpeakerTaggedTranscript?
+}
+
+struct TranscriptionLabTranscriptionResult: Equatable, Sendable {
+    let rawTranscription: String
+    let diarizationSummary: DiarizationSummary?
+    let speakerTaggedTranscript: SpeakerTaggedTranscript?
+
+    init(
+        rawTranscription: String,
+        diarizationSummary: DiarizationSummary? = nil,
+        speakerTaggedTranscript: SpeakerTaggedTranscript? = nil
+    ) {
+        self.rawTranscription = rawTranscription
+        self.diarizationSummary = diarizationSummary
+        self.speakerTaggedTranscript = speakerTaggedTranscript
+    }
+}
+
 enum TranscriptionLabRunnerError: Error, Equatable {
     case pipelineBusy
     case missingAudio
@@ -33,11 +66,13 @@ final class TranscriptionLabRunner {
     typealias AudioLoader = (TranscriptionLabEntry) throws -> [Float]
     typealias SpeechModelLoader = (String) async -> Void
     typealias Transcriber = ([Float]) async -> String?
+    typealias SpeakerTaggingRunner = ([Float]) async -> SpeakerTaggedTranscriptionResult?
     typealias Cleaner = (String, String, LocalCleanupModelKind) async -> TextCleanerResult
 
     private let loadAudioBuffer: AudioLoader
     private let loadSpeechModel: SpeechModelLoader
     private let transcribe: Transcriber
+    private let runSpeakerTagging: SpeakerTaggingRunner
     private let clean: Cleaner
     private let correctionStore: CorrectionStore
     private let cleanupPromptBuilder: CleanupPromptBuilder
@@ -46,6 +81,7 @@ final class TranscriptionLabRunner {
         loadAudioBuffer: @escaping AudioLoader,
         loadSpeechModel: @escaping SpeechModelLoader,
         transcribe: @escaping Transcriber,
+        runSpeakerTagging: @escaping SpeakerTaggingRunner = { _ in nil },
         clean: @escaping Cleaner,
         correctionStore: CorrectionStore,
         cleanupPromptBuilder: CleanupPromptBuilder = CleanupPromptBuilder()
@@ -53,6 +89,7 @@ final class TranscriptionLabRunner {
         self.loadAudioBuffer = loadAudioBuffer
         self.loadSpeechModel = loadSpeechModel
         self.transcribe = transcribe
+        self.runSpeakerTagging = runSpeakerTagging
         self.clean = clean
         self.correctionStore = correctionStore
         self.cleanupPromptBuilder = cleanupPromptBuilder
@@ -61,9 +98,10 @@ final class TranscriptionLabRunner {
     func rerunTranscription(
         entry: TranscriptionLabEntry,
         speechModelID: String,
+        speakerTaggingEnabled: Bool,
         acquirePipeline: () -> Bool,
         releasePipeline: () -> Void
-    ) async throws -> String {
+    ) async throws -> TranscriptionLabTranscriptionResult {
         guard acquirePipeline() else {
             throw TranscriptionLabRunnerError.pipelineBusy
         }
@@ -76,11 +114,38 @@ final class TranscriptionLabRunner {
 
         await loadSpeechModel(speechModelID)
 
-        guard let rawTranscription = await transcribe(audioBuffer) else {
+        if speakerTaggingEnabled,
+           let speakerTaggedResult = await runSpeakerTagging(audioBuffer) {
+            if let filteredTranscript = speakerTaggedResult.filteredTranscript?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               filteredTranscript.isEmpty == false {
+                return TranscriptionLabTranscriptionResult(
+                    rawTranscription: filteredTranscript,
+                    diarizationSummary: speakerTaggedResult.diarizationSummary,
+                    speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript
+                )
+            }
+
+            guard let rawTranscription = await transcribe(audioBuffer)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  rawTranscription.isEmpty == false else {
+                throw TranscriptionLabRunnerError.transcriptionFailed
+            }
+
+            return TranscriptionLabTranscriptionResult(
+                rawTranscription: rawTranscription,
+                diarizationSummary: speakerTaggedResult.diarizationSummary,
+                speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript
+            )
+        }
+
+        guard let rawTranscription = await transcribe(audioBuffer)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawTranscription.isEmpty == false else {
             throw TranscriptionLabRunnerError.transcriptionFailed
         }
 
-        return rawTranscription
+        return TranscriptionLabTranscriptionResult(rawTranscription: rawTranscription)
     }
 
     func rerunCleanup(

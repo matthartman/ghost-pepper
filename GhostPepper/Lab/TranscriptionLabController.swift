@@ -7,8 +7,9 @@ final class TranscriptionLabController: ObservableObject {
     typealias AudioURLProvider = (TranscriptionLabEntry) -> URL
     typealias TranscriptionRunner = (
         _ entry: TranscriptionLabEntry,
-        _ speechModelID: String
-    ) async throws -> String
+        _ speechModelID: String,
+        _ speakerTaggingEnabled: Bool
+    ) async throws -> TranscriptionLabTranscriptionResult
     typealias CleanupRunner = (
         _ entry: TranscriptionLabEntry,
         _ rawTranscription: String,
@@ -17,6 +18,7 @@ final class TranscriptionLabController: ObservableObject {
         _ includeWindowContext: Bool
     ) async throws -> TranscriptionLabCleanupResult
     typealias SelectedSpeechModelSynchronizer = (_ speechModelID: String) -> Void
+    typealias SpeakerTaggingSynchronizer = (_ speakerTaggingEnabled: Bool) -> Void
     typealias SelectedCleanupModelSynchronizer = (_ cleanupModelKind: LocalCleanupModelKind) -> Void
 
     enum RunningStage {
@@ -38,6 +40,17 @@ final class TranscriptionLabController: ObservableObject {
         let usedFallback: Bool
         let fallbackReason: DiarizationSummary.FallbackReason?
         let spans: [Span]
+
+        var speakerIDsInDisplayOrder: [String] {
+            var speakerIDs: [String] = []
+            var seenSpeakerIDs: Set<String> = []
+
+            for span in spans where seenSpeakerIDs.insert(span.speakerID).inserted {
+                speakerIDs.append(span.speakerID)
+            }
+
+            return speakerIDs
+        }
     }
 
     @Published private(set) var entries: [TranscriptionLabEntry] = []
@@ -46,6 +59,11 @@ final class TranscriptionLabController: ObservableObject {
     @Published var selectedSpeechModelID: String {
         didSet {
             synchronizeSelectedSpeechModelIDIfNeeded()
+        }
+    }
+    @Published var usesSpeakerTagging: Bool {
+        didSet {
+            synchronizeSpeakerTaggingIfNeeded()
         }
     }
     @Published var selectedCleanupModelKind: LocalCleanupModelKind {
@@ -58,6 +76,8 @@ final class TranscriptionLabController: ObservableObject {
     @Published private(set) var experimentCorrectedTranscription: String = ""
     @Published private(set) var experimentTranscriptionDuration: TimeInterval?
     @Published private(set) var experimentCleanupDuration: TimeInterval?
+    @Published private(set) var experimentDiarizationSummary: DiarizationSummary?
+    @Published private(set) var experimentSpeakerTaggedTranscript: SpeakerTaggedTranscript?
     @Published private(set) var latestCleanupTranscript: TranscriptionLabCleanupTranscript?
     @Published private(set) var runningStage: RunningStage?
     @Published private(set) var errorMessage: String?
@@ -68,12 +88,14 @@ final class TranscriptionLabController: ObservableObject {
     private let runTranscription: TranscriptionRunner
     private let runCleanup: CleanupRunner
     private let syncSelectedSpeechModelID: SelectedSpeechModelSynchronizer
+    private let syncSpeakerTaggingEnabled: SpeakerTaggingSynchronizer
     private let syncSelectedCleanupModelKind: SelectedCleanupModelSynchronizer
     private var originalStageTimingsByEntryID: [UUID: TranscriptionLabStageTimings] = [:]
     private var suppressSelectionSynchronization = false
 
     init(
         defaultSpeechModelID: String,
+        defaultSpeakerTaggingEnabled: Bool,
         defaultCleanupModelKind: LocalCleanupModelKind = .qwen35_4b_q4_k_m,
         loadStageTimings: @escaping StageTimingsLoader = { [:] },
         loadEntries: @escaping EntryLoader,
@@ -81,9 +103,11 @@ final class TranscriptionLabController: ObservableObject {
         runTranscription: @escaping TranscriptionRunner,
         runCleanup: @escaping CleanupRunner,
         syncSelectedSpeechModelID: @escaping SelectedSpeechModelSynchronizer = { _ in },
+        syncSpeakerTaggingEnabled: @escaping SpeakerTaggingSynchronizer = { _ in },
         syncSelectedCleanupModelKind: @escaping SelectedCleanupModelSynchronizer = { _ in }
     ) {
         self.selectedSpeechModelID = defaultSpeechModelID
+        self.usesSpeakerTagging = defaultSpeakerTaggingEnabled
         self.selectedCleanupModelKind = defaultCleanupModelKind
         self.loadStageTimings = loadStageTimings
         self.loadEntries = loadEntries
@@ -91,15 +115,18 @@ final class TranscriptionLabController: ObservableObject {
         self.runTranscription = runTranscription
         self.runCleanup = runCleanup
         self.syncSelectedSpeechModelID = syncSelectedSpeechModelID
+        self.syncSpeakerTaggingEnabled = syncSpeakerTaggingEnabled
         self.syncSelectedCleanupModelKind = syncSelectedCleanupModelKind
     }
 
     func applyCurrentRerunDefaults(
         speechModelID: String,
+        speakerTaggingEnabled: Bool,
         cleanupModelKind: LocalCleanupModelKind
     ) {
         suppressSelectionSynchronization = true
         selectedSpeechModelID = speechModelID
+        usesSpeakerTagging = speakerTaggingEnabled
         selectedCleanupModelKind = cleanupModelKind
         suppressSelectionSynchronization = false
     }
@@ -153,6 +180,21 @@ final class TranscriptionLabController: ObservableObject {
         return selectedEntry?.correctedTranscription ?? ""
     }
 
+    var displayedSpeakerTaggedTranscriptText: String? {
+        guard let experimentSpeakerTaggedTranscript else {
+            return nil
+        }
+
+        return experimentSpeakerTaggedTranscript.segments
+            .map { segment in
+                """
+                [\(segment.speakerID) | \(formattedDuration(segment.startTime))-\(formattedDuration(segment.endTime))]
+                \(segment.text)
+                """
+            }
+            .joined(separator: "\n\n")
+    }
+
     var originalTranscriptionDuration: TimeInterval? {
         guard let selectedEntryID else {
             return nil
@@ -170,8 +212,12 @@ final class TranscriptionLabController: ObservableObject {
     }
 
     var diarizationVisualization: DiarizationVisualization? {
-        guard let entry = selectedEntry,
-              let summary = entry.diarizationSummary else {
+        guard let entry = selectedEntry else {
+            return nil
+        }
+
+        let summary = experimentDiarizationSummary ?? entry.diarizationSummary
+        guard let summary else {
             return nil
         }
 
@@ -213,6 +259,8 @@ final class TranscriptionLabController: ObservableObject {
             experimentCorrectedTranscription = ""
             experimentTranscriptionDuration = nil
             experimentCleanupDuration = nil
+            experimentDiarizationSummary = nil
+            experimentSpeakerTaggedTranscript = nil
             latestCleanupTranscript = nil
             errorMessage = nil
         } catch {
@@ -223,6 +271,8 @@ final class TranscriptionLabController: ObservableObject {
             experimentCorrectedTranscription = ""
             experimentTranscriptionDuration = nil
             experimentCleanupDuration = nil
+            experimentDiarizationSummary = nil
+            experimentSpeakerTaggedTranscript = nil
             latestCleanupTranscript = nil
             originalStageTimingsByEntryID = [:]
             errorMessage = "Could not load saved recordings."
@@ -240,6 +290,8 @@ final class TranscriptionLabController: ObservableObject {
         experimentCorrectedTranscription = ""
         experimentTranscriptionDuration = nil
         experimentCleanupDuration = nil
+        experimentDiarizationSummary = nil
+        experimentSpeakerTaggedTranscript = nil
         latestCleanupTranscript = nil
         errorMessage = nil
     }
@@ -251,6 +303,8 @@ final class TranscriptionLabController: ObservableObject {
         experimentCorrectedTranscription = ""
         experimentTranscriptionDuration = nil
         experimentCleanupDuration = nil
+        experimentDiarizationSummary = nil
+        experimentSpeakerTaggedTranscript = nil
         latestCleanupTranscript = nil
         errorMessage = nil
     }
@@ -278,12 +332,21 @@ final class TranscriptionLabController: ObservableObject {
         runningStage = .transcription
         errorMessage = nil
         experimentTranscriptionDuration = nil
+        experimentDiarizationSummary = nil
+        experimentSpeakerTaggedTranscript = nil
         latestCleanupTranscript = nil
         let start = Date()
 
         do {
-            experimentRawTranscription = try await runTranscription(entry, selectedSpeechModelID)
+            let result = try await runTranscription(
+                entry,
+                selectedSpeechModelID,
+                usesSpeakerTagging && selectedSpeechModelSupportsSpeakerTagging
+            )
+            experimentRawTranscription = result.rawTranscription
             experimentCorrectedTranscription = ""
+            experimentDiarizationSummary = result.diarizationSummary
+            experimentSpeakerTaggedTranscript = result.speakerTaggedTranscript
             experimentTranscriptionDuration = Date().timeIntervalSince(start)
             experimentCleanupDuration = nil
         } catch let error as TranscriptionLabRunnerError {
@@ -347,6 +410,10 @@ final class TranscriptionLabController: ObservableObject {
         runningStage = nil
     }
 
+    private var selectedSpeechModelSupportsSpeakerTagging: Bool {
+        SpeechModelCatalog.model(named: selectedSpeechModelID)?.supportsSpeakerFiltering == true
+    }
+
     private func synchronizeSelectedSpeechModelIDIfNeeded() {
         guard !suppressSelectionSynchronization else {
             return
@@ -361,5 +428,17 @@ final class TranscriptionLabController: ObservableObject {
         }
 
         syncSelectedCleanupModelKind(selectedCleanupModelKind)
+    }
+
+    private func synchronizeSpeakerTaggingIfNeeded() {
+        guard !suppressSelectionSynchronization else {
+            return
+        }
+
+        syncSpeakerTaggingEnabled(usesSpeakerTagging)
+    }
+
+    private func formattedDuration(_ duration: TimeInterval) -> String {
+        String(format: "%.1fs", duration)
     }
 }

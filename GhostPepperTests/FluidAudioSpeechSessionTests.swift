@@ -191,6 +191,73 @@ final class FluidAudioSpeechSessionTests: XCTestCase {
         let transcriptionCallCountValue = await transcriptionCallCount.get()
         XCTAssertEqual(transcriptionCallCountValue, 1)
     }
+
+    func testSpeakerTaggedTranscriptTranscribesMergedSpeakerSpansInTimelineOrder() async {
+        let capturedAudio = LockedValue<[[Float]]>([])
+        let session = FluidAudioSpeechSession(
+            sampleRate: 10,
+            transcribeFilteredAudio: { audio in
+                await capturedAudio.withValue { $0.append(audio) }
+                switch audio {
+                case [0, 1, 2, 3]:
+                    return "speaker a one"
+                case [4, 5, 6, 7, 8]:
+                    return "speaker b"
+                case [9, 10, 11, 12, 13, 14, 15]:
+                    return "speaker a two"
+                default:
+                    return nil
+                }
+            }
+        )
+
+        session.appendAudioChunk(Array(0..<16).map(Float.init))
+
+        let transcript = await session.speakerTaggedTranscript(
+            spans: [
+                .init(speakerID: "Speaker A", startTime: 0.0, endTime: 0.2),
+                .init(speakerID: "Speaker A", startTime: 0.2, endTime: 0.4),
+                .init(speakerID: "Speaker B", startTime: 0.4, endTime: 0.9),
+                .init(speakerID: "Speaker A", startTime: 0.9, endTime: 1.3),
+                .init(speakerID: "Speaker A", startTime: 1.32, endTime: 1.6),
+            ]
+        )
+
+        XCTAssertEqual(
+            transcript,
+            SpeakerTaggedTranscript(
+                segments: [
+                    .init(
+                        speakerID: "Speaker A",
+                        startTime: 0.0,
+                        endTime: 0.4,
+                        text: "speaker a one"
+                    ),
+                    .init(
+                        speakerID: "Speaker B",
+                        startTime: 0.4,
+                        endTime: 0.9,
+                        text: "speaker b"
+                    ),
+                    .init(
+                        speakerID: "Speaker A",
+                        startTime: 0.9,
+                        endTime: 1.6,
+                        text: "speaker a two"
+                    ),
+                ]
+            )
+        )
+        let recordedAudio = await capturedAudio.get()
+        XCTAssertEqual(
+            recordedAudio,
+            [
+                [0, 1, 2, 3],
+                [4, 5, 6, 7, 8],
+                [9, 10, 11, 12, 13, 14, 15],
+            ]
+        )
+    }
 }
 
 private actor LockedValue<Value> {
