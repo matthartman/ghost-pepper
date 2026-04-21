@@ -128,15 +128,15 @@ final class TranscriptionLabRunner {
 
         if speakerTaggingEnabled,
            let speakerTaggedResult = await runSpeakerTagging(audioBuffer) {
-            let speakerProfiles = await resolveSpeakerProfiles(
-                entry.id,
-                audioBuffer,
-                speakerTaggedResult.diarizationSummary,
-                speakerTaggedResult.speakerTaggedTranscript
-            )
             if let filteredTranscript = speakerTaggedResult.filteredTranscript?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                filteredTranscript.isEmpty == false {
+                let speakerProfiles = await resolveSpeakerProfiles(
+                    entry.id,
+                    audioBuffer,
+                    speakerTaggedResult.diarizationSummary,
+                    speakerTaggedResult.speakerTaggedTranscript
+                )
                 return TranscriptionLabTranscriptionResult(
                     rawTranscription: filteredTranscript,
                     diarizationSummary: speakerTaggedResult.diarizationSummary,
@@ -151,10 +151,21 @@ final class TranscriptionLabRunner {
                 throw TranscriptionLabRunnerError.transcriptionFailed
             }
 
+            let speakerTaggedTranscript = repairedSpeakerTaggedTranscript(
+                from: speakerTaggedResult,
+                fallbackRawTranscription: rawTranscription
+            )
+            let speakerProfiles = await resolveSpeakerProfiles(
+                entry.id,
+                audioBuffer,
+                speakerTaggedResult.diarizationSummary,
+                speakerTaggedTranscript
+            )
+
             return TranscriptionLabTranscriptionResult(
                 rawTranscription: rawTranscription,
                 diarizationSummary: speakerTaggedResult.diarizationSummary,
-                speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript,
+                speakerTaggedTranscript: speakerTaggedTranscript,
                 speakerProfiles: speakerProfiles
             )
         }
@@ -166,6 +177,48 @@ final class TranscriptionLabRunner {
         }
 
         return TranscriptionLabTranscriptionResult(rawTranscription: rawTranscription)
+    }
+
+    private func repairedSpeakerTaggedTranscript(
+        from result: SpeakerTaggedTranscriptionResult,
+        fallbackRawTranscription: String
+    ) -> SpeakerTaggedTranscript? {
+        guard result.diarizationSummary.fallbackReason == .emptyFilteredTranscription else {
+            return result.speakerTaggedTranscript
+        }
+
+        let normalizedFallbackTranscript = fallbackRawTranscription.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard normalizedFallbackTranscript.isEmpty == false else {
+            return nil
+        }
+
+        let speakerIDs = result.diarizationSummary.spans.reduce(into: [String]()) { orderedSpeakerIDs, span in
+            if orderedSpeakerIDs.contains(span.speakerID) == false {
+                orderedSpeakerIDs.append(span.speakerID)
+            }
+        }
+        guard speakerIDs.count == 1, let speakerID = speakerIDs.first else {
+            return nil
+        }
+
+        let startTime = result.diarizationSummary.spans.map(\.startTime).min() ?? 0
+        let endTime = result.diarizationSummary.spans.map(\.endTime).max() ?? startTime
+        guard endTime > startTime else {
+            return nil
+        }
+
+        return SpeakerTaggedTranscript(
+            segments: [
+                .init(
+                    speakerID: speakerID,
+                    startTime: startTime,
+                    endTime: endTime,
+                    text: normalizedFallbackTranscript
+                )
+            ]
+        )
     }
 
     func rerunCleanup(
