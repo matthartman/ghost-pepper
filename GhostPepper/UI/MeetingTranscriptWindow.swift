@@ -173,7 +173,7 @@ final class OpenMeetingTab: ObservableObject, Identifiable {
 final class MeetingWindowState: ObservableObject {
     @Published var tabs: [OpenMeetingTab] = []
     @Published var activeTabID: UUID?
-    @Published var showSidebar = false
+    @Published var showSidebar = true
     @Published var showNewTabView = false
     @Published var historyGroups: [(date: String, entries: [MeetingHistoryEntry])] = []
     @Published var showConsentDialog = false
@@ -323,15 +323,34 @@ final class MeetingWindowState: ObservableObject {
 
 struct MeetingRootView: View {
     @ObservedObject var state: MeetingWindowState
+    @State private var sidebarWidth: CGFloat = 220
 
     var body: some View {
         HStack(spacing: 0) {
             if state.showSidebar {
                 MeetingSidebarView(state: state)
+                    .frame(width: sidebarWidth)
                     .transition(.move(edge: .leading))
+
+                // Draggable divider
                 Rectangle()
                     .fill(Color(nsColor: .separatorColor))
-                    .frame(width: 1)
+                    .frame(width: 3)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let newWidth = sidebarWidth + value.translation.width
+                                sidebarWidth = max(160, min(400, newWidth))
+                            }
+                    )
             }
 
             VStack(spacing: 0) {
@@ -539,6 +558,9 @@ struct MeetingTabContentView: View {
     @State private var selectedContentTab: MeetingContentTab = .notes
     @State private var searchText = ""
     @State private var showSearch = false
+    @State private var showSummaryPrompt = false
+    @AppStorage("meetingSummaryPrompt") private var summaryPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
+    @AppStorage("selectedCleanupModelKind") private var selectedModelKind: String = LocalCleanupModelKind.qwen35_0_8b_q4_k_m.rawValue
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -547,16 +569,48 @@ struct MeetingTabContentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
-                        TextField("Untitled", text: $tab.transcript.meetingName)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(.primary)
-                            .onSubmit { state.renameActiveTab() }
+                        HStack(spacing: 8) {
+                            TextField("Untitled", text: $tab.transcript.meetingName)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundColor(.primary)
+                                .onSubmit { state.renameActiveTab() }
 
-                        Text(dateSubtitle)
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                            .padding(.bottom, tab.transcript.attendees.isEmpty ? 20 : 8)
+                            if tab.isRecording {
+                                Button(action: { tab.session?.refreshTitleAndAttendees() }) {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "sparkle.magnifyingglass")
+                                            .font(.system(size: 11))
+                                        Text("Detect")
+                                            .font(.caption)
+                                    }
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color(nsColor: .controlBackgroundColor))
+                                    .cornerRadius(6)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Grab meeting name and attendee names from the meeting app window")
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            Text(dateSubtitle)
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+
+                            if tab.transcript.importedFrom != nil {
+                                Text("Imported from \(tab.transcript.importedFrom!.capitalized)")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color.orange.opacity(0.1))
+                                    .cornerRadius(4)
+                            }
+                        }
+                        .padding(.bottom, tab.transcript.attendees.isEmpty ? 20 : 8)
 
                         if !tab.transcript.attendees.isEmpty {
                             Text("**Attendees:** \(tab.transcript.attendees.joined(separator: ", "))")
@@ -795,7 +849,7 @@ struct MeetingTabContentView: View {
 
     private var summaryStats: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Regenerate / Generate button
+            // Generate / Regenerate button row
             HStack {
                 if tab.transcript.summary != nil {
                     Button(action: { regenerateSummary() }) {
@@ -825,7 +879,64 @@ struct MeetingTabContentView: View {
                     .buttonStyle(.plain)
                     .disabled(tab.transcript.isGeneratingSummary || tab.transcript.segments.isEmpty)
                 }
+
                 Spacer()
+
+                // Toggle prompt editor
+                Button(action: { withAnimation(.easeInOut(duration: 0.15)) { showSummaryPrompt.toggle() } }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 10))
+                        Text("Customize")
+                            .font(.caption)
+                    }
+                    .foregroundColor(showSummaryPrompt ? .orange : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Inline prompt editor (collapsible)
+            if showSummaryPrompt {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Model picker
+                    HStack {
+                        Text("Model")
+                            .font(.caption).foregroundColor(.secondary)
+                        Picker("", selection: $selectedModelKind) {
+                            ForEach(TextCleanupManager.cleanupModels, id: \.kind) { model in
+                                Text(model.displayName).tag(model.kind.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 200)
+                    }
+
+                    // Prompt editor
+                    Text("Summary prompt")
+                        .font(.caption).foregroundColor(.secondary)
+
+                    TextEditor(text: $summaryPrompt)
+                        .font(.system(size: 11, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+                        .cornerRadius(6)
+                        .frame(height: 120)
+
+                    HStack {
+                        Button("Reset to Default") {
+                            summaryPrompt = MeetingSummaryGenerator.finalSummaryPrompt
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundColor(.secondary)
+
+                        Spacer()
+                    }
+                }
+                .padding(10)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .cornerRadius(8)
             }
 
             // Editable summary (same style as notes)
@@ -1001,9 +1112,9 @@ struct MeetingSidebarView: View {
                             let isOpen = state.tabs.contains { $0.fileURL == entry.fileURL }
                             Button(action: { state.openFile(entry.fileURL) }) {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "doc.text")
+                                    Image(systemName: entry.isGranola ? "square.and.arrow.down.on.square" : "doc.text")
                                         .font(.system(size: 10))
-                                        .foregroundColor(isOpen ? .orange : .secondary)
+                                        .foregroundColor(isOpen ? .orange : (entry.isGranola ? .green.opacity(0.7) : .secondary))
                                     Text(entry.name)
                                         .font(.system(size: 12))
                                         .foregroundColor(isOpen ? .orange : .primary)
@@ -1033,7 +1144,6 @@ struct MeetingSidebarView: View {
             }
             .frame(maxHeight: .infinity)
         }
-        .frame(width: 200)
         .background(Color(nsColor: .controlBackgroundColor))
         .sheet(isPresented: $showGranolaSync) {
             GranolaImportView(importer: granolaImporter, state: state)
@@ -1172,16 +1282,25 @@ struct TranscriptSegmentRow: View {
     let segment: TranscriptSegment
     var highlightText: String = ""
 
+    private var showSpeakerBadge: Bool {
+        switch segment.speaker {
+        case .me: return true
+        case .remote(let name): return name != nil
+        }
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(segment.formattedTimestamp)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 48, alignment: .trailing)
-            Text(segment.speaker.displayName)
-                .font(.caption2.weight(.semibold)).foregroundColor(.white)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Capsule().fill(speakerColor))
+            if showSpeakerBadge {
+                Text(segment.speaker.displayName)
+                    .font(.caption2.weight(.semibold)).foregroundColor(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(speakerColor))
+            }
             highlightedText
                 .font(.system(size: 14)).lineSpacing(3)
                 .textSelection(.enabled)

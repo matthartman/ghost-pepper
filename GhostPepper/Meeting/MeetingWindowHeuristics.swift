@@ -81,7 +81,7 @@ enum MeetingWindowHeuristics {
     }
 
     private static func cleanedTitle(from title: String) -> String {
-        title
+        var result = title
             .replacingOccurrences(of: " | Microsoft Teams", with: "")
             .replacingOccurrences(of: " - Microsoft Teams", with: "")
             .replacingOccurrences(of: " – Microsoft Teams", with: "")
@@ -90,5 +90,13 @@ enum MeetingWindowHeuristics {
             .replacingOccurrences(of: " - Cisco Webex", with: "")
             .replacingOccurrences(of: " | Slack", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Clean Zoom-specific patterns: "Person's Zoom Meeting" → "Person's Meeting"
+        if result.contains("Zoom Meeting") {
+            result = result.replacingOccurrences(of: "'s Zoom Meeting", with: "'s Meeting")
+                .replacingOccurrences(of: "Zoom Meeting", with: "Meeting")
+        }
+
+        return result
     }
 }

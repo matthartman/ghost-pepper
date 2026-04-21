@@ -107,12 +107,15 @@ final class MeetingSession: ObservableObject {
             }
         }
 
-        // Try to auto-update title and grab attendees after a short delay
-        // (gives the meeting app time to update its window title and show participants)
-        Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.autoUpdateTitleFromDetectedMeetingApp()
-                await self?.captureAttendees()
+        // Try to auto-update title and grab attendees multiple times over the first minute.
+        // People join at different times, so retrying gives us better coverage.
+        for delay in [3.0, 15.0, 30.0, 60.0] {
+            Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self = self, self.isActive else { return }
+                    self.autoUpdateTitleFromDetectedMeetingApp()
+                    await self.captureAttendees()
+                }
             }
         }
 
@@ -152,43 +155,104 @@ final class MeetingSession: ObservableObject {
 
     // MARK: - Auto-update title
 
-    /// One-time attempt to update the meeting title from the detected meeting app.
-    /// Only updates if the user hasn't manually changed the name.
+    /// Known meeting app bundle IDs to scan when no specific app was detected.
+    private static let meetingAppBundleIDs = [
+        "us.zoom.xos",
+        "com.microsoft.teams2",
+        "com.apple.FaceTime",
+        "com.cisco.webexmeetingsapp",
+        "com.tinyspeck.slackmacgap",
+    ]
+
+    /// Try to update the meeting title from the detected meeting app,
+    /// or by scanning known meeting apps if none was detected.
     private func autoUpdateTitleFromDetectedMeetingApp() {
         guard !hasAutoUpdatedTitle, isActive else { return }
         // Only update if user hasn't edited the name
         guard transcript.meetingName == originalName else { return }
-        guard let detectedMeetingAppName,
-              let detectedMeetingBundleIdentifier,
-              let meetingApp = NSRunningApplication.runningApplications(withBundleIdentifier: detectedMeetingBundleIdentifier).first else { return }
-        hasAutoUpdatedTitle = true
 
-        let titles = AccessibilityWindowTitles.all(for: meetingApp)
-        guard let cleaned = MeetingWindowHeuristics.bestAutoUpdateTitle(
-            in: titles,
-            appName: detectedMeetingAppName,
-            observedBundleIdentifier: meetingApp.bundleIdentifier,
-            monitoredBundleIdentifier: detectedMeetingBundleIdentifier
-        ) else { return }
+        // Try the detected app first, then fall back to scanning known meeting apps
+        let appsToCheck: [(app: NSRunningApplication, name: String)]
+        if let detectedMeetingBundleIdentifier,
+           let detectedMeetingAppName,
+           let app = NSRunningApplication.runningApplications(withBundleIdentifier: detectedMeetingBundleIdentifier).first {
+            appsToCheck = [(app, detectedMeetingAppName)]
+        } else {
+            appsToCheck = Self.meetingAppBundleIDs.compactMap { bundleID in
+                guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first else { return nil }
+                return (app, app.localizedName ?? "Meeting")
+            }
+        }
 
-        transcript.meetingName = cleaned
-        print("MeetingSession: auto-updated title to '\(cleaned)'")
-        autoSave()
+        for (meetingApp, appName) in appsToCheck {
+            let titles = AccessibilityWindowTitles.all(for: meetingApp)
+            if let cleaned = MeetingWindowHeuristics.bestAutoUpdateTitle(
+                in: titles,
+                appName: appName,
+                observedBundleIdentifier: meetingApp.bundleIdentifier,
+                monitoredBundleIdentifier: meetingApp.bundleIdentifier
+            ) {
+                hasAutoUpdatedTitle = true
+                transcript.meetingName = cleaned
+                print("MeetingSession: auto-updated title to '\(cleaned)' from \(appName)")
+                autoSave()
+                return
+            }
+        }
+    }
+
+    /// Manually trigger title detection and attendee capture.
+    /// Briefly activates the meeting app so OCR captures its window, not Ghost Pepper's.
+    func refreshTitleAndAttendees() {
+        // Reset the flag so title detection retries
+        hasAutoUpdatedTitle = false
+        autoUpdateTitleFromDetectedMeetingApp()
+
+        // Find the meeting app and bring it to front for OCR
+        let meetingApp: NSRunningApplication? = {
+            if let bundleID = detectedMeetingBundleIdentifier {
+                return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+            }
+            // Scan known meeting apps
+            for bundleID in Self.meetingAppBundleIDs {
+                if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+                    return app
+                }
+            }
+            return nil
+        }()
+
+        Task {
+            if let meetingApp {
+                meetingApp.activate()
+                // Brief delay to let the window come to front
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            await captureAttendees()
+            // Bring Ghost Pepper back to front
+            NSApp.activate()
+        }
     }
 
     // MARK: - Attendee capture
 
-    /// One-time OCR of the meeting window to extract participant names.
+    /// OCR the meeting window to extract participant names.
+    /// Retries will merge new names with existing ones (people join late).
     private func captureAttendees() async {
-        guard isActive, transcript.attendees.isEmpty else { return }
+        guard isActive else { return }
 
         guard let context = await ocrService.captureContext(customWords: []) else { return }
         let text = context.windowContents
 
         let names = Self.extractAttendeeNames(from: text)
-        if !names.isEmpty {
-            transcript.attendees = names
-            print("MeetingSession: captured attendees: \(names.joined(separator: ", "))")
+        guard !names.isEmpty else { return }
+
+        // Merge with existing attendees (preserving order, no duplicates)
+        let existing = Set(transcript.attendees)
+        let newNames = names.filter { !existing.contains($0) }
+        if !newNames.isEmpty {
+            transcript.attendees.append(contentsOf: newNames)
+            print("MeetingSession: captured attendees: \(transcript.attendees.joined(separator: ", "))")
             autoSave()
         }
     }

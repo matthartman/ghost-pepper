@@ -103,6 +103,7 @@ struct MeetingMarkdownWriter {
         var title = fileURL.deletingPathExtension().lastPathComponent
         var notes = ""
         var summary = ""
+        var importedFrom: String?
         var inFrontmatter = false
         var frontmatterSeen = false
         var inNotes = false
@@ -112,7 +113,7 @@ struct MeetingMarkdownWriter {
         var transcriptLines: [String] = []
 
         for line in lines {
-            // Skip YAML frontmatter (--- blocks)
+            // Parse YAML frontmatter (--- blocks)
             if line == "---" {
                 if !frontmatterSeen {
                     inFrontmatter = true
@@ -123,7 +124,12 @@ struct MeetingMarkdownWriter {
                     continue
                 }
             }
-            if inFrontmatter { continue }
+            if inFrontmatter {
+                if line.hasPrefix("imported_from:") {
+                    importedFrom = line.replacingOccurrences(of: "imported_from:", with: "").trimmingCharacters(in: .whitespaces)
+                }
+                continue
+            }
 
             if line.hasPrefix("# ") && title == fileURL.deletingPathExtension().lastPathComponent {
                 title = String(line.dropFirst(2))
@@ -170,6 +176,7 @@ struct MeetingMarkdownWriter {
         transcript.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript.summary = trimmedSummary.isEmpty ? nil : trimmedSummary
+        transcript.importedFrom = importedFrom
 
         // Parse transcript lines: **[00:00] Me:** text
         for line in transcriptLines {

@@ -47,6 +47,7 @@ final class MeetingTranscript: ObservableObject {
     @Published var attendees: [String]
     @Published var summary: String?
     @Published var isGeneratingSummary = false
+    var importedFrom: String?
 
     let sessionID: UUID
 

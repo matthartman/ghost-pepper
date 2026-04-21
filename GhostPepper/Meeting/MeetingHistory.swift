@@ -6,6 +6,7 @@ struct MeetingHistoryEntry: Identifiable, Hashable {
     let name: String
     let dateFolder: String
     let fileURL: URL
+    let isGranola: Bool
 
     var displayDate: String { dateFolder }
 }
@@ -43,15 +44,17 @@ enum MeetingHistory {
                 }
 
             let entries = mdFiles.map { file in
-                let name = MeetingHistory.readTitle(from: file)
+                let (name, isGranola) = MeetingHistory.readHeader(from: file)
+                let displayName = name
                     ?? file.deletingPathExtension().lastPathComponent
                         .replacingOccurrences(of: "-", with: " ")
                         .capitalized
                 return MeetingHistoryEntry(
                     id: file,
-                    name: name,
+                    name: displayName,
                     dateFolder: dateFolder,
-                    fileURL: file
+                    fileURL: file,
+                    isGranola: isGranola
                 )
             }
 
@@ -63,15 +66,24 @@ enum MeetingHistory {
         return groups
     }
 
-    /// Read the `# Title` line from a markdown file without parsing the whole thing.
-    private static func readTitle(from fileURL: URL) -> String? {
-        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return nil }
+    /// Read the title and source from a markdown file header without parsing the whole thing.
+    private static func readHeader(from fileURL: URL) -> (title: String?, isGranola: Bool) {
+        guard let content = try? String(contentsOf: fileURL, encoding: .utf8) else { return (nil, false) }
+        var title: String?
+        var isGranola = false
         for line in content.components(separatedBy: .newlines) {
-            if line.hasPrefix("# ") {
-                let title = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                return title.isEmpty ? nil : title
+            if line.hasPrefix("# ") && title == nil {
+                let t = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                title = t.isEmpty ? nil : t
+            }
+            if line.contains("imported_from: granola") || line.contains("imported_from:granola") {
+                isGranola = true
+            }
+            // Stop after finding both or passing the frontmatter + title
+            if title != nil && (isGranola || !line.hasPrefix("---") && !line.hasPrefix("#") && !line.isEmpty && title != nil) {
+                break
             }
         }
-        return nil
+        return (title, isGranola)
     }
 }
