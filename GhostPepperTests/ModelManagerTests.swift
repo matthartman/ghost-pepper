@@ -58,4 +58,59 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.state, .idle)
         XCTAssertNil(manager.error)
     }
+
+    func testRescueSingleSpeakerSpansUsesSpeechSegmentsWhenOnlyOneSpeakerIsDetected() {
+        let originalSpans = [
+            DiarizationSummary.Span(speakerID: "Speaker 0", startTime: 2.48, endTime: 4.24)
+        ]
+        let speechSegments = [
+            DiarizationSummary.MergedSpan(startTime: 2.204, endTime: 4.5878125)
+        ]
+
+        let rescuedSpans = ModelManager.rescuedSingleSpeakerSpans(
+            from: originalSpans,
+            usingSpeechSegments: speechSegments
+        )
+
+        XCTAssertEqual(
+            rescuedSpans,
+            [
+                DiarizationSummary.Span(
+                    speakerID: "Speaker 0",
+                    startTime: 2.204,
+                    endTime: 4.5878125
+                )
+            ]
+        )
+    }
+
+    func testRescueSingleSpeakerSpansKeepsOriginalSpansWhenMultipleSpeakersAreDetected() {
+        let originalSpans = [
+            DiarizationSummary.Span(speakerID: "Speaker 0", startTime: 0.4, endTime: 1.0),
+            DiarizationSummary.Span(speakerID: "Speaker 1", startTime: 1.2, endTime: 1.8)
+        ]
+        let speechSegments = [
+            DiarizationSummary.MergedSpan(startTime: 0.3, endTime: 1.9)
+        ]
+
+        let rescuedSpans = ModelManager.rescuedSingleSpeakerSpans(
+            from: originalSpans,
+            usingSpeechSegments: speechSegments
+        )
+
+        XCTAssertEqual(rescuedSpans, originalSpans)
+    }
+
+    func testRescueSingleSpeakerSpansKeepsOriginalSpansWhenNoSpeechSegmentsExist() {
+        let originalSpans = [
+            DiarizationSummary.Span(speakerID: "Speaker 0", startTime: 2.48, endTime: 4.24)
+        ]
+
+        let rescuedSpans = ModelManager.rescuedSingleSpeakerSpans(
+            from: originalSpans,
+            usingSpeechSegments: []
+        )
+
+        XCTAssertEqual(rescuedSpans, originalSpans)
+    }
 }

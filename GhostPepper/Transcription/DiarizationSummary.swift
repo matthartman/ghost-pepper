@@ -41,6 +41,8 @@ struct DiarizationSummary: Equatable, Codable, Sendable {
     enum FallbackReason: String, Equatable, Codable, Sendable {
         case noUsableSpeakerSpans
         case noSpeakerReachedThreshold
+        case ambiguousDominantSpeaker
+        case singleDetectedSpeaker
         case insufficientKeptAudio
         case filteredAudioExtractionFailed
         case emptyFilteredTranscription

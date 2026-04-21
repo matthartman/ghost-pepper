@@ -37,8 +37,7 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertFalse(SpeechModelCatalog.whisperSmallEnglish.supportsSpeakerFiltering)
         XCTAssertFalse(SpeechModelCatalog.whisperSmallMultilingual.supportsSpeakerFiltering)
         XCTAssertTrue(SpeechModelCatalog.parakeetV3.supportsSpeakerFiltering)
-        // Qwen3-ASR is an encoder-decoder without a diarization output.
-        XCTAssertFalse(SpeechModelCatalog.qwen3AsrInt8.supportsSpeakerFiltering)
+        XCTAssertTrue(SpeechModelCatalog.qwen3AsrInt8.supportsSpeakerFiltering)
     }
 
     func testQwen3AsrInt8Descriptor() {

@@ -10,7 +10,9 @@ final class ModelManager: ObservableObject {
 
     private(set) var whisperKit: WhisperKit?
     private var fluidAudioManager: AsrManager?
+    private var fluidAudioModels: AsrModels?
     private var sortformerModels: SortformerModels?
+    private var diarizerManager: DiarizerManager?
     /// Stored as `Any?` because `Qwen3AsrManager` is `@available(macOS 15, *)`
     /// and the app deploys to macOS 14. Cast at use sites under `#available`.
     private var qwen3AsrManagerStorage: Any?
@@ -171,10 +173,42 @@ final class ModelManager: ObservableObject {
         }
     }
 
+    func makeRecordingTranscriptionSession() -> RecordingTranscriptionSession? {
+        guard let model = SpeechModelCatalog.model(named: modelName),
+              model.backend == .fluidAudio else {
+            return nil
+        }
+
+        switch model.fluidAudioVariant {
+        case .qwen3AsrInt8:
+            if #available(macOS 15, iOS 18, *),
+               let manager = qwen3AsrManagerStorage as? Qwen3AsrManager {
+                return QwenRecordingTranscriptionSession(asrManager: manager)
+            }
+            return nil
+        case .parakeetV3, .none:
+            guard let fluidAudioModels,
+                  let fluidAudioManager else {
+                return nil
+            }
+            return SlidingWindowRecordingTranscriptionSession(
+                models: fluidAudioModels,
+                fullBufferTranscription: { audioBuffer in
+                    do {
+                        let result = try await fluidAudioManager.transcribe(audioBuffer, source: .microphone)
+                        let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return cleaned.isEmpty ? nil : cleaned
+                    } catch {
+                        return nil
+                    }
+                }
+            )
+        }
+    }
+
     func makeRecordingSessionCoordinator() async -> RecordingSessionCoordinator? {
         guard let model = SpeechModelCatalog.model(named: modelName),
-              model.supportsSpeakerFiltering,
-              fluidAudioManager != nil else {
+              model.backend == .fluidAudio else {
             return nil
         }
 
@@ -212,6 +246,107 @@ final class ModelManager: ObservableObject {
             debugLogger?(.model, "Speaker filtering diarizer failed to load: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    func transcribeWithSpeakerTagging(audioBuffer: [Float]) async -> SpeakerTaggedTranscriptionResult? {
+        guard let model = SpeechModelCatalog.model(named: modelName),
+              model.supportsSpeakerFiltering,
+              audioBuffer.isEmpty == false else {
+            return nil
+        }
+
+        do {
+            let diarizerModels = try await loadSortformerModels()
+            let diarizer = SortformerDiarizer()
+            diarizer.initialize(models: diarizerModels)
+            defer { diarizer.cleanup() }
+
+            let session = FluidAudioSpeechSession { [weak self] filteredAudio in
+                await self?.transcribe(audioBuffer: filteredAudio)
+            }
+            session.appendAudioChunk(audioBuffer)
+
+            for audioChunk in Self.audioChunks(
+                from: audioBuffer,
+                maxCount: Self.speakerTaggingChunkSizeSamples
+            ) {
+                do {
+                    _ = try diarizer.process(samples: audioChunk)
+                } catch {
+                    debugLogger?(
+                        .model,
+                        "Speaker tagging diarization chunk failed: \(error.localizedDescription)"
+                    )
+                }
+            }
+
+            diarizer.timeline.finalize()
+            let segments = diarizer.timeline.speakers.values
+                .flatMap { $0.finalizedSegments }
+            let spans = await speakerTaggingSpans(
+                from: Self.diarizationSpans(from: segments),
+                audioBuffer: audioBuffer
+            )
+            let finalizationResult = await session.finalize(spans: spans)
+            let speakerTaggedTranscript = await session.speakerTaggedTranscript(spans: spans)
+
+            return SpeakerTaggedTranscriptionResult(
+                filteredTranscript: finalizationResult.filteredTranscript,
+                diarizationSummary: finalizationResult.summary,
+                speakerTaggedTranscript: speakerTaggedTranscript
+            )
+        } catch {
+            debugLogger?(.model, "Speaker tagging diarizer failed to load: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func speakerTaggingSpans(
+        from spans: [DiarizationSummary.Span],
+        audioBuffer: [Float]
+    ) async -> [DiarizationSummary.Span] {
+        guard Self.singleDetectedSpeakerID(in: spans) != nil,
+              let speechSegments = await singleSpeakerSpeechSegments(from: audioBuffer) else {
+            return spans
+        }
+
+        let rescuedSpans = Self.rescuedSingleSpeakerSpans(
+            from: spans,
+            usingSpeechSegments: speechSegments
+        )
+        if rescuedSpans != spans {
+            debugLogger?(.model, "Speaker tagging rescued single-speaker spans with VAD speech segments.")
+        }
+        return rescuedSpans
+    }
+
+    private func singleSpeakerSpeechSegments(
+        from audioBuffer: [Float]
+    ) async -> [DiarizationSummary.MergedSpan]? {
+        guard audioBuffer.isEmpty == false else {
+            return nil
+        }
+
+        do {
+            let vadManager = try await VadManager()
+            let speechSegments = try await vadManager.segmentSpeech(audioBuffer)
+                .map { segment in
+                    DiarizationSummary.MergedSpan(
+                        startTime: segment.startTime,
+                        endTime: segment.endTime
+                    )
+                }
+                .filter { $0.duration > 0 }
+            return speechSegments.isEmpty ? nil : speechSegments
+        } catch {
+            debugLogger?(.model, "Single-speaker VAD rescue failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func extractSpeakerEmbedding(from audioBuffer: [Float]) async throws -> [Float] {
+        let diarizerManager = try await loadDiarizerManager()
+        return try diarizerManager.extractSpeakerEmbedding(from: audioBuffer)
     }
 
     private func loadWhisperModel(named modelName: String) async throws {
@@ -273,6 +408,7 @@ final class ModelManager: ObservableObject {
         downloadProgress = nil
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
+        fluidAudioModels = models
         fluidAudioManager = manager
     }
 
@@ -316,6 +452,7 @@ final class ModelManager: ObservableObject {
     private func clearLoadedModelInstances() {
         whisperKit = nil
         fluidAudioManager = nil
+        fluidAudioModels = nil
         sortformerModels = nil
         qwen3AsrManagerStorage = nil
         downloadProgress = nil
@@ -340,6 +477,45 @@ final class ModelManager: ObservableObject {
         return models
     }
 
+    private func loadDiarizerManager() async throws -> DiarizerManager {
+        if let diarizerManager {
+            return diarizerManager
+        }
+
+        let models = try await DiarizerModels.downloadIfNeeded()
+        let diarizerManager = DiarizerManager()
+        diarizerManager.initialize(models: models)
+        self.diarizerManager = diarizerManager
+        return diarizerManager
+    }
+
+    static func rescuedSingleSpeakerSpans(
+        from spans: [DiarizationSummary.Span],
+        usingSpeechSegments speechSegments: [DiarizationSummary.MergedSpan]
+    ) -> [DiarizationSummary.Span] {
+        guard let speakerID = singleDetectedSpeakerID(in: spans) else {
+            return spans
+        }
+
+        let rescuedSpans = speechSegments
+            .sorted { lhs, rhs in
+                if lhs.startTime == rhs.startTime {
+                    return lhs.endTime < rhs.endTime
+                }
+                return lhs.startTime < rhs.startTime
+            }
+            .map { segment in
+                DiarizationSummary.Span(
+                    speakerID: speakerID,
+                    startTime: segment.startTime,
+                    endTime: segment.endTime
+                )
+            }
+            .filter { $0.duration > 0 }
+
+        return rescuedSpans.isEmpty ? spans : rescuedSpans
+    }
+
     private static func diarizationSpans(from segments: [DiarizerSegment]) -> [DiarizationSummary.Span] {
         segments
             .map { segment in
@@ -355,6 +531,40 @@ final class ModelManager: ObservableObject {
                 }
                 return lhs.startTime < rhs.startTime
             }
+    }
+
+    private static func singleDetectedSpeakerID(
+        in spans: [DiarizationSummary.Span]
+    ) -> String? {
+        let speakerIDs = spans.reduce(into: [String]()) { orderedSpeakerIDs, span in
+            if orderedSpeakerIDs.contains(span.speakerID) == false {
+                orderedSpeakerIDs.append(span.speakerID)
+            }
+        }
+        guard speakerIDs.count == 1 else {
+            return nil
+        }
+        return speakerIDs.first
+    }
+
+    private static let speakerTaggingChunkSizeSamples = 16_000
+
+    private static func audioChunks(from audioBuffer: [Float], maxCount: Int) -> [[Float]] {
+        guard maxCount > 0, audioBuffer.isEmpty == false else {
+            return []
+        }
+
+        var audioChunks: [[Float]] = []
+        audioChunks.reserveCapacity((audioBuffer.count + maxCount - 1) / maxCount)
+
+        var startIndex = 0
+        while startIndex < audioBuffer.count {
+            let endIndex = min(startIndex + maxCount, audioBuffer.count)
+            audioChunks.append(Array(audioBuffer[startIndex..<endIndex]))
+            startIndex = endIndex
+        }
+
+        return audioChunks
     }
 
     private static func isRetryableLoadError(_ error: Error) -> Bool {

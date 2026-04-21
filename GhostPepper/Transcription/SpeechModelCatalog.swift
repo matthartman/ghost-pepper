@@ -35,9 +35,9 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
     }
 
     var supportsSpeakerFiltering: Bool {
-        // Only Parakeet exposes diarization output via the Sortformer pipeline.
-        // Qwen3-ASR is an encoder-decoder and has no per-speaker segmentation.
-        fluidAudioVariant == .parakeetV3
+        // Speaker filtering uses a separate diarization pipeline, so any
+        // FluidAudio-backed ASR model can participate in filtering.
+        backend == .fluidAudio
     }
 }
 

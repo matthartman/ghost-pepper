@@ -52,9 +52,12 @@ private final class FakeRecordingTranscriptionSession: RecordingTranscriptionSes
     private(set) var finishCallCount = 0
     private(set) var cancelCallCount = 0
     var finalTranscript: String?
+    let allowsBatchFallback: Bool
+    let supportsConcurrentFinalization = false
 
-    init(finalTranscript: String?) {
+    init(finalTranscript: String?, allowsBatchFallback: Bool = false) {
         self.finalTranscript = finalTranscript
+        self.allowsBatchFallback = allowsBatchFallback
     }
 
     func appendAudioChunk(_ samples: [Float]) {
@@ -148,14 +151,14 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(AppStatus.error.rawValue, "Error")
     }
 
-    func testEmptyTranscriptionDispositionCancelsShortRecordings() {
+    func testEmptyTranscriptionDispositionCancelsSubThresholdRecordings() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 7_999),
             .cancel
         )
     }
 
-    func testEmptyTranscriptionDispositionShowsNoSoundForFiveSecondsOrLonger() {
+    func testEmptyTranscriptionDispositionShowsNoSoundDetectedAtThresholdAndAbove() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 8_000),
             .showNoSoundDetected
@@ -641,6 +644,242 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(batchTranscriptionCallCount, 0)
         let recordedCleanupInputs = await cleanedInputs.get()
         XCTAssertEqual(recordedCleanupInputs, ["streamed transcript"])
+    }
+
+    func testAppStateSkipsBatchFallbackWhenRecordingSessionDisallowsIt() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(finalTranscript: nil)
+        var batchTranscriptionCallCount = 0
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.parakeetV3)
+            return transcriptionSession
+        }
+        appState.transcribeAudioBufferOverride = { _ in
+            batchTranscriptionCallCount += 1
+            return "batch transcript"
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3])
+        appState.audioRecorder.onConvertedAudioChunk?([4, 5, 6])
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: appState.activeRecordingTranscriptionSession,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(transcriptionSession.finishCallCount, 1)
+        XCTAssertEqual(batchTranscriptionCallCount, 0)
+    }
+
+    func testAppStateFallsBackToBatchTranscriptionWhenRecordingSessionAllowsIt() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(
+            finalTranscript: nil,
+            allowsBatchFallback: true
+        )
+        let cleanedInputs = LockedValue<[String]>([])
+        var batchTranscriptionCallCount = 0
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.parakeetV3)
+            return transcriptionSession
+        }
+        appState.transcribeAudioBufferOverride = { _ in
+            batchTranscriptionCallCount += 1
+            return "batch transcript"
+        }
+        appState.cleanedTranscriptionResultOverride = { text, _ in
+            await cleanedInputs.append(text)
+            return (text: text, prompt: "", attemptedCleanup: false, cleanupUsedFallback: false)
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3])
+        appState.audioRecorder.onConvertedAudioChunk?([4, 5, 6])
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: appState.activeRecordingTranscriptionSession,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(transcriptionSession.finishCallCount, 1)
+        XCTAssertEqual(batchTranscriptionCallCount, 1)
+        let recordedCleanupInputs = await cleanedInputs.get()
+        XCTAssertEqual(recordedCleanupInputs, ["batch transcript"])
+    }
+
+    func testAppStateFallsBackToBatchTranscriptionWhenSlidingWindowStreamReturnsNothing() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let streamedChunks = LockedValue<[[Float]]>([])
+        let streamingEvents = LockedValue<[String]>([])
+        let cleanedInputs = LockedValue<[String]>([])
+        var batchTranscriptionCallCount = 0
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.parakeetV3)
+            return SlidingWindowRecordingTranscriptionSession {
+                StreamingRecordingHandle(
+                    appendAudioChunk: { samples in
+                        await streamedChunks.append(samples)
+                    },
+                    finishTranscription: {
+                        await streamingEvents.append("finish")
+                        return ""
+                    },
+                    cancel: {
+                        await streamingEvents.append("cancel")
+                    },
+                    cleanup: {
+                        await streamingEvents.append("cleanup")
+                    }
+                )
+            }
+        }
+        appState.transcribeAudioBufferOverride = { _ in
+            batchTranscriptionCallCount += 1
+            return "batch transcript"
+        }
+        appState.cleanedTranscriptionResultOverride = { text, _ in
+            await cleanedInputs.append(text)
+            return (text: text, prompt: "", attemptedCleanup: false, cleanupUsedFallback: false)
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3])
+        appState.audioRecorder.onConvertedAudioChunk?([4, 5, 6])
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: appState.activeRecordingTranscriptionSession,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(batchTranscriptionCallCount, 1)
+        let recordedChunks = await streamedChunks.get()
+        XCTAssertEqual(recordedChunks, [[1, 2, 3], [4, 5, 6]])
+        let recordedEvents = await streamingEvents.get()
+        XCTAssertEqual(recordedEvents, ["finish", "cleanup"])
+        let recordedCleanupInputs = await cleanedInputs.get()
+        XCTAssertEqual(recordedCleanupInputs, ["batch transcript"])
+    }
+
+    func testAppStateDoesNotRunExternalBatchFallbackWhenSlidingWindowSessionOwnsFinalBatchTranscription() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let streamedChunks = LockedValue<[[Float]]>([])
+        let streamingEvents = LockedValue<[String]>([])
+        var batchTranscriptionCallCount = 0
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.parakeetV3)
+            return SlidingWindowRecordingTranscriptionSession(
+                fullBufferTranscription: { _ in nil },
+                handleFactory: {
+                    StreamingRecordingHandle(
+                        appendAudioChunk: { samples in
+                            await streamedChunks.append(samples)
+                        },
+                        finishTranscription: {
+                            await streamingEvents.append("finish")
+                            return "streamed transcript"
+                        },
+                        cancel: {
+                            await streamingEvents.append("cancel")
+                        },
+                        cleanup: {
+                            await streamingEvents.append("cleanup")
+                        }
+                    )
+                }
+            )
+        }
+        appState.transcribeAudioBufferOverride = { _ in
+            batchTranscriptionCallCount += 1
+            return "batch transcript"
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3])
+        appState.audioRecorder.onConvertedAudioChunk?([4, 5, 6])
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: appState.activeRecordingTranscriptionSession,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(batchTranscriptionCallCount, 0)
+        let recordedChunks = await streamedChunks.get()
+        XCTAssertEqual(recordedChunks, [[1, 2, 3], [4, 5, 6]])
+        let recordedEvents = await streamingEvents.get()
+        XCTAssertEqual(recordedEvents, ["finish", "cleanup"])
+    }
+
+    func testFinishRecordingForTestingSkipsWindowContextProviderWhenTranscriptIsMissing() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let providerCallCount = LockedValue(0)
+
+        appState.transcribeAudioBufferOverride = { _ in
+            nil
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: nil,
+            archivedWindowContext: nil,
+            windowContextProvider: {
+                await providerCallCount.set(1)
+                return RecordingOCRPrefetchResult(
+                    context: OCRContext(windowContents: "captured"),
+                    elapsed: 0.25
+                )
+            }
+        )
+
+        let callCount = await providerCallCount.get()
+        XCTAssertEqual(callCount, 0)
     }
 
     func testAppStatePrefersFilteredSpeakerTranscriptOverStreamedTranscript() async throws {
@@ -1466,6 +1705,49 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertFalse(entries[0].speakerFilteringUsedFallback)
     }
 
+    func testQwenRecordingUsesSpeakerFilteringSession() async throws {
+        guard #available(macOS 15, iOS 18, *) else {
+            throw XCTSkip("Qwen3-ASR requires macOS 15 or later.")
+        }
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(finalTranscript: "streamed transcript")
+        var diarizationChunks: [[Float]] = []
+        var factoryCallCount = 0
+
+        appState.speechModel = SpeechModelCatalog.qwen3AsrInt8.id
+        appState.ignoreOtherSpeakers = true
+        appState.recordingTranscriptionSessionFactory = { descriptor in
+            XCTAssertEqual(descriptor, SpeechModelCatalog.qwen3AsrInt8)
+            return transcriptionSession
+        }
+        appState.recordingSessionCoordinatorFactory = {
+            factoryCallCount += 1
+            return RecordingSessionCoordinator(
+                appendAudioChunk: { samples in
+                    diarizationChunks.append(samples)
+                },
+                finish: {
+                    (nil, Self.makeDiarizationSummary(usedFallback: true))
+                }
+            )
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.audioRecorder.onConvertedAudioChunk?([1, 2, 3, 4])
+
+        XCTAssertEqual(factoryCallCount, 1)
+        XCTAssertNotNil(appState.activeRecordingSessionCoordinator)
+        XCTAssertEqual(diarizationChunks, [[1, 2, 3, 4]])
+        XCTAssertEqual(transcriptionSession.appendedChunks, [[1, 2, 3, 4]])
+    }
+
     func testAppStateArchivesDiarizationFallbackState() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
@@ -1625,6 +1907,10 @@ private actor LockedValue<Value> {
 
     func get() -> Value {
         value
+    }
+
+    func set(_ value: Value) {
+        self.value = value
     }
 
     func append<Element>(_ newElement: Element) where Value == [Element] {

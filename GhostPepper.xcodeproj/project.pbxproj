@@ -10,6 +10,11 @@
 		056C454F3BD1A9795C6775A5 /* ScreenRecordingPermissionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E4B61BA7270EEC11A8AC69 /* ScreenRecordingPermissionController.swift */; };
 		0606E11E6F102BBB44ED08B6 /* ScreenRecordingPermissionControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C9ECBFE04804AA79262A07B /* ScreenRecordingPermissionControllerTests.swift */; };
 		09DA02222FFAFD8F32DB0212 /* TranscriptionLabStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E3 /* TranscriptionLabStoreTests.swift */; };
+		09DA02222FFAFD8F32DB0213 /* RecognizedVoiceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E4 /* RecognizedVoiceStoreTests.swift */; };
+		09DA02222FFAFD8F32DB0214 /* TranscriptionLabSpeakerProfileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E5 /* TranscriptionLabSpeakerProfileStoreTests.swift */; };
+		09DA02222FFAFD8F32DB0215 /* RecognizedVoiceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E6 /* RecognizedVoiceStore.swift */; };
+		09DA02222FFAFD8F32DB0217 /* SpeakerIdentityResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E7 /* SpeakerIdentityResolverTests.swift */; };
+		09DA02222FFAFD8F32DB0218 /* SpeakerIdentityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E8 /* SpeakerIdentityResolver.swift */; };
 		0A1823314AE4FF4E17DCF627 /* sprite_frame_0.png in Resources */ = {isa = PBXBuildFile; fileRef = 2AF744C59EEAE51FC81BE6D6 /* sprite_frame_0.png */; };
 		0BC5D4645D21CA8AA000972E /* RecordingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A3540C6212101C885EA22CD /* RecordingOverlay.swift */; };
 		0CDA12F05A7C7464334FDD37 /* RecordingOCRPrefetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E9AADC67C525B0A9E382AB /* RecordingOCRPrefetch.swift */; };
@@ -280,6 +285,11 @@
 		D6A098A2516C7563B1E4FDD3 /* ModelManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManagerTests.swift; sourceTree = "<group>"; };
 		D7E1E5A0F12FE2B2FB5CD874 /* TranscriptionLabController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabController.swift; sourceTree = "<group>"; };
 		D7EC6EEC8F041DE99399C3E3 /* TranscriptionLabStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabStoreTests.swift; sourceTree = "<group>"; };
+		D7EC6EEC8F041DE99399C3E4 /* RecognizedVoiceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognizedVoiceStoreTests.swift; sourceTree = "<group>"; };
+		D7EC6EEC8F041DE99399C3E5 /* TranscriptionLabSpeakerProfileStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabSpeakerProfileStoreTests.swift; sourceTree = "<group>"; };
+		D7EC6EEC8F041DE99399C3E6 /* RecognizedVoiceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognizedVoiceStore.swift; sourceTree = "<group>"; };
+		D7EC6EEC8F041DE99399C3E7 /* SpeakerIdentityResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerIdentityResolverTests.swift; sourceTree = "<group>"; };
+		D7EC6EEC8F041DE99399C3E8 /* SpeakerIdentityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerIdentityResolver.swift; sourceTree = "<group>"; };
 		DB753C40197FA7255E1DEA29 /* PepperChatWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperChatWindow.swift; sourceTree = "<group>"; };
 		DBE6E6C11EA04C058C642573 /* MeetingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSession.swift; sourceTree = "<group>"; };
 		DD3CB656299CBD7D3F6613F3 /* sprite_frame_3.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = sprite_frame_3.png; sourceTree = "<group>"; };
@@ -382,6 +392,7 @@
 				4E70E33203498F61C51BF026 /* Meeting */,
 				FA20193940C27BBC6AFB5ADB /* PepperChat */,
 				4694A9A6CDA9C5FA6623F377 /* Resources */,
+				09DA02222FFAFD8F32DB0216 /* SpeakerIdentity */,
 				B242BF76D6E42784C2A05EB5 /* Transcription */,
 				50C964CA46111D1FD8AFE84B /* UI */,
 			);
@@ -431,6 +442,15 @@
 				E0BBD0F5DD1B827D03F0F8F6 /* sprite_frame_4@2x.png */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		09DA02222FFAFD8F32DB0216 /* SpeakerIdentity */ = {
+			isa = PBXGroup;
+			children = (
+				D7EC6EEC8F041DE99399C3E6 /* RecognizedVoiceStore.swift */,
+				D7EC6EEC8F041DE99399C3E8 /* SpeakerIdentityResolver.swift */,
+			);
+			path = SpeakerIdentity;
 			sourceTree = "<group>";
 		};
 		4E59EAEBA3CA7C181A8ECEBA /* Lab */ = {
@@ -618,17 +638,20 @@
 				A2E051FC96D522216E8C2F01 /* OCRContextTests.swift */,
 				59666FBC728BF70A61983188 /* PerformanceTraceTests.swift */,
 				ABAC2D0F6C311FB1DA3E9ABF /* PostPasteLearningCoordinatorTests.swift */,
+				D7EC6EEC8F041DE99399C3E4 /* RecognizedVoiceStoreTests.swift */,
 				80731398639640F62FFC4524 /* RecordingOCRPrefetchTests.swift */,
 				AD0C972BC69839C41ACA2E8C /* RecordingSessionCoordinatorTests.swift */,
 				38C742095D3934D70BCE44E4 /* RuntimeModelInventoryTests.swift */,
 				9C9ECBFE04804AA79262A07B /* ScreenRecordingPermissionControllerTests.swift */,
 				231812B1BF8E3F2D5E0209F3 /* ShortcutCaptureStateTests.swift */,
+				D7EC6EEC8F041DE99399C3E7 /* SpeakerIdentityResolverTests.swift */,
 				6B1A6E1B8F3D8C8F234BD408 /* SpeechTranscriberTests.swift */,
 				49848DB685A19FBB6557B76E /* TextCleanerTests.swift */,
 				770403076BA384F3E35AA7A1 /* TextCleanupManagerTests.swift */,
 				B8760607B80C14BCBD5F9FC0 /* TextPasterTests.swift */,
 				335E3F3AA3803E2274CF6197 /* TranscriptionLabControllerTests.swift */,
 				48FD8FBD546233B0547BB89D /* TranscriptionLabRunnerTests.swift */,
+				D7EC6EEC8F041DE99399C3E5 /* TranscriptionLabSpeakerProfileStoreTests.swift */,
 				D7EC6EEC8F041DE99399C3E3 /* TranscriptionLabStoreTests.swift */,
 			);
 			path = GhostPepperTests;
@@ -707,7 +730,7 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					5EBC085BD56A3725D371FB1A = {
-						DevelopmentTeam = BBVMGXR9AY;
+						DevelopmentTeam = 87WJ58S66M;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -825,6 +848,8 @@
 				0CDA12F05A7C7464334FDD37 /* RecordingOCRPrefetch.swift in Sources */,
 				0BC5D4645D21CA8AA000972E /* RecordingOverlay.swift in Sources */,
 				759A9AD44DEF66C03D435B0F /* RecordingSessionCoordinator.swift in Sources */,
+				09DA02222FFAFD8F32DB0215 /* RecognizedVoiceStore.swift in Sources */,
+				09DA02222FFAFD8F32DB0218 /* SpeakerIdentityResolver.swift in Sources */,
 				056C454F3BD1A9795C6775A5 /* ScreenRecordingPermissionController.swift in Sources */,
 				80C9E55FF57A1A03033DDDAE /* SettingsWindow.swift in Sources */,
 				D87DC24D05DAC4ED292C077B /* ShortcutCaptureState.swift in Sources */,
@@ -892,17 +917,20 @@
 				E5E590FA60691DA4B57DA7CB /* OCRContextTests.swift in Sources */,
 				E3302E239909CAEC0865A035 /* PerformanceTraceTests.swift in Sources */,
 				41C94A48B97D3A6861EA1E92 /* PostPasteLearningCoordinatorTests.swift in Sources */,
+				09DA02222FFAFD8F32DB0213 /* RecognizedVoiceStoreTests.swift in Sources */,
 				4DD74E9C222518EEB0DA2A9B /* RecordingOCRPrefetchTests.swift in Sources */,
 				2E80774D95EAC6D6B53A226D /* RecordingSessionCoordinatorTests.swift in Sources */,
 				571085951E318B0ADD2B00EA /* RuntimeModelInventoryTests.swift in Sources */,
 				0606E11E6F102BBB44ED08B6 /* ScreenRecordingPermissionControllerTests.swift in Sources */,
 				BE7701382D2CC62C1CEBF29C /* ShortcutCaptureStateTests.swift in Sources */,
+				09DA02222FFAFD8F32DB0217 /* SpeakerIdentityResolverTests.swift in Sources */,
 				BEC965DB305742A9F42897F8 /* SpeechTranscriberTests.swift in Sources */,
 				EE25B297BB7834C3C90423B9 /* TextCleanerTests.swift in Sources */,
 				E061E99A8C7A3977245EAEC5 /* TextCleanupManagerTests.swift in Sources */,
 				90F411F8E3564F1C5DDD1A5F /* TextPasterTests.swift in Sources */,
 				F43D0549F804473CD7C8A6A6 /* TranscriptionLabControllerTests.swift in Sources */,
 				950E9B7AB1223E2B2D679B71 /* TranscriptionLabRunnerTests.swift in Sources */,
+				09DA02222FFAFD8F32DB0214 /* TranscriptionLabSpeakerProfileStoreTests.swift in Sources */,
 				09DA02222FFAFD8F32DB0212 /* TranscriptionLabStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -927,7 +955,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = BBVMGXR9AY;
+				DEVELOPMENT_TEAM = 87WJ58S66M;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;
@@ -1074,7 +1102,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = BBVMGXR9AY;
+				DEVELOPMENT_TEAM = 87WJ58S66M;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;

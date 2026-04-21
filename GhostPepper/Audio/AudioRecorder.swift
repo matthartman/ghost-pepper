@@ -15,6 +15,7 @@ final class AudioRecorder {
     private var engine = AVAudioEngine()
     private var configuredTargetDeviceID: AudioDeviceID?
     private let bufferLock = NSLock()
+    private let tapStateLock = NSLock()
 
     /// The accumulated audio samples captured during recording.
     /// Accessible for reading within the module (internal) so tests can inspect it.
@@ -24,6 +25,11 @@ final class AudioRecorder {
     private lazy var targetFormat: AVAudioFormat = {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
     }()
+    private let stopFlushSlackNanoseconds: UInt64 = 5_000_000
+    private var tapBufferDurationNanoseconds: UInt64 = 20_000_000
+    private var lastConvertedChunkAtNanoseconds: UInt64?
+    private var inFlightTapCallbacks = 0
+    private var stopWaitContinuation: CheckedContinuation<Void, Never>?
 
     /// Pre-warm the audio engine so the first recording starts faster.
     func prewarm() {
@@ -134,14 +140,18 @@ final class AudioRecorder {
             throw AudioRecorderError.noInputAvailable
         }
 
-        // Roughly 100ms of audio at the actual HW rate.
-        let bufferSize: AVAudioFrameCount = AVAudioFrameCount(hwFormat.sampleRate * 0.1)
+        // Keep the tap interval short so stop-time tail flushes stay cheap.
+        let bufferDuration = 0.02
+        let bufferSize = max(1, AVAudioFrameCount(hwFormat.sampleRate * bufferDuration))
+        resetTapDrainState(bufferDurationSeconds: Double(bufferSize) / hwFormat.sampleRate)
 
         cachedConverter = nil
         cachedConverterSourceFormat = nil
 
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: hwFormat) { [weak self] pcmBuffer, _ in
             guard let self = self else { return }
+            self.beginTapCallback()
+            defer { self.endTapCallback() }
 
             // For devices with >2 channels (e.g. aggregate devices), AVAudioConverter
             // can't downmix to mono. Manually downmix to mono first, then convert.
@@ -212,13 +222,17 @@ final class AudioRecorder {
     }
 
     /// Stops capturing audio and returns the recorded buffer.
-    /// Waits briefly to flush any remaining audio in the engine's buffer.
+    /// Waits only for the remainder of the active tap interval plus any
+    /// in-flight conversion work so stop latency tracks the tap size.
     func stopRecording() async -> [Float] {
-        // Wait 200ms to let the last audio buffers flush through
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        let flushDelay = stopFlushDelayNanoseconds()
+        if flushDelay > 0 {
+            try? await Task.sleep(nanoseconds: flushDelay)
+        }
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        await waitForTapCallbacksToDrain()
         onRecordingStopped?()
 
         let result = snapshotBuffer()
@@ -322,8 +336,10 @@ final class AudioRecorder {
 
         buffer.frameLength = AVAudioFrameCount(samples.count)
         if let channelData = buffer.floatChannelData?.pointee {
-            for (index, sample) in samples.enumerated() {
-                channelData[index] = sample
+            samples.withUnsafeBufferPointer { source in
+                if let baseAddress = source.baseAddress {
+                    channelData.update(from: baseAddress, count: samples.count)
+                }
             }
         }
 
@@ -336,7 +352,87 @@ final class AudioRecorder {
         audioBuffer.append(contentsOf: frames)
         bufferLock.unlock()
 
+        recordConvertedChunkArrival()
         onConvertedAudioChunk?(frames)
+    }
+
+    private func resetTapDrainState(bufferDurationSeconds: TimeInterval) {
+        tapStateLock.lock()
+        defer { tapStateLock.unlock() }
+        tapBufferDurationNanoseconds = UInt64(bufferDurationSeconds * 1_000_000_000)
+        lastConvertedChunkAtNanoseconds = nil
+        inFlightTapCallbacks = 0
+        stopWaitContinuation = nil
+    }
+
+    private func beginTapCallback() {
+        tapStateLock.lock()
+        inFlightTapCallbacks += 1
+        tapStateLock.unlock()
+    }
+
+    private func endTapCallback() {
+        var continuation: CheckedContinuation<Void, Never>?
+        tapStateLock.lock()
+        inFlightTapCallbacks = max(0, inFlightTapCallbacks - 1)
+        if inFlightTapCallbacks == 0 {
+            continuation = stopWaitContinuation
+            stopWaitContinuation = nil
+        }
+        tapStateLock.unlock()
+        continuation?.resume()
+    }
+
+    private func recordConvertedChunkArrival() {
+        tapStateLock.lock()
+        lastConvertedChunkAtNanoseconds = DispatchTime.now().uptimeNanoseconds
+        tapStateLock.unlock()
+    }
+
+    private func stopFlushDelayNanoseconds() -> UInt64 {
+        tapStateLock.lock()
+        let tapBufferDurationNanoseconds = self.tapBufferDurationNanoseconds
+        let lastConvertedChunkAtNanoseconds = self.lastConvertedChunkAtNanoseconds
+        tapStateLock.unlock()
+
+        guard tapBufferDurationNanoseconds > 0 else {
+            return 0
+        }
+
+        guard let lastConvertedChunkAtNanoseconds else {
+            return tapBufferDurationNanoseconds + stopFlushSlackNanoseconds
+        }
+
+        let now = DispatchTime.now().uptimeNanoseconds
+        let elapsed = now >= lastConvertedChunkAtNanoseconds
+            ? now - lastConvertedChunkAtNanoseconds
+            : 0
+        let remaining = elapsed >= tapBufferDurationNanoseconds
+            ? 0
+            : tapBufferDurationNanoseconds - elapsed
+        return remaining + stopFlushSlackNanoseconds
+    }
+
+    private func waitForTapCallbacksToDrain() async {
+        let hasInFlightCallbacks = tapStateLock.withLock { inFlightTapCallbacks > 0 }
+        guard hasInFlightCallbacks else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            let shouldResumeImmediately = tapStateLock.withLock {
+                if inFlightTapCallbacks == 0 {
+                    return true
+                }
+
+                stopWaitContinuation = continuation
+                return false
+            }
+
+            if shouldResumeImmediately {
+                continuation.resume()
+            }
+        }
     }
 }
 
