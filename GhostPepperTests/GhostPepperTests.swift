@@ -1633,6 +1633,44 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertNil(appState.audioRecorder.onConvertedAudioChunk)
     }
 
+    func testFluidAudioRecordingWithoutNativeStreamingUsesFinalBatchTranscription() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let cleanupInputs = LockedValue<[String]>([])
+        var batchInputs: [[Float]] = []
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.transcribeAudioBufferOverride = { samples in
+            batchInputs.append(samples)
+            return "batch transcript"
+        }
+        appState.cleanedTranscriptionResultOverride = { text, _ in
+            await cleanupInputs.append(text)
+            return (text: text, prompt: "", attemptedCleanup: false, cleanupUsedFallback: false)
+        }
+
+        await appState.prepareRecordingSessionIfNeeded()
+
+        XCTAssertNil(appState.activeRecordingTranscriptionSession)
+        XCTAssertNil(appState.audioRecorder.onConvertedAudioChunk)
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: appState.activeRecordingTranscriptionSession,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(batchInputs, [[1, 2, 3, 4]])
+        let recordedCleanupInputs = await cleanupInputs.get()
+        XCTAssertEqual(recordedCleanupInputs, ["batch transcript"])
+    }
+
     func testFluidAudioRecordingUsesSpeakerFilteringSession() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
@@ -1685,6 +1723,7 @@ final class GhostPepperTests: XCTestCase {
         }
 
         await appState.prepareRecordingSessionIfNeeded()
+        XCTAssertNil(appState.activeRecordingTranscriptionSession)
         appState.audioRecorder.onConvertedAudioChunk?([0.1, 0.2, 0.3])
         await appState.finishRecordingForTesting(
             audioBuffer: [0.1, 0.2, 0.3],

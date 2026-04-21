@@ -187,22 +187,7 @@ final class ModelManager: ObservableObject {
             }
             return nil
         case .parakeetV3, .none:
-            guard let fluidAudioModels,
-                  let fluidAudioManager else {
-                return nil
-            }
-            return SlidingWindowRecordingTranscriptionSession(
-                models: fluidAudioModels,
-                fullBufferTranscription: { audioBuffer in
-                    do {
-                        let result = try await fluidAudioManager.transcribe(audioBuffer, source: .microphone)
-                        let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return cleaned.isEmpty ? nil : cleaned
-                    } catch {
-                        return nil
-                    }
-                }
-            )
+            return nil
         }
     }
 

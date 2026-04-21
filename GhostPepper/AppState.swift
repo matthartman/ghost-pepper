@@ -574,12 +574,6 @@ class AppState: ObservableObject {
                 )
             } else if let recordingTranscriptionSession = modelManager.makeRecordingTranscriptionSession() {
                 activeRecordingTranscriptionSession = recordingTranscriptionSession
-            } else if speechModelDescriptor.backend == .fluidAudio {
-                activeRecordingTranscriptionSession = ChunkedRecordingTranscriptionSession(
-                    transcribeChunk: { [weak self] samples in
-                        await self?.transcribeAudioBuffer(samples)
-                    }
-                )
             }
         }
 
