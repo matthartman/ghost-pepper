@@ -63,14 +63,6 @@ struct GhostPepperApp: App {
                 ProcessInfo.processInfo.enableAutomaticTermination(Self.automaticTerminationReason)
                 appState.prepareForTermination()
             }
-            .onOpenURL { url in
-                // Handle Google OAuth callback
-                if url.scheme == "com.github.matthartman.ghostpepper" {
-                    Task {
-                        await GoogleCalendarService.shared.handleCallback(url: url)
-                    }
-                }
-            }
         }
     }
 }

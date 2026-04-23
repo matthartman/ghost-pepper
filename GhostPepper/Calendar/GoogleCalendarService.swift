@@ -13,7 +13,7 @@ final class GoogleCalendarService: ObservableObject {
     @Published var userName: String?
 
     private static let clientID = "132905683480-3iajprr7h347avmgpejodsladgnvartk.apps.googleusercontent.com"
-    private static let redirectURI = "com.github.matthartman.ghostpepper:/oauth2callback"
+    private static let redirectURI = "urn:ietf:wg:oauth:2.0:oob"
     private static let scope = "https://www.googleapis.com/auth/calendar.events.readonly"
     private static let tokenKey = "googleCalendarAccessToken"
     private static let refreshTokenKey = "googleCalendarRefreshToken"
@@ -40,9 +40,11 @@ final class GoogleCalendarService: ObservableObject {
         isSignedIn = accessToken != nil
     }
 
+    @Published var isWaitingForCode = false
+
     // MARK: - OAuth Flow
 
-    /// Start the OAuth sign-in flow — opens the browser for Google login.
+    /// Start the OAuth sign-in flow — opens browser, user copies code back.
     func signIn() {
         let verifier = generateCodeVerifier()
         codeVerifier = verifier
@@ -62,20 +64,18 @@ final class GoogleCalendarService: ObservableObject {
 
         if let url = components.url {
             NSWorkspace.shared.open(url)
+            isWaitingForCode = true
         }
     }
 
-    /// Handle the OAuth callback URL after the user signs in.
-    func handleCallback(url: URL) async {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let code = components.queryItems?.first(where: { $0.name == "code" })?.value,
-              let verifier = codeVerifier else {
-            print("GoogleCalendar: invalid callback URL")
-            return
-        }
-
+    /// Complete sign-in with the auth code the user copied from Google.
+    func submitAuthCode(_ code: String) async {
+        guard let verifier = codeVerifier else { return }
         codeVerifier = nil
-        await exchangeCodeForToken(code: code, verifier: verifier)
+        isWaitingForCode = false
+        isLoading = true
+        await exchangeCodeForToken(code: code.trimmingCharacters(in: .whitespacesAndNewlines), verifier: verifier)
+        isLoading = false
     }
 
     /// Sign out — clear stored tokens.

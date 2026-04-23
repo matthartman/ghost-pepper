@@ -1649,6 +1649,7 @@ struct SettingsView: View {
         }
     }
 
+    @State private var googleAuthCode = ""
     @State private var meetingDirectoryBookmark: URL? = {
         MeetingTranscriptSettings.loadSaveDirectory()
     }()
@@ -1726,6 +1727,39 @@ struct SettingsView: View {
                             Text("Meeting titles and attendees will be auto-populated from your calendar when you start a recording.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        } else if GoogleCalendarService.shared.isLoading {
+                            HStack(spacing: 8) {
+                                ProgressView().scaleEffect(0.7)
+                                Text("Connecting...")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if GoogleCalendarService.shared.isWaitingForCode {
+                            Text("Sign in with Google in your browser, then copy the authorization code and paste it here:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            HStack {
+                                TextField("Paste authorization code", text: $googleAuthCode)
+                                    .textFieldStyle(.roundedBorder)
+
+                                Button("Submit") {
+                                    Task {
+                                        await GoogleCalendarService.shared.submitAuthCode(googleAuthCode)
+                                        googleAuthCode = ""
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                                .disabled(googleAuthCode.isEmpty)
+                            }
+
+                            Button("Cancel") {
+                                GoogleCalendarService.shared.isWaitingForCode = false
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.secondary)
+                            .font(.caption)
                         } else {
                             Text("Connect Google Calendar to automatically populate meeting titles and attendees when recording.")
                                 .font(.caption)
