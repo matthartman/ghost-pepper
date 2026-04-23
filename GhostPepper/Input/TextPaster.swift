@@ -1,6 +1,7 @@
 import Cocoa
 import ApplicationServices
 import CoreGraphics
+import Carbon.HIToolbox
 
 /// Represents a saved clipboard state, preserving all pasteboard items with all type representations.
 struct ClipboardState {
@@ -66,7 +67,43 @@ final class TextPaster {
 
     // MARK: - Virtual Key Codes
 
-    private static let vKeyCode: CGKeyCode = 0x09
+    /// Returns the virtual key code for "V" in the current keyboard layout.
+    /// Uses UCKeyTranslate to find the correct physical key regardless of layout (AZERTY, QWERTZ, Dvorak, etc.).
+    /// Falls back to the QWERTY key code (0x09) if the layout cannot be determined.
+    private static func currentVKeyCode() -> CGKeyCode {
+        let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        guard let ptr = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+            return 0x09
+        }
+        let layoutData = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue()
+        guard let bytes = CFDataGetBytePtr(layoutData) else {
+            return 0x09
+        }
+        let layout = UnsafeRawPointer(bytes).assumingMemoryBound(to: UCKeyboardLayout.self)
+
+        for keyCode: UInt16 in 0...127 {
+            var deadKeyState: UInt32 = 0
+            var chars = [UniChar](repeating: 0, count: 4)
+            var charCount = 0
+            let status = UCKeyTranslate(
+                layout,
+                keyCode,
+                UInt16(kUCKeyActionDown),
+                0,   // no modifier flags
+                0,   // keyboard type (0 = default)
+                UInt32(kUCKeyTranslateNoDeadKeysBit),
+                &deadKeyState,
+                4,
+                &charCount,
+                &chars
+            )
+            if status == noErr && charCount == 1 && chars[0] == 0x76 { // Unicode for 'v'
+                return CGKeyCode(keyCode)
+            }
+        }
+
+        return 0x09 // QWERTY fallback
+    }
     var onPaste: ((PasteSession) -> Void)?
     var onPasteStart: (() -> Void)?
     var onPasteEnd: (() -> Void)?
@@ -427,9 +464,10 @@ final class TextPaster {
     // MARK: - Key Simulation
 
     private static func defaultCommandVPasteAction() -> (() -> Void)? {
+        let keyCode = currentVKeyCode()
         let source = CGEventSource(stateID: .hidSystemState)
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: Self.vKeyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: Self.vKeyCode, keyDown: false) else {
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
             return nil
         }
 
