@@ -64,6 +64,25 @@ final class TranscriptionLabSpeakerProfileStoreTests: XCTestCase {
         )
     }
 
+    func testLoadAllProfilesReturnsProfilesFromEveryEntryInStableOrder() throws {
+        let fixture = makeFixture()
+        let store = TranscriptionLabSpeakerProfileStore(directoryURL: fixture.directoryURL)
+        let firstEntryID = UUID(uuidString: "00000000-0000-0000-0000-000000000021")!
+        let secondEntryID = UUID(uuidString: "00000000-0000-0000-0000-000000000020")!
+        let firstProfile = makeProfile(entryID: firstEntryID, speakerID: "Speaker 1", displayName: "Alice")
+        let secondProfile = makeProfile(entryID: secondEntryID, speakerID: "Speaker 0", displayName: "Bob")
+        let thirdProfile = makeProfile(entryID: firstEntryID, speakerID: "Speaker 0", displayName: "Carol")
+
+        try store.upsert(firstProfile)
+        try store.upsert(secondProfile)
+        try store.upsert(thirdProfile)
+
+        XCTAssertEqual(
+            try store.loadAllProfiles(),
+            [secondProfile, thirdProfile, firstProfile]
+        )
+    }
+
     private func makeFixture() -> Fixture {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
