@@ -537,21 +537,6 @@ struct SettingsView: View {
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 24) {
-            SettingsCard("Startup") {
-                Toggle("Launch at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, enabled in
-                        do {
-                            if enabled {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
-                            }
-                        } catch {
-                            launchAtLogin = !enabled
-                        }
-                    }
-            }
-
             if !hasAccessibilityPermission || !hasInputMonitoringPermission {
                 SettingsCard("Permissions") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -697,6 +682,21 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
                 }
+            }
+
+            SettingsCard("Startup") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        do {
+                            if enabled {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            launchAtLogin = !enabled
+                        }
+                    }
             }
         }
     }
