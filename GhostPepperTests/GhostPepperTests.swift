@@ -1254,6 +1254,13 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(SettingsSection.transcriptionLab.title, "History")
     }
 
+    func testSettingsSectionsUseGeneralAndFoldCorrectionsIntoCleanup() {
+        XCTAssertEqual(SettingsSection.allCases.first, .general)
+        XCTAssertEqual(SettingsSection.general.title, "General")
+        XCTAssertFalse(SettingsSection.allCases.contains { $0.title == "Corrections" })
+        XCTAssertEqual(SettingsSection.cleanup.subtitle, "Prompt cleanup, correction hints, OCR context, and learning behavior.")
+    }
+
     func testAppStateShowDebugLogHostsSwiftUIViaContentViewController() throws {
         closeWindows(titled: "Ghost Pepper Debug Log")
         defer { closeWindows(titled: "Ghost Pepper Debug Log") }
@@ -1440,7 +1447,7 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertTrue(formattedText.contains("cleaned text"))
     }
 
-    func testAppStateAppliesDeterministicCorrectionsWhenCleanupModelIsUnavailable() async throws {
+    func testAppStateReturnsRawTranscriptionWhenCleanupModelIsUnavailable() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -1462,7 +1469,7 @@ final class GhostPepperTests: XCTestCase {
 
         let result = await appState.cleanedTranscription("just see approved it")
 
-        XCTAssertEqual(result, "Jesse approved it")
+        XCTAssertEqual(result, "just see approved it")
     }
 
     func testAppStatePrepareForTerminationShutsDownCleanupBackend() throws {

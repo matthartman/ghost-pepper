@@ -89,57 +89,49 @@ final class SettingsDictationTestController: ObservableObject {
 // MARK: - Settings View
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case recording
+    case general
     case cleanup
-    case corrections
     case models
     case transcriptionLab
     case recognizedVoices
     case pepperChat
     case meetingTranscript
-    case general
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .recording: "Recording"
+        case .general: "General"
         case .cleanup: "Cleanup"
-        case .corrections: "Corrections"
         case .models: "Models"
         case .transcriptionLab: "History"
         case .recognizedVoices: "Recognized Voices"
         case .pepperChat: "Context Bundler"
         case .meetingTranscript: "Meeting Transcript"
-        case .general: "General"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .recording: "Shortcuts, microphone input, dictation testing, and sound feedback."
-        case .cleanup: "Prompt cleanup, OCR context, and learning behavior."
-        case .corrections: "Words and replacements Ghost Pepper should preserve."
+        case .general: "Startup behavior, shortcuts, microphone input, dictation testing, and sound feedback."
+        case .cleanup: "Prompt cleanup, correction hints, OCR context, and learning behavior."
         case .models: "Speech and cleanup model downloads and runtime status."
         case .transcriptionLab: "Saved recordings, reruns, and cleanup experiments."
         case .recognizedVoices: "Reusable speaker labels and 'this is me' voice prints."
         case .pepperChat: "Capture screen context and send to Zo, Trello, or clipboard."
         case .meetingTranscript: "Auto-detect calls and transcribe meetings locally."
-        case .general: "Startup behavior and app-wide preferences."
         }
     }
 
     var systemImageName: String {
         switch self {
-        case .recording: "waveform.and.mic"
+        case .general: "gearshape"
         case .cleanup: "sparkles"
-        case .corrections: "text.badge.checkmark"
         case .models: "brain"
         case .transcriptionLab: "waveform.badge.magnifyingglass"
         case .recognizedVoices: "person.crop.circle.badge.checkmark"
         case .pepperChat: "bubble.right"
         case .meetingTranscript: "waveform.badge.mic"
-        case .general: "gearshape"
         }
     }
 }
@@ -163,7 +155,7 @@ struct SettingsView: View {
     @State private var hasAccessibilityPermission = PermissionChecker.checkAccessibility()
     @State private var hasInputMonitoringPermission = PermissionChecker.checkInputMonitoring()
     @State private var permissionPollTimer: Timer?
-    @State private var selectedSection: SettingsSection = .recording
+    @State private var selectedSection: SettingsSection = .general
     @State private var transcriptionLabPreviewSound: NSSound?
     @State private var recognizedVoices: [RecognizedVoiceProfile] = []
     @State private var recognizedVoiceSpeakerProfilesByID: [UUID: [TranscriptionLabSpeakerProfile]] = [:]
@@ -509,24 +501,24 @@ struct SettingsView: View {
     @ViewBuilder
     private var detailContent: some View {
         VStack(alignment: .leading, spacing: 28) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(selectedSection.title)
-                    .font(.system(size: 28, weight: .semibold))
-                if selectedSection != .transcriptionLab {
-                    Text(selectedSection.subtitle)
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            if !(selectedSection == .transcriptionLab && transcriptionLabController.selectedEntry != nil) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(selectedSection.title)
+                        .font(.system(size: 28, weight: .semibold))
+                    if selectedSection != .transcriptionLab {
+                        Text(selectedSection.subtitle)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
             switch selectedSection {
-            case .recording:
-                recordingSection
+            case .general:
+                generalSection
             case .cleanup:
                 cleanupSection
-            case .corrections:
-                correctionsSection
             case .models:
                 modelsSection
             case .transcriptionLab:
@@ -537,16 +529,29 @@ struct SettingsView: View {
                 pepperChatSection
             case .meetingTranscript:
                 meetingTranscriptSection
-            case .general:
-                generalSection
             }
 
             Spacer(minLength: 0)
         }
     }
 
-    private var recordingSection: some View {
+    private var generalSection: some View {
         VStack(alignment: .leading, spacing: 24) {
+            SettingsCard("Startup") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        do {
+                            if enabled {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            launchAtLogin = !enabled
+                        }
+                    }
+            }
+
             if !hasAccessibilityPermission || !hasInputMonitoringPermission {
                 SettingsCard("Permissions") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -747,6 +752,35 @@ struct SettingsView: View {
                 }
             }
 
+            SettingsCard("Correction hints") {
+                VStack(alignment: .leading, spacing: 20) {
+                    CorrectionsEditor(
+                        title: "Preferred transcriptions",
+                        text: Binding(
+                            get: { appState.correctionStore.preferredTranscriptionsText },
+                            set: { appState.correctionStore.preferredTranscriptionsText = $0 }
+                        ),
+                        prompt: "One preferred word or phrase per line"
+                    )
+
+                    Divider()
+
+                    CorrectionsEditor(
+                        title: "Commonly misheard",
+                        text: Binding(
+                            get: { appState.correctionStore.commonlyMisheardText },
+                            set: { appState.correctionStore.commonlyMisheardText = $0 }
+                        ),
+                        prompt: "One likely phrase pair per line using probably wrong -> probably right"
+                    )
+
+                    Text("Correction hints are added to the cleanup prompt; they are not applied as regexes or deterministic substitutions. Preferred transcriptions are also forwarded into OCR custom words.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             SettingsCard("Context") {
                 VStack(alignment: .leading, spacing: 16) {
                     Toggle(
@@ -786,37 +820,6 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-        }
-    }
-
-    private var correctionsSection: some View {
-        SettingsCard("Corrections") {
-            VStack(alignment: .leading, spacing: 20) {
-                CorrectionsEditor(
-                    title: "Preferred transcriptions",
-                    text: Binding(
-                        get: { appState.correctionStore.preferredTranscriptionsText },
-                        set: { appState.correctionStore.preferredTranscriptionsText = $0 }
-                    ),
-                    prompt: "One preferred word or phrase per line"
-                )
-
-                Divider()
-
-                CorrectionsEditor(
-                    title: "Commonly misheard",
-                    text: Binding(
-                        get: { appState.correctionStore.commonlyMisheardText },
-                        set: { appState.correctionStore.commonlyMisheardText = $0 }
-                    ),
-                    prompt: "One replacement per line using probably wrong -> probably right"
-                )
-
-                Text("Preferred transcriptions are preserved in cleanup and forwarded into OCR custom words. Commonly misheard replacements run deterministically before cleanup.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -920,20 +923,20 @@ struct SettingsView: View {
 
     private var transcriptionLabSection: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Toggle(
-                "Save voice-to-text recordings to history",
-                isOn: $appState.transcriptionLabEnabled
-            )
-
-            if !appState.transcriptionLabEnabled {
-                Text("Voice-to-text history is off. Audio from dictation is not saved to disk. Meeting transcripts are saved separately as markdown files.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             if let selectedEntry = transcriptionLabController.selectedEntry {
                 transcriptionLabDetail(for: selectedEntry)
             } else {
+                Toggle(
+                    "Save voice-to-text recordings to history",
+                    isOn: $appState.transcriptionLabEnabled
+                )
+
+                if !appState.transcriptionLabEnabled {
+                    Text("Voice-to-text history is off. Audio from dictation is not saved to disk. Meeting transcripts are saved separately as markdown files.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 transcriptionLabBrowser
             }
         }
@@ -1885,22 +1888,6 @@ struct SettingsView: View {
         }
     }
 
-    private var generalSection: some View {
-        SettingsCard("General") {
-            Toggle("Launch at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, enabled in
-                    do {
-                        if enabled {
-                            try SMAppService.mainApp.register()
-                        } else {
-                            try SMAppService.mainApp.unregister()
-                        }
-                    } catch {
-                        launchAtLogin = !enabled
-                    }
-                }
-        }
-    }
 }
 
 private struct TranscriptionLabSpeakerProfileEditor: View {

@@ -18,7 +18,7 @@ struct CleanupModelProbeTranscript: Equatable, Sendable {
     let modelDisplayName: String
     let thinkingMode: CleanupModelProbeThinkingMode
     let input: String
-    let correctedInput: String
+    let modelInputText: String
     let modelInput: String
     let finalPrompt: String
     let rawModelOutput: String
@@ -75,22 +75,18 @@ struct CleanupModelProbeRunner {
             commonlyMisheard: correctionStore.commonlyMisheard,
             includeWindowContext: windowContext != nil
         )
-        let correctionEngine = DeterministicCorrectionEngine(
-            preferredTranscriptions: correctionStore.preferredTranscriptions,
-            commonlyMisheard: correctionStore.commonlyMisheard
-        )
-        let correctedInput = correctionEngine.applyPreCleanupCorrections(to: input)
-        let modelInput = TextCleaner.formatCleanupInput(userInput: correctedInput)
+        let modelInputText = input
+        let modelInput = TextCleaner.formatCleanupInput(userInput: modelInputText)
         let rawResult = try await execute(modelInput, finalPrompt, modelKind, thinkingMode)
         let sanitizedOutput = TextCleaner.sanitizeCleanupOutput(rawResult.rawOutput)
-        let finalOutput = correctionEngine.applyPostCleanupCorrections(to: sanitizedOutput)
+        let finalOutput = sanitizedOutput
 
         return CleanupModelProbeTranscript(
             modelKind: rawResult.modelKind,
             modelDisplayName: rawResult.modelDisplayName,
             thinkingMode: thinkingMode,
             input: input,
-            correctedInput: correctedInput,
+            modelInputText: modelInputText,
             modelInput: modelInput,
             finalPrompt: finalPrompt,
             rawModelOutput: rawResult.rawOutput,

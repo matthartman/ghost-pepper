@@ -17,7 +17,7 @@ private final class SpyCleanupBackend: CleanupBackend {
 
 @MainActor
 final class TextCleanerTests: XCTestCase {
-    func testPreferredTranscriptionsPreserveConfiguredPhraseBeforeCleanup() async throws {
+    func testPreferredTranscriptionsDoNotRewriteModelInput() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -37,7 +37,7 @@ final class TextCleanerTests: XCTestCase {
         )
     }
 
-    func testCommonlyMisheardReplacementAppliesBeforeCleanup() async throws {
+    func testCommonlyMisheardReplacementStaysInPromptAndDoesNotRewriteModelInput() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -53,7 +53,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, "ChatGPT fixes text")
         XCTAssertEqual(
             localBackend.cleanedInputs.map(\.text),
-            [TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")]
+            [TextCleaner.formatCleanupInput(userInput: "chat gbt fixes text")]
         )
     }
 
@@ -83,7 +83,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertFalse(formatted.contains("<NORMALIZED_TRANSCRIPTION>"))
     }
 
-    func testDeterministicCorrectionsStillApplyWhenNoCleanupBackendIsAvailable() async throws {
+    func testCleanerReturnsRawInputWhenCleanupBackendIsUnavailable() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -96,7 +96,7 @@ final class TextCleanerTests: XCTestCase {
 
         let result = await cleaner.clean(text: "just see approved it", prompt: "unused prompt")
 
-        XCTAssertEqual(result, "Jesse approved it")
+        XCTAssertEqual(result, "just see approved it")
     }
 
     func testPreferredTranscriptionsDoNotRewriteCleanupOutput() async throws {
@@ -115,12 +115,12 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, "ghost-pepper is ready")
     }
 
-    func testCommonlyMisheardReplacementTreatsSpecialCharactersLiterally() async throws {
+    func testCommonlyMisheardReplacementSpecialCharactersArePromptHintsOnly() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
         correctionStore.commonlyMisheardText = "environment -> $HOME C:\\\\temp"
-        let localBackend = SpyCleanupBackend(nextResult: .failure(CleanupBackendError.unavailable))
+        let localBackend = SpyCleanupBackend(nextResult: .success(#"$HOME C:\\temp"#))
         let cleaner = TextCleaner(
             localBackend: localBackend,
             correctionStore: correctionStore
@@ -129,6 +129,10 @@ final class TextCleanerTests: XCTestCase {
         let result = await cleaner.clean(text: "environment", prompt: "unused prompt")
 
         XCTAssertEqual(result, #"$HOME C:\\temp"#)
+        XCTAssertEqual(
+            localBackend.cleanedInputs.map(\.text),
+            [TextCleaner.formatCleanupInput(userInput: "environment")]
+        )
     }
 
     func testCleanerStripsThinkBlocksFromCleanupOutput() async {
@@ -170,7 +174,7 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(result, "")
     }
 
-    func testCleanerLogsPromptInputAndCorrectionStagesToSensitiveLogger() async throws {
+    func testCleanerLogsPromptInputToSensitiveLogger() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let correctionStore = CorrectionStore(defaults: defaults)
@@ -192,14 +196,14 @@ final class TextCleanerTests: XCTestCase {
         )
 
         XCTAssertEqual(result, "ghost-pepper is ready")
-        XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Pre-cleanup corrections") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Cleanup LLM transcript") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("System prompt") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("<USER-INPUT>") }))
         XCTAssertFalse(sensitiveMessages.contains(where: { $0.contains("User input:\n<USER-INPUT>") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Raw model output") }))
         XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Final cleaned output") }))
-        XCTAssertTrue(sensitiveMessages.contains(where: { $0.contains("Post-cleanup corrections") }))
+        XCTAssertFalse(sensitiveMessages.contains(where: { $0.contains("Pre-cleanup corrections") }))
+        XCTAssertFalse(sensitiveMessages.contains(where: { $0.contains("Post-cleanup corrections") }))
     }
 
     func testCleanerReportsModelAndPostProcessingDurations() async {
