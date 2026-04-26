@@ -166,6 +166,7 @@ struct SettingsView: View {
     @State private var selectedSection: SettingsSection = .recording
     @State private var transcriptionLabPreviewSound: NSSound?
     @State private var recognizedVoices: [RecognizedVoiceProfile] = []
+    @State private var recognizedVoiceSpeakerProfilesByID: [UUID: [TranscriptionLabSpeakerProfile]] = [:]
     @State private var recognizedVoicesErrorMessage: String?
     @StateObject private var dictationTestController: SettingsDictationTestController
     @StateObject private var transcriptionLabController: TranscriptionLabController
@@ -415,9 +416,14 @@ struct SettingsView: View {
     private func reloadRecognizedVoices() {
         do {
             recognizedVoices = try appState.loadRecognizedVoiceProfiles()
+            recognizedVoiceSpeakerProfilesByID = Dictionary(
+                grouping: try appState.loadAllTranscriptionLabSpeakerProfiles().filter { $0.recognizedVoiceID != nil },
+                by: { $0.recognizedVoiceID! }
+            )
             recognizedVoicesErrorMessage = nil
         } catch {
             recognizedVoices = []
+            recognizedVoiceSpeakerProfilesByID = [:]
             recognizedVoicesErrorMessage = "Could not load recognized voices."
         }
     }
@@ -439,6 +445,19 @@ struct SettingsView: View {
         }
 
         recognizedVoices[existingIndex] = updatedProfile
+    }
+
+    private func unlinkSpeakerProfileFromRecognizedVoice(_ profile: TranscriptionLabSpeakerProfile) {
+        var updatedProfile = profile
+        updatedProfile.recognizedVoiceID = nil
+
+        do {
+            try appState.upsertTranscriptionLabSpeakerProfile(updatedProfile)
+            reloadRecognizedVoices()
+            transcriptionLabController.reloadEntries()
+        } catch {
+            recognizedVoicesErrorMessage = "Could not unlink that speaker print."
+        }
     }
 
     private func playTranscriptionLabAudio(for entry: TranscriptionLabEntry) {
@@ -941,8 +960,12 @@ struct SettingsView: View {
                     ForEach(recognizedVoices) { profile in
                         RecognizedVoiceProfileEditor(
                             profile: profile,
+                            linkedSpeakerProfiles: recognizedVoiceSpeakerProfilesByID[profile.id] ?? [],
                             onChange: { updatedProfile in
                                 upsertRecognizedVoiceProfile(updatedProfile)
+                            },
+                            onUnlinkSpeakerProfile: { speakerProfile in
+                                unlinkSpeakerProfileFromRecognizedVoice(speakerProfile)
                             }
                         )
                     }
@@ -1067,6 +1090,7 @@ struct SettingsView: View {
                             TranscriptionLabSpeakerProfileEditor(
                                 profile: profile,
                                 effectiveDisplayName: transcriptionLabController.displayName(for: profile.speakerID) ?? profile.speakerID,
+                                recognizedVoiceOptions: transcriptionLabController.recognizedVoiceOptions,
                                 showsGlobalUpdateButton: transcriptionLabController.hasPendingGlobalVoiceUpdate(for: profile.speakerID),
                                 onDisplayNameChange: { updatedDisplayName in
                                     transcriptionLabController.updateSpeakerDisplayName(
@@ -1076,6 +1100,13 @@ struct SettingsView: View {
                                 },
                                 onIsMeChange: { isMe in
                                     transcriptionLabController.setSpeakerIsMe(isMe, for: profile.speakerID)
+                                },
+                                onRecognizedVoiceChange: { recognizedVoiceID in
+                                    transcriptionLabController.setSpeakerRecognizedVoiceID(
+                                        recognizedVoiceID,
+                                        for: profile.speakerID
+                                    )
+                                    reloadRecognizedVoices()
                                 },
                                 onUpdateGlobalVoice: {
                                     transcriptionLabController.pushSpeakerProfileToGlobalVoice(for: profile.speakerID)
@@ -1871,9 +1902,11 @@ struct SettingsView: View {
 private struct TranscriptionLabSpeakerProfileEditor: View {
     let profile: TranscriptionLabSpeakerProfile
     let effectiveDisplayName: String
+    let recognizedVoiceOptions: [RecognizedVoiceProfile]
     let showsGlobalUpdateButton: Bool
     let onDisplayNameChange: (String) -> Void
     let onIsMeChange: (Bool) -> Void
+    let onRecognizedVoiceChange: (UUID?) -> Void
     let onUpdateGlobalVoice: () -> Void
 
     @State private var draftDisplayName: String
@@ -1882,16 +1915,20 @@ private struct TranscriptionLabSpeakerProfileEditor: View {
     init(
         profile: TranscriptionLabSpeakerProfile,
         effectiveDisplayName: String,
+        recognizedVoiceOptions: [RecognizedVoiceProfile],
         showsGlobalUpdateButton: Bool,
         onDisplayNameChange: @escaping (String) -> Void,
         onIsMeChange: @escaping (Bool) -> Void,
+        onRecognizedVoiceChange: @escaping (UUID?) -> Void,
         onUpdateGlobalVoice: @escaping () -> Void
     ) {
         self.profile = profile
         self.effectiveDisplayName = effectiveDisplayName
+        self.recognizedVoiceOptions = recognizedVoiceOptions
         self.showsGlobalUpdateButton = showsGlobalUpdateButton
         self.onDisplayNameChange = onDisplayNameChange
         self.onIsMeChange = onIsMeChange
+        self.onRecognizedVoiceChange = onRecognizedVoiceChange
         self.onUpdateGlobalVoice = onUpdateGlobalVoice
         _draftDisplayName = State(initialValue: profile.displayName)
     }
@@ -1942,6 +1979,34 @@ private struct TranscriptionLabSpeakerProfileEditor: View {
                 )
                 .toggleStyle(.checkbox)
                 .fixedSize()
+            }
+
+            if recognizedVoiceOptions.isEmpty == false || profile.recognizedVoiceID != nil {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Voice print")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 82, alignment: .leading)
+
+                    Picker(
+                        "Voice print",
+                        selection: Binding(
+                            get: { profile.recognizedVoiceID },
+                            set: onRecognizedVoiceChange
+                        )
+                    ) {
+                        Text("Local only").tag(UUID?.none)
+
+                        ForEach(recognizedVoiceOptions) { recognizedVoice in
+                            Text(recognizedVoice.displayName)
+                                .tag(UUID?.some(recognizedVoice.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 260, alignment: .leading)
+
+                    Spacer()
+                }
             }
 
             if profile.evidenceTranscript.isEmpty == false {
@@ -1999,17 +2064,24 @@ private struct TranscriptionLabSpeakerProfileEditor: View {
 
 private struct RecognizedVoiceProfileEditor: View {
     let profile: RecognizedVoiceProfile
+    let linkedSpeakerProfiles: [TranscriptionLabSpeakerProfile]
     let onChange: (RecognizedVoiceProfile) -> Void
+    let onUnlinkSpeakerProfile: (TranscriptionLabSpeakerProfile) -> Void
 
     @State private var draftDisplayName: String
+    @State private var showsLinkedSpeakerProfiles = false
     @FocusState private var isNameFieldFocused: Bool
 
     init(
         profile: RecognizedVoiceProfile,
-        onChange: @escaping (RecognizedVoiceProfile) -> Void
+        linkedSpeakerProfiles: [TranscriptionLabSpeakerProfile],
+        onChange: @escaping (RecognizedVoiceProfile) -> Void,
+        onUnlinkSpeakerProfile: @escaping (TranscriptionLabSpeakerProfile) -> Void
     ) {
         self.profile = profile
+        self.linkedSpeakerProfiles = linkedSpeakerProfiles
         self.onChange = onChange
+        self.onUnlinkSpeakerProfile = onUnlinkSpeakerProfile
         _draftDisplayName = State(initialValue: profile.displayName)
     }
 
@@ -2051,6 +2123,10 @@ private struct RecognizedVoiceProfileEditor: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                Text(linkedSpeakerPrintCountText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Spacer()
             }
 
@@ -2067,6 +2143,30 @@ private struct RecognizedVoiceProfileEditor: View {
                         monospaced: false
                     )
                 }
+            }
+
+            DisclosureGroup(isExpanded: $showsLinkedSpeakerProfiles) {
+                if linkedSpeakerProfiles.isEmpty {
+                    Text("No saved recording speaker prints are linked to this voice.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(linkedSpeakerProfiles, id: \.recognizedVoiceLinkID) { speakerProfile in
+                            RecognizedVoiceLinkedSpeakerProfileRow(
+                                profile: speakerProfile,
+                                onUnlink: {
+                                    onUnlinkSpeakerProfile(speakerProfile)
+                                }
+                            )
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            } label: {
+                Text("Linked speaker prints")
+                    .font(.caption.weight(.medium))
             }
         }
         .padding(16)
@@ -2100,6 +2200,55 @@ private struct RecognizedVoiceProfileEditor: View {
         updatedProfile.displayName = normalizedName
         updatedProfile.updatedAt = Date()
         onChange(updatedProfile)
+    }
+
+    private var linkedSpeakerPrintCountText: String {
+        let count = linkedSpeakerProfiles.count
+        return count == 1 ? "1 linked speaker print" : "\(count) linked speaker prints"
+    }
+}
+
+private struct RecognizedVoiceLinkedSpeakerProfileRow: View {
+    let profile: TranscriptionLabSpeakerProfile
+    let onUnlink: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(profile.speakerID)
+                    .font(.caption.weight(.medium))
+
+                Text(profile.entryID.uuidString.prefix(8))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Unlink", action: onUnlink)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+
+            if profile.evidenceTranscript.isEmpty == false {
+                Text(profile.evidenceTranscript)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(height: 1)
+        }
+    }
+}
+
+private extension TranscriptionLabSpeakerProfile {
+    var recognizedVoiceLinkID: String {
+        "\(entryID.uuidString)-\(speakerID)"
     }
 }
 
@@ -2482,6 +2631,10 @@ private struct TranscriptionLabDiarizationSummaryView: View {
         }
 
         if let targetSpeakerID = visualization.targetSpeakerID {
+            if visualization.includedSpeakerIDsInDisplayOrder.count > 1 {
+                return "\(speakerText) and transcribed \(formattedDuration(visualization.includedTranscriptDuration)) from \(includedSpeakerSummaryText(targetSpeakerID: targetSpeakerID))."
+            }
+
             return "\(speakerText) and kept \(formattedDuration(visualization.keptAudioDuration)) from \(visualization.displayName(for: targetSpeakerID))."
         }
 
@@ -2506,11 +2659,12 @@ private struct TranscriptionLabDiarizationSummaryView: View {
                     ForEach(Array(visualization.spans.enumerated()), id: \.offset) { _, span in
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(speakerColor(for: span.speakerID))
+                            .opacity(span.isIncludedInTranscript ? 1 : 0.32)
                             .frame(width: segmentWidth(for: span, totalWidth: geometry.size.width))
                             .overlay {
                                 Text(span.displayName)
                                     .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(span.isKept ? Color.white : Color.primary)
+                                    .foregroundStyle(span.isIncludedInTranscript ? Color.white : Color.primary)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.65)
                                     .padding(.horizontal, 6)
@@ -2537,8 +2691,8 @@ private struct TranscriptionLabDiarizationSummaryView: View {
 
                                 Text(visualization.displayName(for: speakerID))
 
-                                if speakerID == visualization.targetSpeakerID {
-                                    Text(visualization.usedFallback ? "Target" : "Kept")
+                                if let speakerStatus = speakerStatusText(for: speakerID) {
+                                    Text(speakerStatus)
                                         .font(.caption2.weight(.semibold))
                                         .foregroundStyle(.secondary)
                                 }
@@ -2569,6 +2723,10 @@ private struct TranscriptionLabDiarizationSummaryView: View {
                 }
 
                 Text("Kept \(formattedDuration(visualization.keptAudioDuration))")
+
+                if visualization.includedTranscriptDuration != visualization.keptAudioDuration {
+                    Text("Transcript \(formattedDuration(visualization.includedTranscriptDuration))")
+                }
 
                 if visualization.usedFallback {
                     Text("Used full recording")
@@ -2614,6 +2772,30 @@ private struct TranscriptionLabDiarizationSummaryView: View {
 
     private func formattedDuration(_ duration: TimeInterval) -> String {
         String(format: "%.1fs", duration)
+    }
+
+    private func includedSpeakerSummaryText(targetSpeakerID: String) -> String {
+        let extraSpeakerCount = max(0, visualization.includedSpeakerIDsInDisplayOrder.count - 1)
+        guard extraSpeakerCount > 0 else {
+            return visualization.displayName(for: targetSpeakerID)
+        }
+
+        let extraText = extraSpeakerCount == 1
+            ? "1 matching speaker"
+            : "\(extraSpeakerCount) matching speakers"
+        return "\(visualization.displayName(for: targetSpeakerID)) + \(extraText)"
+    }
+
+    private func speakerStatusText(for speakerID: String) -> String? {
+        if visualization.usedFallback {
+            return speakerID == visualization.targetSpeakerID ? "Target" : nil
+        }
+
+        if speakerID == visualization.targetSpeakerID {
+            return "Kept"
+        }
+
+        return visualization.includedSpeakerIDsInDisplayOrder.contains(speakerID) ? "Included" : nil
     }
 
     private func fallbackReasonText(for reason: DiarizationSummary.FallbackReason) -> String {

@@ -1517,6 +1517,10 @@ class AppState: ObservableObject {
         try transcriptionLabSpeakerProfileStore.loadProfiles(for: entryID)
     }
 
+    func loadAllTranscriptionLabSpeakerProfiles() throws -> [TranscriptionLabSpeakerProfile] {
+        try transcriptionLabSpeakerProfileStore.loadAllProfiles()
+    }
+
     func upsertTranscriptionLabSpeakerProfile(_ profile: TranscriptionLabSpeakerProfile) throws {
         try transcriptionLabSpeakerProfileStore.upsert(profile)
     }
