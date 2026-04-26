@@ -10,6 +10,7 @@ Resources/models/
 # Secrets
 .env
 .env.*
+Config/LocalSigning.xcconfig
 
 # macOS
 .DS_Store

@@ -174,6 +174,7 @@
 		0D91666EEE2CF7B4B78E3061 /* ChordBindingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChordBindingStore.swift; sourceTree = "<group>"; };
 		0EDE03E93B2A9E420B2C74CA /* PostPasteLearningCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostPasteLearningCoordinator.swift; sourceTree = "<group>"; };
 		0F634CFD724E29ECA57C0BB6 /* KeyChordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyChordTests.swift; sourceTree = "<group>"; };
+		112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		11E4B61BA7270EEC11A8AC69 /* ScreenRecordingPermissionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenRecordingPermissionController.swift; sourceTree = "<group>"; };
 		14BBAF87158BF49AB528B979 /* SystemAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioRecorder.swift; sourceTree = "<group>"; };
 		17F70F511A956DAB5778D430 /* WindowCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowCaptureService.swift; sourceTree = "<group>"; };
@@ -446,6 +447,14 @@
 			path = Calendar;
 			sourceTree = "<group>";
 		};
+		452F90746F13934A1E6E515E /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		4694A9A6CDA9C5FA6623F377 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
@@ -559,6 +568,7 @@
 			children = (
 				3CA9EB5192BC2CF7C9D2A16D /* CleanupModelProbe */,
 				C2176D2588E67659D488AE47 /* CleanupModelProbeSupport */,
+				452F90746F13934A1E6E515E /* Config */,
 				1E7F0C5D7440C7594FBB5FB3 /* GhostPepper */,
 				FD52C5E171D3EF7591022762 /* GhostPepperTests */,
 				3705D6F7BCD01CB7D37DF812 /* Products */,
@@ -960,14 +970,12 @@
 /* Begin XCBuildConfiguration section */
 		1E4BC3C9A2D9995B5339A1F0 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = BBVMGXR9AY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;
@@ -1107,14 +1115,12 @@
 		};
 		E539A0CB0CD4C3B8D54B2855 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = BBVMGXR9AY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;
