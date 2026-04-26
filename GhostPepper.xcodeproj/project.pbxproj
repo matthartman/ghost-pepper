@@ -34,6 +34,7 @@
 		3616DFB43A67CFF21CBC1143 /* DeterministicCorrectionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87C9F07E35DD5E300B3F7D5 /* DeterministicCorrectionEngine.swift */; };
 		361E7532F651C1BF7F0D0724 /* TextCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37863EC2F34067ED0C5B2B6F /* TextCleaner.swift */; };
 		36715F4371E0C7AA79F4504D /* CleanupModelProbeCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF12D0FBB05F424AAB2E68 /* CleanupModelProbeCLI.swift */; };
+		36A4AF51F53C45A78F14A1D4 /* ChineseScriptConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D4D2C79A2174D65A2A5F0D2 /* ChineseScriptConverterTests.swift */; };
 		37669DE8B07FA0D5E77661ED /* TranscriptionLabSpeakerProfileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3496D74914A4B865A1A0DF /* TranscriptionLabSpeakerProfileStoreTests.swift */; };
 		38C7C0D8BB32CF7023CDE37B /* sprite_frame_2@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 029E36727193D8502C69FB38 /* sprite_frame_2@2x.png */; };
 		38CDCD968C2E4EBA2F8C59A5 /* ContextBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95281DF90A125CA223FCEE7A /* ContextBubbleView.swift */; };
@@ -71,6 +72,7 @@
 		6585677AF7949BEA14C0B3B2 /* CleanupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3252290627807046966D956B /* CleanupSettings.swift */; };
 		660FCA13EFCA0BC0B8A1FA8E /* TrelloBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A8F478894D0A3A49A91C8CC /* TrelloBackend.swift */; };
 		666D2339FC0689F41A3AE715 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 985AD96FDE69D89C0B2DA245 /* LLM */; };
+		66B7C97460F145FDBE0B8722 /* ChineseScriptConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C58F2F44454AD690085CD0 /* ChineseScriptConverter.swift */; };
 		6EA6ACF174AAA398586CC03A /* ChordEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518567C8CE0F7841ACE62BD1 /* ChordEngine.swift */; };
 		6F3DA53FA7B4119405D86DE8 /* CleanupModelProbeRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853418773B99673FB27791AC /* CleanupModelProbeRunner.swift */; };
 		6F9B246766050DABB6DE046A /* MeetingTranscriptSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624731D133FE2A9EB3A12740 /* MeetingTranscriptSettings.swift */; };
@@ -246,11 +248,13 @@
 		8D087A4D4CD5C6D3C293AE56 /* CorrectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionStore.swift; sourceTree = "<group>"; };
 		8E41EBD0A6F249D987AE8853 /* sprite_frame_1@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_1@2x.png"; sourceTree = "<group>"; };
 		8F5407DA5D09555EDD69CA54 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
+		8D4D2C79A2174D65A2A5F0D2 /* ChineseScriptConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChineseScriptConverterTests.swift; sourceTree = "<group>"; };
 		934F425F25CCB580B8202127 /* PasteSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteSession.swift; sourceTree = "<group>"; };
 		9452C09EB8A7AC2E5E69A502 /* GranolaImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GranolaImporter.swift; sourceTree = "<group>"; };
 		948064EDD38AFB0872A99BD6 /* CleanupPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupPromptBuilder.swift; sourceTree = "<group>"; };
 		94DD151A4D6F1474F4F138FD /* GhostPepper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GhostPepper.entitlements; sourceTree = "<group>"; };
 		94E9AADC67C525B0A9E382AB /* RecordingOCRPrefetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOCRPrefetch.swift; sourceTree = "<group>"; };
+		93C58F2F44454AD690085CD0 /* ChineseScriptConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChineseScriptConverter.swift; sourceTree = "<group>"; };
 		95281DF90A125CA223FCEE7A /* ContextBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBubbleView.swift; sourceTree = "<group>"; };
 		960D35875D60655B17574DF8 /* AudioRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderTests.swift; sourceTree = "<group>"; };
 		97408213D206AAF1B1C29FFC /* PepperChatBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperChatBackend.swift; sourceTree = "<group>"; };
@@ -539,6 +543,7 @@
 		6A2ED16C65A7A2047D1F84F6 /* Cleanup */ = {
 			isa = PBXGroup;
 			children = (
+				93C58F2F44454AD690085CD0 /* ChineseScriptConverter.swift */,
 				2F8EC51C74573DD4A47E1CEB /* CleanupBackend.swift */,
 				397AC156E3D2AF040A998E68 /* CleanupModelProbeCLI.swift */,
 				7201BD31C20BC2B1D0E51DB6 /* CleanupModelProbeRunner.swift */,
@@ -630,6 +635,7 @@
 			isa = PBXGroup;
 			children = (
 				960D35875D60655B17574DF8 /* AudioRecorderTests.swift */,
+				8D4D2C79A2174D65A2A5F0D2 /* ChineseScriptConverterTests.swift */,
 				6BF767CF1AA15DB2C2B82A1C /* ChordBindingStoreTests.swift */,
 				65270DAE5CA7F1A37B4D890B /* ChordEngineTests.swift */,
 				886EA12D06680BB95FB78309 /* CleanupBackendTests.swift */,
@@ -809,6 +815,7 @@
 				DBA25ED4D9D561452CE6EA50 /* ChordBindingStore.swift in Sources */,
 				6EA6ACF174AAA398586CC03A /* ChordEngine.swift in Sources */,
 				A9826A25D65BE571100B792C /* ChunkedTranscriptionPipeline.swift in Sources */,
+				66B7C97460F145FDBE0B8722 /* ChineseScriptConverter.swift in Sources */,
 				DA27C59BD3F0752E0E337813 /* CleanupBackend.swift in Sources */,
 				635E00F7C849159760D86642 /* CleanupModelProbeCLI.swift in Sources */,
 				1AB34878C4E7E375F34A1339 /* CleanupModelProbeRunner.swift in Sources */,
@@ -910,6 +917,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				242A5D63A9F6E3FAD4E09F7D /* AudioRecorderTests.swift in Sources */,
+				36A4AF51F53C45A78F14A1D4 /* ChineseScriptConverterTests.swift in Sources */,
 				91B80C940C09B24CE80A4B81 /* ChordBindingStoreTests.swift in Sources */,
 				783179FB65E4B507B25CF691 /* ChordEngineTests.swift in Sources */,
 				E06EAD2221790D5444E1F8E0 /* CleanupBackendTests.swift in Sources */,

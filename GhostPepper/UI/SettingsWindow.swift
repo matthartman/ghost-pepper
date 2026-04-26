@@ -699,6 +699,25 @@ struct SettingsView: View {
                 }
             }
 
+            SettingsCard("Chinese script") {
+                VStack(alignment: .leading, spacing: 16) {
+                    Picker("Output", selection: Binding(
+                        get: { appState.chineseScriptPreference },
+                        set: { appState.chineseScriptPreference = $0 }
+                    )) {
+                        ForEach(ChineseScriptPreference.allCases) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Text("Whisper's multilingual model often emits Traditional Chinese even on Simplified-locale machines. Pick a target to post-process every transcription before cleanup runs. `Auto` keeps Whisper's output unchanged.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             SettingsCard("Cleanup prompt") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Ghost Pepper uses this prompt before adding OCR context and correction hints.")

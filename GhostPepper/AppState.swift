@@ -67,6 +67,7 @@ class AppState: ObservableObject {
     @AppStorage("cleanupPrompt") var cleanupPrompt: String = TextCleaner.defaultPrompt
     @AppStorage("speechModel") var speechModel: String = SpeechModelCatalog.defaultModelID
     @AppStorage("preferredLanguage") var preferredLanguage: String = "auto"
+    @AppStorage("chineseScriptPreference") var chineseScriptPreferenceRaw: String = ChineseScriptPreference.auto.rawValue
     @AppStorage("pepperChatHost") var pepperChatHost: String = "https://api.zo.computer"
     @AppStorage("pepperChatApiKey") var pepperChatApiKey: String = ""
     @AppStorage("pepperChatEnabled") var pepperChatEnabled: Bool = false {
@@ -104,6 +105,11 @@ class AppState: ObservableObject {
                 forKey: Self.ignoreOtherSpeakersDefaultsKey
             )
         }
+    }
+
+    var chineseScriptPreference: ChineseScriptPreference {
+        get { ChineseScriptPreference(rawValue: chineseScriptPreferenceRaw) ?? .auto }
+        set { chineseScriptPreferenceRaw = newValue.rawValue }
     }
 
     let modelManager = ModelManager()
@@ -1327,6 +1333,8 @@ class AppState: ObservableObject {
         if let cleanedTranscriptionResultOverride {
             return await cleanedTranscriptionResultOverride(text, windowContext)
         }
+
+        let text = ChineseScriptConverter.convert(text, to: chineseScriptPreference)
 
         guard cleanupEnabled else {
             return (text: text, prompt: cleanupPrompt, attemptedCleanup: false, cleanupUsedFallback: false)
