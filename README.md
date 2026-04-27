@@ -44,6 +44,9 @@ Ghost Pepper uses open-source models that run entirely on your Mac. Models downl
 | Whisper small (multilingual) | ~466 MB | Multi-language support |
 | Parakeet v3 (25 languages) | ~1.4 GB | Multi-language via [FluidAudio](https://github.com/FluidInference/FluidAudio) |
 | Qwen3-ASR 0.6B int8 (50+ languages) | ~900 MB | Highest multilingual quality, macOS 15+ required |
+| Moonshine Tiny (43M) | ~170 MB | Fast, via [moonshine-mlx](https://github.com/kylehowells/moonshine-mlx) |
+| Moonshine Small (147M) | ~590 MB | Balanced, via moonshine-mlx |
+| Moonshine Medium (245M) | ~980 MB | Best Moonshine accuracy, via moonshine-mlx |
 
 ### Cleanup models
 
@@ -103,7 +106,7 @@ Every core feature runs 100% on your Mac — verified by AI code review. No trus
 
 ## Acknowledgments
 
-Built with [WhisperKit](https://github.com/argmaxinc/WhisperKit), [LLM.swift](https://github.com/eastriverlee/LLM.swift), [Hugging Face](https://huggingface.co/), and [Sparkle](https://sparkle-project.org/).
+Built with [WhisperKit](https://github.com/argmaxinc/WhisperKit), [moonshine-mlx](https://github.com/kylehowells/moonshine-mlx), [FluidAudio](https://github.com/FluidInference/FluidAudio), [LLM.swift](https://github.com/eastriverlee/LLM.swift), [Hugging Face](https://huggingface.co/), and [Sparkle](https://sparkle-project.org/).
 
 ## License
 

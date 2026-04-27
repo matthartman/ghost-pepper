@@ -1,6 +1,8 @@
 import Foundation
 import FluidAudio
 import WhisperKit
+import MoonshineMLX
+import MLX
 
 /// Manages local speech model lifecycle: download, load, and readiness state.
 @MainActor
@@ -16,6 +18,7 @@ final class ModelManager: ObservableObject {
     /// Stored as `Any?` because `Qwen3AsrManager` is `@available(macOS 15, *)`
     /// and the app deploys to macOS 14. Cast at use sites under `#available`.
     private var qwen3AsrManagerStorage: Any?
+    private var moonshineModel: MoonshineModel?
 
     @Published private(set) var state: ModelManagerState = .idle
     @Published private(set) var downloadProgress: Double?
@@ -124,6 +127,8 @@ final class ModelManager: ObservableObject {
             case .parakeetV3, .none:
                 try await loadFluidAudioModel(requestedModel)
             }
+        case .moonshineMLX:
+            try await loadMoonshineModel(requestedModel)
         }
     }
 
@@ -167,6 +172,12 @@ final class ModelManager: ObservableObject {
                     let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     return cleaned.isEmpty ? nil : cleaned
                 }
+            case .moonshineMLX:
+                guard let moonshineModel else { return nil }
+                let audio = MLXArray(audioBuffer)
+                let result = moonshineModel.generate(audio: audio)
+                let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return cleaned.isEmpty ? nil : cleaned
             }
         } catch {
             debugLogger?(.model, "Speech transcription failed for \(modelName): \(error.localizedDescription)")
@@ -445,6 +456,35 @@ final class ModelManager: ObservableObject {
         qwen3AsrManagerStorage = manager
     }
 
+    private func loadMoonshineModel(_ model: SpeechModelDescriptor) async throws {
+        guard let variant = model.moonshineVariant else {
+            throw NSError(
+                domain: "GhostPepper.ModelManager",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "Missing MoonshineMLX variant for \(model.name)"]
+            )
+        }
+
+        let repoID: String
+        switch variant {
+        case .tiny:   repoID = "UsefulSensors/moonshine-streaming-tiny"
+        case .small:  repoID = "UsefulSensors/moonshine-streaming-small"
+        case .medium: repoID = "UsefulSensors/moonshine-streaming-medium"
+        }
+
+        let needsDownload = !Self.modelIsCached(model)
+        if needsDownload {
+            downloadProgress = nil // Shows "Preparing..." in UI
+        }
+
+        let loadedModel = try await Task.detached(priority: .userInitiated) {
+            try MoonshineModel.load(from: repoID)
+        }.value
+
+        downloadProgress = nil
+        moonshineModel = loadedModel
+    }
+
     private func resetLoadedModels() {
         clearLoadedModelInstances()
         state = .idle
@@ -456,6 +496,7 @@ final class ModelManager: ObservableObject {
         fluidAudioModels = nil
         sortformerModels = nil
         qwen3AsrManagerStorage = nil
+        moonshineModel = nil
         downloadProgress = nil
     }
 
@@ -615,6 +656,13 @@ final class ModelManager: ObservableObject {
             case .qwen3AsrInt8:
                 break // Qwen3 cache cleanup handled by FluidAudio internally
             }
+        case .moonshineMLX:
+            let hubCacheDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/huggingface/models", isDirectory: true)
+            let modelPath = model.cachePathComponents.reduce(hubCacheDir) { partialURL, component in
+                partialURL.appendingPathComponent(component, isDirectory: true)
+            }
+            try? FileManager.default.removeItem(at: modelPath)
         }
     }
 
@@ -638,6 +686,13 @@ final class ModelManager: ObservableObject {
                 }
                 return false
             }
+        case .moonshineMLX:
+            let hubCacheDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/huggingface/models", isDirectory: true)
+            let modelPath = model.cachePathComponents.reduce(hubCacheDir) { partialURL, component in
+                partialURL.appendingPathComponent(component, isDirectory: true)
+            }
+            return FileManager.default.fileExists(atPath: modelPath.path)
         }
     }
 

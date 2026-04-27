@@ -72,6 +72,7 @@
 		6585677AF7949BEA14C0B3B2 /* CleanupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3252290627807046966D956B /* CleanupSettings.swift */; };
 		660FCA13EFCA0BC0B8A1FA8E /* TrelloBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A8F478894D0A3A49A91C8CC /* TrelloBackend.swift */; };
 		666D2339FC0689F41A3AE715 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 985AD96FDE69D89C0B2DA245 /* LLM */; };
+		66CFEC09452F5F23E9747669 /* MoonshineMLX in Frameworks */ = {isa = PBXBuildFile; productRef = 79D8ECE59BEFD871DB070E66 /* MoonshineMLX */; };
 		6EA6ACF174AAA398586CC03A /* ChordEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 518567C8CE0F7841ACE62BD1 /* ChordEngine.swift */; };
 		6F3DA53FA7B4119405D86DE8 /* CleanupModelProbeRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853418773B99673FB27791AC /* CleanupModelProbeRunner.swift */; };
 		6F9B246766050DABB6DE046A /* MeetingTranscriptSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 624731D133FE2A9EB3A12740 /* MeetingTranscriptSettings.swift */; };
@@ -337,6 +338,7 @@
 				9965C422E2E6A1F48E717C28 /* FluidAudio in Frameworks */,
 				666D2339FC0689F41A3AE715 /* LLM in Frameworks */,
 				A31E9987608164A53D5255EB /* Sparkle in Frameworks */,
+				66CFEC09452F5F23E9747669 /* MoonshineMLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -695,6 +697,7 @@
 				23213B149CFD96C7F4B7B0F5 /* FluidAudio */,
 				985AD96FDE69D89C0B2DA245 /* LLM */,
 				52CD995A5FADA02097BCD33F /* Sparkle */,
+				79D8ECE59BEFD871DB070E66 /* MoonshineMLX */,
 			);
 			productName = GhostPepper;
 			productReference = 52BCF852883B9E469B61B56B /* GhostPepper.app */;
@@ -765,6 +768,7 @@
 			packageReferences = (
 				3BC7A258ECE1E44892C0C351 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				FF5143DA3A0A948A0A7F982D /* XCRemoteSwiftPackageReference "LLM.swift" */,
+				A7EB0289FB6DBE49DE442E63 /* XCRemoteSwiftPackageReference "moonshine-mlx" */,
 				7193259C7B8193E12A21EF21 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
@@ -1249,6 +1253,14 @@
 				minimumVersion = 2.6.0;
 			};
 		};
+		A7EB0289FB6DBE49DE442E63 /* XCRemoteSwiftPackageReference "moonshine-mlx" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kylehowells/moonshine-mlx.git";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
 		E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/argmaxinc/WhisperKit.git";
@@ -1287,6 +1299,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 7193259C7B8193E12A21EF21 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		79D8ECE59BEFD871DB070E66 /* MoonshineMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A7EB0289FB6DBE49DE442E63 /* XCRemoteSwiftPackageReference "moonshine-mlx" */;
+			productName = MoonshineMLX;
 		};
 		985AD96FDE69D89C0B2DA245 /* LLM */ = {
 			isa = XCSwiftPackageProductDependency;

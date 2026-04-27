@@ -18,6 +18,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     from: "2.6.0"
+  MoonshineMLX:
+    url: https://github.com/kylehowells/moonshine-mlx.git
+    branch: master
 
 targets:
   GhostPepper:
@@ -43,6 +46,7 @@ targets:
       - package: LLM.swift
         product: LLM
       - package: Sparkle
+      - package: MoonshineMLX
     entitlements:
       path: GhostPepper/GhostPepper.entitlements
       properties:
