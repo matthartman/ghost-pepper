@@ -4,9 +4,9 @@ import CoreGraphics
 
 struct ShortcutRecorderView: View {
     let title: String
-    let chord: KeyChord
+    let chord: KeyChord?
     let onRecordingStateChange: (Bool) -> Void
-    let onChange: (KeyChord) -> Void
+    let onChange: (KeyChord?) -> Void
 
     @State private var isRecording = false
     @State private var captureState = ShortcutCaptureState()
@@ -31,11 +31,21 @@ struct ShortcutRecorderView: View {
                     }
                     .buttonStyle(BorderedButtonStyle())
                     .tint(.orange)
+
+                    if chord != nil {
+                        Button(action: clearChord) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Clear shortcut")
+                        .accessibilityLabel("Clear shortcut")
+                    }
                 }
             }
 
             if isRecording {
-                Text("Press the full chord, then release. Press Escape to cancel.")
+                Text("Press the full chord, then release. Press Delete to clear, or Escape to cancel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -54,7 +64,11 @@ struct ShortcutRecorderView: View {
             return "Press Shortcut"
         }
 
-        return chord.shortcutRecorderDisplayString
+        if let chord {
+            return chord.shortcutRecorderDisplayString
+        }
+
+        return "None"
     }
 
     private func toggleRecording() {
@@ -63,6 +77,11 @@ struct ShortcutRecorderView: View {
         } else {
             startRecording()
         }
+    }
+
+    private func clearChord() {
+        stopRecording(commit: false)
+        onChange(nil)
     }
 
     private func startRecording() {
@@ -112,7 +131,15 @@ struct ShortcutRecorderView: View {
         case .keyDown:
             let key = PhysicalKey(keyCode: UInt16(event.keyCode))
             if key.keyCode == 53, captureState.capturedKeys.isEmpty {
+                // Escape with nothing captured = cancel recording.
                 stopRecording(commit: false)
+                return nil
+            }
+
+            if key.keyCode == 51, captureState.capturedKeys.isEmpty {
+                // Delete/Backspace with nothing captured = clear the binding.
+                stopRecording(commit: false)
+                onChange(nil)
                 return nil
             }
 

@@ -85,9 +85,9 @@ class AppState: ObservableObject {
     @AppStorage("meetingWindowFloatsWhileRecording") var meetingWindowFloatsWhileRecording: Bool = true
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
     @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
-    @Published private(set) var pushToTalkChord: KeyChord
-    @Published private(set) var toggleToTalkChord: KeyChord
-    @Published private(set) var pepperChatChord: KeyChord
+    @Published private(set) var pushToTalkChord: KeyChord?
+    @Published private(set) var toggleToTalkChord: KeyChord?
+    @Published private(set) var pepperChatChord: KeyChord?
     @Published var postPasteLearningEnabled: Bool {
         didSet {
             cleanupSettingsDefaults.set(
@@ -192,6 +192,20 @@ class AppState: ObservableObject {
         .pepperChat: defaultPepperChatChord
     ]
 
+    nonisolated static func resolvedChord(
+        from state: ChordBindingStore.BindingState,
+        default defaultChord: KeyChord
+    ) -> KeyChord? {
+        switch state {
+        case .unset:
+            return defaultChord
+        case .cleared:
+            return nil
+        case .set(let chord):
+            return chord
+        }
+    }
+
     init(
         hotkeyMonitor: HotkeyMonitoring = HotkeyMonitor(bindings: AppState.defaultShortcutBindings),
         chordBindingStore: ChordBindingStore = ChordBindingStore(),
@@ -222,9 +236,18 @@ class AppState: ObservableObject {
         self.appRelauncher = appRelauncher ?? AppRelauncher()
         self.inputMonitoringChecker = inputMonitoringChecker
         self.inputMonitoringPrompter = inputMonitoringPrompter
-        self.pushToTalkChord = chordBindingStore.binding(for: .pushToTalk) ?? AppState.defaultPushToTalkChord
-        self.toggleToTalkChord = chordBindingStore.binding(for: .toggleToTalk) ?? AppState.defaultToggleToTalkChord
-        self.pepperChatChord = chordBindingStore.binding(for: .pepperChat) ?? AppState.defaultPepperChatChord
+        self.pushToTalkChord = AppState.resolvedChord(
+            from: chordBindingStore.binding(for: .pushToTalk),
+            default: AppState.defaultPushToTalkChord
+        )
+        self.toggleToTalkChord = AppState.resolvedChord(
+            from: chordBindingStore.binding(for: .toggleToTalk),
+            default: AppState.defaultToggleToTalkChord
+        )
+        self.pepperChatChord = AppState.resolvedChord(
+            from: chordBindingStore.binding(for: .pepperChat),
+            default: AppState.defaultPepperChatChord
+        )
         self.textCleanupManager = textCleanupManager ?? TextCleanupManager(defaults: cleanupSettingsDefaults)
         self.frontmostWindowOCRService = frontmostWindowOCRService
         self.recordingOCRPrefetch = RecordingOCRPrefetch { [frontmostWindowOCRService] customWords in
@@ -1294,12 +1317,11 @@ class AppState: ObservableObject {
     }
 
     private var shortcutBindings: [ChordAction: KeyChord] {
-        var bindings: [ChordAction: KeyChord] = [
-            .pushToTalk: pushToTalkChord,
-            .toggleToTalk: toggleToTalkChord
-        ]
+        var bindings: [ChordAction: KeyChord] = [:]
+        if let pushToTalkChord { bindings[.pushToTalk] = pushToTalkChord }
+        if let toggleToTalkChord { bindings[.toggleToTalk] = toggleToTalkChord }
 
-        if pepperChatEnabled || pepperChatRecorder != nil {
+        if pepperChatEnabled || pepperChatRecorder != nil, let pepperChatChord {
             bindings[.pepperChat] = pepperChatChord
         }
 
@@ -1307,9 +1329,17 @@ class AppState: ObservableObject {
     }
 
     private func persistShortcutBindingsIfNeeded() {
-        try? chordBindingStore.setBinding(pushToTalkChord, for: .pushToTalk)
-        try? chordBindingStore.setBinding(toggleToTalkChord, for: .toggleToTalk)
-        try? chordBindingStore.setBinding(pepperChatChord, for: .pepperChat)
+        persistChord(pushToTalkChord, for: .pushToTalk)
+        persistChord(toggleToTalkChord, for: .toggleToTalk)
+        persistChord(pepperChatChord, for: .pepperChat)
+    }
+
+    private func persistChord(_ chord: KeyChord?, for action: ChordAction) {
+        if let chord {
+            try? chordBindingStore.setBinding(chord, for: action)
+        } else {
+            chordBindingStore.clearBinding(for: action)
+        }
     }
 
     private var canAttemptCleanup: Bool {
@@ -1612,13 +1642,17 @@ class AppState: ObservableObject {
         }
     }
 
-    func updateShortcut(_ chord: KeyChord, for action: ChordAction) {
+    func updateShortcut(_ chord: KeyChord?, for action: ChordAction) {
         let previousPushChord = pushToTalkChord
         let previousToggleChord = toggleToTalkChord
         let previousPepperChatChord = pepperChatChord
 
         do {
-            try chordBindingStore.setBinding(chord, for: action)
+            if let chord {
+                try chordBindingStore.setBinding(chord, for: action)
+            } else {
+                chordBindingStore.clearBinding(for: action)
+            }
             shortcutErrorMessage = nil
 
             switch action {
