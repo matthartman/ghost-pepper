@@ -1017,6 +1017,22 @@ class AppState: ObservableObject {
         controller.onGenerateSummary = { [weak self] transcript in
             Task { await self?.generateMeetingSummary(for: transcript) }
         }
+        controller.onAskQuestion = { [weak self] question, context in
+            guard let self else { return "Not available" }
+            let prompt = """
+            You are answering a question about a meeting. Use ONLY the meeting content provided below. \
+            Be concise and specific. If the answer isn't in the meeting content, say so.
+
+            \(context)
+            Question: \(question)
+            Answer:
+            """
+            do {
+                return try await self.textCleanupManager.clean(text: prompt, prompt: nil)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        }
         return controller
     }()
     private let meetingDetector = MeetingDetector()

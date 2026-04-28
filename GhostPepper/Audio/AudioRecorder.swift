@@ -186,6 +186,9 @@ final class AudioRecorder {
             return
         }
 
+        // Rebuild the engine when switching devices so inputNode picks up the new format
+        rebuildEngine()
+
         let audioUnit = engine.inputNode.audioUnit!
         var devID = deviceID
         let status = AudioUnitSetProperty(

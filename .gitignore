@@ -11,6 +11,7 @@ Resources/models/
 .env
 .env.*
 Config/LocalSigning.xcconfig
+GhostPepper/Secrets.swift
 
 # macOS
 .DS_Store

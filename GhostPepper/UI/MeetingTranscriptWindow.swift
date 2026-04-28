@@ -20,6 +20,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onAskQuestion: ((_ question: String, _ context: String) async -> String)?
     var shouldFloatWhileRecording: () -> Bool = { false }
 
     private(set) var windowState: MeetingWindowState?
@@ -41,6 +42,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         state.onStartRecording = onStartRecording
         state.onStopRecording = onStopRecording
         state.onGenerateSummary = onGenerateSummary
+        state.onAskQuestion = onAskQuestion
         state.onRecordingStateChanged = { [weak self] in
             self?.updateWindowLevel()
         }
@@ -171,6 +173,7 @@ final class OpenMeetingTab: ObservableObject, Identifiable {
 
 @MainActor
 final class MeetingWindowState: ObservableObject {
+    var onAskQuestion: ((_ question: String, _ context: String) async -> String)?
     @Published var tabs: [OpenMeetingTab] = []
     @Published var activeTabID: UUID?
     @Published var showSidebar = true
@@ -561,6 +564,9 @@ struct MeetingTabContentView: View {
     @State private var showSummaryPrompt = false
     @AppStorage("meetingSummaryPrompt") private var summaryPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
     @AppStorage("selectedCleanupModelKind") private var selectedModelKind: String = LocalCleanupModelKind.qwen35_0_8b_q4_k_m.rawValue
+    @State private var qaQuestion = ""
+    @State private var qaAnswer = ""
+    @State private var qaIsLoading = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -678,6 +684,9 @@ struct MeetingTabContentView: View {
                     }
                 }
             }
+
+            // Ask about this meeting
+            meetingQABar
 
             // Status bar
             statusBar
@@ -973,6 +982,112 @@ struct MeetingTabContentView: View {
                     state.saveActiveTab()
                 }
             }
+        }
+    }
+
+    // MARK: - Meeting Q&A
+
+    private var meetingQABar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !qaAnswer.isEmpty {
+                ScrollView {
+                    Text(qaAnswer)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(maxHeight: 150)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .cornerRadius(8)
+                .padding(.horizontal, 48)
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                TextField("Ask about this meeting...", text: $qaQuestion)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .onSubmit { askQuestion() }
+                    .disabled(qaIsLoading)
+                if qaIsLoading {
+                    ProgressView().scaleEffect(0.6)
+                } else if !qaQuestion.isEmpty {
+                    Button(action: { askQuestion() }) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.orange)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if !qaAnswer.isEmpty {
+                    Button(action: { qaAnswer = ""; qaQuestion = "" }) {
+                        Image(systemName: "xmark.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+            .cornerRadius(8)
+            .padding(.horizontal, 48)
+            .padding(.bottom, 4)
+        }
+    }
+
+    private func askQuestion() {
+        let question = qaQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, !qaIsLoading else { return }
+        qaIsLoading = true
+
+        // Build transcript context — use notes + summary + transcript text
+        let transcript = tab.transcript
+        var context = ""
+
+        if let summary = transcript.summary, !summary.isEmpty {
+            context += "Meeting summary:\n\(summary)\n\n"
+        }
+
+        let notes = transcript.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !notes.isEmpty {
+            context += "Meeting notes:\n\(notes)\n\n"
+        }
+
+        // Add transcript segments (truncate to fit context window)
+        let segmentText = transcript.segments.map { segment in
+            "[\(segment.formattedTimestamp)] \(segment.speaker.displayName): \(segment.text)"
+        }.joined(separator: "\n")
+
+        // Keep last ~3000 chars of transcript to fit in model context
+        let maxTranscript = 3000
+        let truncatedTranscript = segmentText.count > maxTranscript
+            ? "...\n" + String(segmentText.suffix(maxTranscript))
+            : segmentText
+        if !truncatedTranscript.isEmpty {
+            context += "Meeting transcript:\n\(truncatedTranscript)\n\n"
+        }
+
+        let prompt = """
+        You are answering a question about a meeting. Use ONLY the meeting content provided below. \
+        Be concise and specific. If the answer isn't in the meeting content, say so.
+
+        \(context)
+        Question: \(question)
+        Answer:
+        """
+
+        Task {
+            if let answer = await state.onAskQuestion?(question, context) {
+                qaAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else {
+                qaAnswer = "Could not generate an answer. Make sure a cleanup model is loaded."
+            }
+            qaIsLoading = false
         }
     }
 

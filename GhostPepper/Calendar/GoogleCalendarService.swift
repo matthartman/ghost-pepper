@@ -12,8 +12,12 @@ final class GoogleCalendarService: ObservableObject {
     @Published var isLoading = false
     @Published var userName: String?
 
-    private static let clientID = "132905683480-3iajprr7h347avmgpejodsladgnvartk.apps.googleusercontent.com"
-    private static let redirectURI = "urn:ietf:wg:oauth:2.0:oob"
+    private static let clientID = Secrets.googleClientID
+    private static let clientSecret = Secrets.googleClientSecret
+    // Google requires loopback redirect for desktop OAuth clients.
+    // We bind to 127.0.0.1 only (not accessible from network), use a random port,
+    // and shut down immediately after receiving the code.
+    private static let loopbackHost = "http://127.0.0.1"
     private static let scope = "https://www.googleapis.com/auth/calendar.events.readonly"
     private static let tokenKey = "googleCalendarAccessToken"
     private static let refreshTokenKey = "googleCalendarRefreshToken"
@@ -40,20 +44,41 @@ final class GoogleCalendarService: ObservableObject {
         isSignedIn = accessToken != nil
     }
 
-    @Published var isWaitingForCode = false
+    private var loopbackPort: UInt16 = 0
+    private var activeServer: LoopbackOAuthServer?
 
     // MARK: - OAuth Flow
 
-    /// Start the OAuth sign-in flow — opens browser, user copies code back.
+    /// Start the OAuth sign-in flow — starts a loopback server and opens the browser.
     func signIn() {
         let verifier = generateCodeVerifier()
         codeVerifier = verifier
         let challenge = generateCodeChallenge(from: verifier)
 
+        // Start loopback server on a random port (127.0.0.1 only, not network-accessible)
+        let server = LoopbackOAuthServer { [weak self] code in
+            Task { @MainActor [weak self] in
+                guard let self, let verifier = self.codeVerifier else { return }
+                self.codeVerifier = nil
+                self.activeServer = nil
+                self.isLoading = true
+                await self.exchangeCodeForToken(code: code, verifier: verifier)
+                self.isLoading = false
+            }
+        }
+        activeServer = server
+        guard let port = server.start() else {
+            print("GoogleCalendar: failed to start loopback server")
+            return
+        }
+        loopbackPort = port
+
+        let redirectURI = "\(Self.loopbackHost):\(port)"
+
         var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         components.queryItems = [
             URLQueryItem(name: "client_id", value: Self.clientID),
-            URLQueryItem(name: "redirect_uri", value: Self.redirectURI),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: Self.scope),
             URLQueryItem(name: "code_challenge", value: challenge),
@@ -64,18 +89,7 @@ final class GoogleCalendarService: ObservableObject {
 
         if let url = components.url {
             NSWorkspace.shared.open(url)
-            isWaitingForCode = true
         }
-    }
-
-    /// Complete sign-in with the auth code the user copied from Google.
-    func submitAuthCode(_ code: String) async {
-        guard let verifier = codeVerifier else { return }
-        codeVerifier = nil
-        isWaitingForCode = false
-        isLoading = true
-        await exchangeCodeForToken(code: code.trimmingCharacters(in: .whitespacesAndNewlines), verifier: verifier)
-        isLoading = false
     }
 
     /// Sign out — clear stored tokens.
@@ -178,7 +192,8 @@ final class GoogleCalendarService: ObservableObject {
         let params = [
             "code": code,
             "client_id": Self.clientID,
-            "redirect_uri": Self.redirectURI,
+            "client_secret": Self.clientSecret,
+            "redirect_uri": "\(Self.loopbackHost):\(loopbackPort)",
             "grant_type": "authorization_code",
             "code_verifier": verifier,
         ]
@@ -193,6 +208,7 @@ final class GoogleCalendarService: ObservableObject {
         let params = [
             "refresh_token": refresh,
             "client_id": Self.clientID,
+            "client_secret": Self.clientSecret,
             "grant_type": "refresh_token",
         ]
 
@@ -210,8 +226,24 @@ final class GoogleCalendarService: ObservableObject {
         request.httpBody = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0.value)" }
             .joined(separator: "&").data(using: .utf8)
 
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let result: (Data, URLResponse)
+        do {
+            result = try await URLSession.shared.data(for: request)
+        } catch {
+            print("GoogleCalendar: token request network error: \(error)")
+            return nil
+        }
+        let (data, response) = result
+        let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
+        print("GoogleCalendar: token response HTTP \(httpStatus), \(data.count) bytes")
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("GoogleCalendar: failed to parse token response: \(String(data: data, encoding: .utf8) ?? "")")
+            return nil
+        }
+
+        if let error = json["error"] as? String {
+            print("GoogleCalendar: token error: \(error) — \(json["error_description"] ?? "")")
             return nil
         }
 
@@ -253,6 +285,85 @@ final class GoogleCalendarService: ObservableObject {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+// MARK: - Loopback OAuth Server
+
+/// Minimal HTTP server bound to 127.0.0.1 (localhost only, not network-accessible).
+/// Listens on a random port, accepts one request (the Google OAuth redirect),
+/// extracts the auth code, sends a "success" page, and shuts down immediately.
+/// This is Google's officially recommended approach for desktop OAuth apps.
+private class LoopbackOAuthServer {
+    private let onCode: (String) -> Void
+    private var serverSocket: Int32 = -1
+
+    init(onCode: @escaping (String) -> Void) {
+        self.onCode = onCode
+    }
+
+    /// Start listening. Returns the assigned port, or nil on failure.
+    func start() -> UInt16? {
+        serverSocket = socket(AF_INET, SOCK_STREAM, 0)
+        guard serverSocket >= 0 else { return nil }
+
+        var yes: Int32 = 1
+        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0 // Random port
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(serverSocket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bindResult == 0 else { close(serverSocket); return nil }
+        guard listen(serverSocket, 1) == 0 else { close(serverSocket); return nil }
+
+        // Get the assigned port
+        var assignedAddr = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        withUnsafeMutablePointer(to: &assignedAddr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(serverSocket, $0, &len) }
+        }
+        let port = UInt16(bigEndian: assignedAddr.sin_port)
+
+        // Accept one connection in background
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let client = accept(serverSocket, nil, nil)
+            defer { close(client); close(serverSocket) }
+            guard client >= 0 else { return }
+
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            let bytesRead = read(client, &buffer, buffer.count)
+            let request = bytesRead > 0 ? String(bytes: buffer[0..<bytesRead], encoding: .utf8) ?? "" : ""
+
+            // Extract code from: GET /?code=AUTH_CODE&scope=... HTTP/1.1
+            var authCode: String?
+            if let queryStart = request.range(of: "GET /?"),
+               let httpEnd = request.range(of: " HTTP/") {
+                let query = String(request[queryStart.upperBound..<httpEnd.lowerBound])
+                for param in query.components(separatedBy: "&") {
+                    let kv = param.components(separatedBy: "=")
+                    if kv.count == 2, kv[0] == "code" {
+                        authCode = kv[1].removingPercentEncoding ?? kv[1]
+                    }
+                }
+            }
+
+            let html = authCode != nil
+                ? "<html><body style='font-family:system-ui;text-align:center;padding:60px'><h2>Connected to Ghost Pepper!</h2><p>You can close this tab.</p></body></html>"
+                : "<html><body style='font-family:system-ui;text-align:center;padding:60px'><h2>Something went wrong</h2><p>Please try again from Ghost Pepper settings.</p></body></html>"
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.count)\r\nConnection: close\r\n\r\n\(html)"
+            _ = response.withCString { write(client, $0, response.count) }
+
+            if let code = authCode {
+                onCode(code)
+            }
+        }
+
+        return port
     }
 }
 
