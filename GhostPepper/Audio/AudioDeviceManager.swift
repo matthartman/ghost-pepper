@@ -74,14 +74,22 @@ class AudioDeviceManager {
     /// Returns the user's selected input device ID, or nil to use the system default.
     static func selectedInputDeviceID(
         defaults: UserDefaults = .standard,
-        inputDevices: () -> [AudioInputDevice] = AudioDeviceManager.listInputDevices,
-        uidForDeviceID: (AudioDeviceID) -> String? = AudioDeviceManager.deviceUID
+        inputDevices: () -> [AudioInputDevice] = AudioDeviceManager.listInputDevices
     ) -> AudioDeviceID? {
-        guard let uid = selectedInputDeviceUID(defaults: defaults, uidForDeviceID: uidForDeviceID) else {
+        let devices = inputDevices()
+
+        if let uid = selectedInputDeviceUID(defaults: defaults) {
+            return devices.first(where: { $0.uid == uid })?.id
+        }
+
+        guard let legacyStoredID = defaults.object(forKey: selectedInputDeviceIDKey) as? Int,
+              legacyStoredID > 0,
+              let device = devices.first(where: { $0.id == AudioDeviceID(legacyStoredID) }) else {
             return nil
         }
 
-        return inputDevices().first(where: { $0.uid == uid })?.id
+        defaults.set(device.uid, forKey: selectedInputDeviceUIDKey)
+        return device.id
     }
 
     /// Sets the system default input device.
@@ -129,23 +137,12 @@ class AudioDeviceManager {
         return bufferList.reduce(0) { $0 + Int($1.mNumberChannels) } > 0
     }
 
-    static func selectedInputDeviceUID(
-        defaults: UserDefaults = .standard,
-        uidForDeviceID: (AudioDeviceID) -> String? = AudioDeviceManager.deviceUID
-    ) -> String? {
+    static func selectedInputDeviceUID(defaults: UserDefaults = .standard) -> String? {
         if let uid = defaults.string(forKey: selectedInputDeviceUIDKey), !uid.isEmpty {
             return uid
         }
 
-        guard let legacyStoredID = defaults.object(forKey: selectedInputDeviceIDKey) as? Int,
-              legacyStoredID > 0,
-              let uid = uidForDeviceID(AudioDeviceID(legacyStoredID)),
-              !uid.isEmpty else {
-            return nil
-        }
-
-        defaults.set(uid, forKey: selectedInputDeviceUIDKey)
-        return uid
+        return nil
     }
 
     static func deviceUID(deviceID: AudioDeviceID) -> String? {

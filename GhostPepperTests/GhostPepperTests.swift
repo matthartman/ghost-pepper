@@ -1994,19 +1994,40 @@ final class GhostPepperTests: XCTestCase {
 
         defaults.set(157, forKey: "selectedInputDeviceID")
 
+        let migratedID = AudioDeviceManager.selectedInputDeviceID(
+            defaults: defaults,
+            inputDevices: {
+                [AudioInputDevice(id: 157, uid: "studio-display", name: "Studio Display Microphone")]
+            }
+        )
         let resolvedID = AudioDeviceManager.selectedInputDeviceID(
             defaults: defaults,
             inputDevices: {
                 [AudioInputDevice(id: 142, uid: "studio-display", name: "Studio Display Microphone")]
-            },
-            uidForDeviceID: { deviceID in
-                XCTAssertEqual(deviceID, 157)
-                return "studio-display"
             }
         )
 
+        XCTAssertEqual(migratedID, 157)
         XCTAssertEqual(resolvedID, 142)
         XCTAssertEqual(defaults.string(forKey: "selectedInputDeviceUID"), "studio-display")
+    }
+
+    func testAudioDeviceManagerIgnoresStaleLegacyDeviceIDThatIsNotCurrentlyAvailable() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        defaults.set(157, forKey: "selectedInputDeviceID")
+
+        let resolvedID = AudioDeviceManager.selectedInputDeviceID(
+            defaults: defaults,
+            inputDevices: {
+                [AudioInputDevice(id: 142, uid: "studio-display", name: "Studio Display Microphone")]
+            }
+        )
+
+        XCTAssertNil(resolvedID)
+        XCTAssertNil(defaults.string(forKey: "selectedInputDeviceUID"))
     }
 
     func testAudioDeviceManagerResolvesCurrentDeviceIDFromSavedUID() throws {
@@ -2020,10 +2041,6 @@ final class GhostPepperTests: XCTestCase {
             defaults: defaults,
             inputDevices: {
                 [AudioInputDevice(id: 142, uid: "studio-display", name: "Studio Display Microphone")]
-            },
-            uidForDeviceID: { _ in
-                XCTFail("saved UID should skip legacy device ID lookup")
-                return nil
             }
         )
 
@@ -2039,11 +2056,7 @@ final class GhostPepperTests: XCTestCase {
 
         let resolvedID = AudioDeviceManager.selectedInputDeviceID(
             defaults: defaults,
-            inputDevices: { [] },
-            uidForDeviceID: { _ in
-                XCTFail("saved UID should skip legacy device ID lookup")
-                return nil
-            }
+            inputDevices: { [] }
         )
 
         XCTAssertNil(resolvedID)
