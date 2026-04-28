@@ -38,19 +38,22 @@ final class TranscriptionLabController: ObservableObject {
             let startTime: TimeInterval
             let endTime: TimeInterval
             let isKept: Bool
+            let isIncludedInTranscript: Bool
 
             init(
                 speakerID: String,
                 displayName: String? = nil,
                 startTime: TimeInterval,
                 endTime: TimeInterval,
-                isKept: Bool
+                isKept: Bool,
+                isIncludedInTranscript: Bool? = nil
             ) {
                 self.speakerID = speakerID
                 self.displayName = displayName ?? speakerID
                 self.startTime = startTime
                 self.endTime = endTime
                 self.isKept = isKept
+                self.isIncludedInTranscript = isIncludedInTranscript ?? isKept
             }
         }
 
@@ -70,6 +73,27 @@ final class TranscriptionLabController: ObservableObject {
             }
 
             return speakerIDs
+        }
+
+        var includedSpeakerIDsInDisplayOrder: [String] {
+            var speakerIDs: [String] = []
+            var seenSpeakerIDs: Set<String> = []
+
+            for span in spans where span.isIncludedInTranscript && seenSpeakerIDs.insert(span.speakerID).inserted {
+                speakerIDs.append(span.speakerID)
+            }
+
+            return speakerIDs
+        }
+
+        var includedTranscriptDuration: TimeInterval {
+            spans.reduce(0) { totalDuration, span in
+                guard span.isIncludedInTranscript else {
+                    return totalDuration
+                }
+
+                return totalDuration + max(0, span.endTime - span.startTime)
+            }
         }
 
         func displayName(for speakerID: String) -> String {
@@ -271,15 +295,36 @@ final class TranscriptionLabController: ObservableObject {
         return originalStageTimingsByEntryID[selectedEntryID]?.cleanupDuration
     }
 
-    var diarizationVisualization: DiarizationVisualization? {
+    var originalDiarizationVisualization: DiarizationVisualization? {
         guard let entry = selectedEntry else {
             return nil
         }
 
-        let summary = experimentDiarizationSummary ?? entry.diarizationSummary
-        guard let summary else {
+        guard let summary = entry.diarizationSummary else {
             return nil
         }
+
+        return diarizationVisualization(for: entry, summary: summary)
+    }
+
+    var experimentDiarizationVisualization: DiarizationVisualization? {
+        guard let entry = selectedEntry,
+              let experimentDiarizationSummary else {
+            return nil
+        }
+
+        return diarizationVisualization(for: entry, summary: experimentDiarizationSummary)
+    }
+
+    var diarizationVisualization: DiarizationVisualization? {
+        experimentDiarizationVisualization ?? originalDiarizationVisualization
+    }
+
+    private func diarizationVisualization(
+        for entry: TranscriptionLabEntry,
+        summary: DiarizationSummary
+    ) -> DiarizationVisualization {
+        let includedSpeakerIDs = transcriptIncludedSpeakerIDs(for: summary)
 
         return DiarizationVisualization(
             audioDuration: entry.audioDuration,
@@ -293,10 +338,24 @@ final class TranscriptionLabController: ObservableObject {
                     displayName: displayName(for: $0.speakerID) ?? $0.speakerID,
                     startTime: $0.startTime,
                     endTime: $0.endTime,
-                    isKept: $0.isKept
+                    isKept: $0.isKept,
+                    isIncludedInTranscript: includedSpeakerIDs.contains($0.speakerID)
                 )
             }
         )
+    }
+
+    var recognizedVoiceOptions: [RecognizedVoiceProfile] {
+        recognizedVoicesByID.values.sorted { lhs, rhs in
+            let lhsName = normalizedDisplayName(lhs.displayName)
+            let rhsName = normalizedDisplayName(rhs.displayName)
+
+            if lhsName != rhsName {
+                return lhsName.localizedStandardCompare(rhsName) == .orderedAscending
+            }
+
+            return lhs.updatedAt > rhs.updatedAt
+        }
     }
 
     func displayName(for speakerID: String) -> String? {
@@ -356,6 +415,25 @@ final class TranscriptionLabController: ObservableObject {
 
         profile.isMe = isMe
         persistSpeakerProfile(profile, syncGlobalVoice: true)
+    }
+
+    func setSpeakerRecognizedVoiceID(_ recognizedVoiceID: UUID?, for speakerID: String) {
+        guard var profile = storedSpeakerProfile(for: speakerID) else {
+            return
+        }
+
+        profile.recognizedVoiceID = recognizedVoiceID
+
+        if let recognizedVoiceID,
+           let recognizedVoice = recognizedVoicesByID[recognizedVoiceID] {
+            let recognizedVoiceName = normalizedDisplayName(recognizedVoice.displayName)
+            if recognizedVoiceName.isEmpty == false {
+                profile.displayName = recognizedVoiceName
+            }
+            profile.isMe = recognizedVoice.isMe
+        }
+
+        persistSpeakerProfile(profile)
     }
 
     func pushSpeakerProfileToGlobalVoice(for speakerID: String) {
@@ -516,6 +594,24 @@ final class TranscriptionLabController: ObservableObject {
         runningStage = nil
     }
 
+    func rerunDiarization() async {
+        guard selectedEntry != nil else {
+            errorMessage = "Choose a saved recording first."
+            return
+        }
+
+        guard selectedSpeechModelSupportsSpeakerTagging else {
+            errorMessage = "Speaker tagging is available only for FluidAudio models."
+            return
+        }
+
+        if !usesSpeakerTagging {
+            usesSpeakerTagging = true
+        }
+
+        await rerunTranscription()
+    }
+
     func rerunCleanup(prompt: String) async {
         guard let entry = selectedEntry else {
             errorMessage = "Choose a saved recording first."
@@ -674,6 +770,48 @@ final class TranscriptionLabController: ObservableObject {
         return recognizedVoicesByID[recognizedVoiceID]
     }
 
+    private func transcriptIncludedSpeakerIDs(for summary: DiarizationSummary) -> Set<String> {
+        let allSpeakerIDs = Set(summary.spans.map(\.speakerID))
+
+        guard summary.usedFallback == false else {
+            return allSpeakerIDs
+        }
+
+        let keptSpeakerIDs = Set(summary.spans.filter(\.isKept).map(\.speakerID))
+        guard
+            let targetSpeakerID = summary.targetSpeakerID,
+            let targetProfile = effectiveSpeakerProfile(for: targetSpeakerID)
+        else {
+            return keptSpeakerIDs
+        }
+
+        let matchingSpeakerIDs = allSpeakerIDs.filter { speakerID in
+            guard let profile = effectiveSpeakerProfile(for: speakerID) else {
+                return speakerID == targetSpeakerID
+            }
+
+            return speakerProfile(profile, matchesTranscriptIdentityOf: targetProfile)
+        }
+
+        return keptSpeakerIDs.union(matchingSpeakerIDs)
+    }
+
+    private func speakerProfile(
+        _ profile: TranscriptionLabSpeakerProfile,
+        matchesTranscriptIdentityOf targetProfile: TranscriptionLabSpeakerProfile
+    ) -> Bool {
+        if profile.speakerID == targetProfile.speakerID {
+            return true
+        }
+
+        if let targetRecognizedVoiceID = targetProfile.recognizedVoiceID,
+           profile.recognizedVoiceID == targetRecognizedVoiceID {
+            return true
+        }
+
+        return targetProfile.isMe && profile.isMe
+    }
+
     private func mergedSpeakerProfile(
         _ localProfile: TranscriptionLabSpeakerProfile
     ) -> TranscriptionLabSpeakerProfile {
@@ -688,13 +826,6 @@ final class TranscriptionLabController: ObservableObject {
         }
 
         mergedProfile.isMe = recognizedVoice.isMe
-
-        let normalizedEvidenceTranscript = recognizedVoice.evidenceTranscript.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        if normalizedEvidenceTranscript.isEmpty == false {
-            mergedProfile.evidenceTranscript = normalizedEvidenceTranscript
-        }
 
         return mergedProfile
     }

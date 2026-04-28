@@ -188,7 +188,7 @@ final class PostPasteLearningCoordinator {
     private static func sharedPrefixLength(between lhs: [String], and rhs: [String]) -> Int {
         let limit = min(lhs.count, rhs.count)
         var index = 0
-        while index < limit && stringsMatch(lhs[index], rhs[index]) {
+        while index < limit && unchangedBoundaryWordsMatch(lhs[index], rhs[index]) {
             index += 1
         }
         return index
@@ -206,10 +206,14 @@ final class PostPasteLearningCoordinator {
 
         var count = 0
         while count < limit &&
-                stringsMatch(lhs[lhs.count - count - 1], rhs[rhs.count - count - 1]) {
+                unchangedBoundaryWordsMatch(lhs[lhs.count - count - 1], rhs[rhs.count - count - 1]) {
             count += 1
         }
         return count
+    }
+
+    private static func unchangedBoundaryWordsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        lhs == rhs
     }
 
     private static func stringsMatch(_ lhs: String, _ rhs: String) -> Bool {

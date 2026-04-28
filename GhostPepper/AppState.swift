@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreAudio
 import ServiceManagement
 
 enum AppStatus: String {
@@ -159,6 +160,8 @@ class AppState: ObservableObject {
     private let cleanupSettingsDefaults: UserDefaults
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
+    private let selectedInputDeviceIDProvider: () -> AudioDeviceID?
+    private let resetAudioRecorder: () -> Void
     private var hotkeyMonitorStarted = false
 
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
@@ -167,8 +170,12 @@ class AppState: ObservableObject {
     private static let ignoreOtherSpeakersDefaultsKey = "ignoreOtherSpeakers"
     private static let playSoundsDefaultsKey = "playSounds"
     private static let pepperChatEnabledDefaultsKey = "pepperChatEnabled"
+    private static let archivedRecordingSampleRate = 16_000.0
+    // History shows one decimal place, so shorter recordings render as 0.0s noise.
+    private static let minimumArchivedRecordingSampleCount = 800
     private static let emptyTranscriptionCancelThresholdSampleCount = 8_000 // ~0.5 seconds — show "no sound" hint for almost all failed recordings
     private static let speechModelErrorPrefix = "Failed to load speech model: "
+    static let liveRecordingNoInputErrorMessage = "Failed to start recording: No audio input device available."
 
     nonisolated static let defaultPushToTalkChord = KeyChord(keys: Set([
         PhysicalKey(keyCode: 54),  // Right Command
@@ -208,7 +215,9 @@ class AppState: ObservableObject {
         transcriptionLabSpeakerProfileStore: TranscriptionLabSpeakerProfileStore = TranscriptionLabSpeakerProfileStore(),
         appRelauncher: AppRelaunching? = nil,
         inputMonitoringChecker: @escaping () -> Bool = PermissionChecker.checkInputMonitoring,
-        inputMonitoringPrompter: @escaping () -> Void = PermissionChecker.promptInputMonitoring
+        inputMonitoringPrompter: @escaping () -> Void = PermissionChecker.promptInputMonitoring,
+        selectedInputDeviceIDProvider: @escaping () -> AudioDeviceID? = { AudioDeviceManager.selectedInputDeviceID() },
+        resetAudioRecorder: (() -> Void)? = nil
     ) {
         self.hotkeyMonitor = hotkeyMonitor
         self.chordBindingStore = chordBindingStore
@@ -222,6 +231,10 @@ class AppState: ObservableObject {
         self.appRelauncher = appRelauncher ?? AppRelauncher()
         self.inputMonitoringChecker = inputMonitoringChecker
         self.inputMonitoringPrompter = inputMonitoringPrompter
+        self.selectedInputDeviceIDProvider = selectedInputDeviceIDProvider
+        self.resetAudioRecorder = resetAudioRecorder ?? { [audioRecorder] in
+            audioRecorder.resetForDeviceChange()
+        }
         self.pushToTalkChord = chordBindingStore.binding(for: .pushToTalk) ?? AppState.defaultPushToTalkChord
         self.toggleToTalkChord = chordBindingStore.binding(for: .toggleToTalk) ?? AppState.defaultToggleToTalkChord
         self.pepperChatChord = chordBindingStore.binding(for: .pepperChat) ?? AppState.defaultPepperChatChord
@@ -698,7 +711,7 @@ class AppState: ObservableObject {
                 textCleanupManager.cancelPromptPrefill()
             }
             mediaPlaybackController.pauseIfPlaying()
-            audioRecorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
+            audioRecorder.targetDeviceID = selectedInputDeviceIDProvider()
             try audioRecorder.startRecording()
             debugLogStore.record(category: .hotkey, message: "Recording started.")
             soundEffects.playStart()
@@ -1037,9 +1050,20 @@ class AppState: ObservableObject {
         return session
     }()
 
+    var canReloadAudioInput: Bool {
+        Self.isLiveRecordingNoInputError(errorMessage)
+    }
+
     func resetAudioEngine() {
-        audioRecorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
-        audioRecorder.resetForDeviceChange()
+        audioRecorder.targetDeviceID = selectedInputDeviceIDProvider()
+        resetAudioRecorder()
+
+        if shouldClearLiveRecordingNoInputErrorAfterAudioReset {
+            errorMessage = nil
+            status = .ready
+            debugLogStore.record(category: .model, message: "Audio engine reset cleared stale no-input recording error.")
+        }
+
         debugLogStore.record(category: .model, message: "Audio engine reset for device change.")
     }
 
@@ -1463,7 +1487,7 @@ class AppState: ObservableObject {
         speakerFilteringRan: Bool = false,
         diarizationSummary: DiarizationSummary? = nil
     ) async {
-        guard transcriptionLabEnabled, !audioBuffer.isEmpty else {
+        guard transcriptionLabEnabled, audioBuffer.count >= Self.minimumArchivedRecordingSampleCount else {
             return
         }
 
@@ -1489,7 +1513,7 @@ class AppState: ObservableObject {
                 id: entryID,
                 createdAt: Date(),
                 audioFileName: audioFileName,
-                audioDuration: Double(audioBuffer.count) / 16_000.0,
+                audioDuration: Double(audioBuffer.count) / Self.archivedRecordingSampleRate,
                 windowContext: windowContext,
                 rawTranscription: rawTranscription,
                 correctedTranscription: correctedTranscription,
@@ -1531,6 +1555,10 @@ class AppState: ObservableObject {
         for entryID: UUID
     ) throws -> [TranscriptionLabSpeakerProfile] {
         try transcriptionLabSpeakerProfileStore.loadProfiles(for: entryID)
+    }
+
+    func loadAllTranscriptionLabSpeakerProfiles() throws -> [TranscriptionLabSpeakerProfile] {
+        try transcriptionLabSpeakerProfileStore.loadAllProfiles()
     }
 
     func upsertTranscriptionLabSpeakerProfile(_ profile: TranscriptionLabSpeakerProfile) throws {
@@ -1944,5 +1972,13 @@ class AppState: ObservableObject {
         case .idle, .loading:
             return (currentStatus, currentErrorMessage)
         }
+    }
+
+    private var shouldClearLiveRecordingNoInputErrorAfterAudioReset: Bool {
+        status == .error && !isRecording && !isTranscribing && Self.isLiveRecordingNoInputError(errorMessage)
+    }
+
+    private static func isLiveRecordingNoInputError(_ message: String?) -> Bool {
+        message == liveRecordingNoInputErrorMessage
     }
 }

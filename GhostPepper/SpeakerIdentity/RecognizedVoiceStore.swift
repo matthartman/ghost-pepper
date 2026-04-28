@@ -89,6 +89,32 @@ final class TranscriptionLabSpeakerProfileStore {
         }
     }
 
+    func loadAllProfiles() throws -> [TranscriptionLabSpeakerProfile] {
+        guard FileManager.default.fileExists(atPath: directoryURL.path) else {
+            return []
+        }
+
+        let profileURLs = try FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        )
+            .filter { $0.pathExtension == "json" }
+
+        var profiles: [TranscriptionLabSpeakerProfile] = []
+        for profileURL in profileURLs {
+            let data = try Data(contentsOf: profileURL)
+            profiles.append(contentsOf: try decoder.decode([TranscriptionLabSpeakerProfile].self, from: data))
+        }
+
+        return profiles.sorted { lhs, rhs in
+            if lhs.entryID != rhs.entryID {
+                return lhs.entryID.uuidString < rhs.entryID.uuidString
+            }
+
+            return lhs.speakerID.localizedStandardCompare(rhs.speakerID) == .orderedAscending
+        }
+    }
+
     func upsert(_ profile: TranscriptionLabSpeakerProfile) throws {
         var profiles = try loadProfiles(for: profile.entryID)
         profiles.removeAll { $0.speakerID == profile.speakerID }

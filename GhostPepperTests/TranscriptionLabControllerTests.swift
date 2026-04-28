@@ -223,6 +223,68 @@ final class TranscriptionLabControllerTests: XCTestCase {
         XCTAssertNil(controller.runningStage)
     }
 
+    func testDiarizationRerunEnablesSpeakerTaggingAndRunsTaggedTranscription() async {
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "fluid_parakeet-v3",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)"
+        )
+        let diarizationSummary = DiarizationSummary(
+            spans: [
+                .init(speakerID: "Speaker 0", startTime: 0.0, endTime: 0.8, isKept: true),
+                .init(speakerID: "Speaker 1", startTime: 0.8, endTime: 1.2, isKept: false),
+            ],
+            mergedKeptSpans: [
+                .init(startTime: 0.0, endTime: 0.8),
+            ],
+            targetSpeakerID: "Speaker 0",
+            targetSpeakerDuration: 0.8,
+            keptAudioDuration: 0.8,
+            usedFallback: false,
+            fallbackReason: nil
+        )
+        var executedSpeakerTaggingEnabled: Bool?
+        var synchronizedSpeakerTaggingStates: [Bool] = []
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: "fluid_parakeet-v3",
+            defaultSpeakerTaggingEnabled: false,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _, speakerTaggingEnabled in
+                executedSpeakerTaggingEnabled = speakerTaggingEnabled
+                return TranscriptionLabTranscriptionResult(
+                    rawTranscription: "tagged raw",
+                    diarizationSummary: diarizationSummary,
+                    speakerTaggedTranscript: SpeakerTaggedTranscript(
+                        segments: [
+                            .init(
+                                speakerID: "Speaker 0",
+                                startTime: 0.0,
+                                endTime: 0.8,
+                                text: "tagged raw"
+                            )
+                        ]
+                    )
+                )
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            syncSpeakerTaggingEnabled: { synchronizedSpeakerTaggingStates.append($0) }
+        )
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+
+        await controller.rerunDiarization()
+
+        XCTAssertTrue(controller.usesSpeakerTagging)
+        XCTAssertEqual(synchronizedSpeakerTaggingStates, [true])
+        XCTAssertEqual(executedSpeakerTaggingEnabled, true)
+        XCTAssertEqual(controller.experimentRawTranscription, "tagged raw")
+        XCTAssertEqual(controller.experimentDiarizationSummary, diarizationSummary)
+    }
+
     func testUpdatingLocalSpeakerIdentityAutoSyncsGlobalVoicePrint() {
         let entry = makeEntry(
             createdAt: Date(),
@@ -297,7 +359,7 @@ final class TranscriptionLabControllerTests: XCTestCase {
         XCTAssertEqual(notifyRecognizedVoicesDidChangeCallCount, 2)
     }
 
-    func testSelectedEntrySpeakerProfilesPreferLatestRecognizedVoiceData() {
+    func testSelectedEntrySpeakerProfilesPreferLatestRecognizedVoiceNamesButKeepLocalEvidence() {
         let entry = makeEntry(
             createdAt: Date(),
             speechModelID: "fluid_parakeet-v3",
@@ -356,10 +418,73 @@ final class TranscriptionLabControllerTests: XCTestCase {
                     displayName: "Jesse Vincent",
                     isMe: true,
                     recognizedVoiceID: recognizedVoiceID,
-                    evidenceTranscript: "And that have been around a long time."
+                    evidenceTranscript: "Yeah."
                 )
             ]
         )
+    }
+
+    func testSettingSpeakerRecognizedVoiceUpdatesLocalIdentityAssociation() {
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "fluid_parakeet-v3",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)"
+        )
+        let recognizedVoiceID = UUID(uuidString: "00000000-0000-0000-0000-0000000000CE")!
+        var storedProfiles = [
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 0",
+                displayName: "Speaker 0",
+                isMe: false,
+                recognizedVoiceID: nil,
+                evidenceTranscript: "Local evidence."
+            )
+        ]
+        let recognizedVoices = [
+            makeRecognizedVoiceProfile(
+                id: recognizedVoiceID,
+                displayName: "Jesse Vincent",
+                isMe: true
+            )
+        ]
+        var savedProfiles: [TranscriptionLabSpeakerProfile] = []
+
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            defaultSpeakerTaggingEnabled: false,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _, _ in
+                TranscriptionLabTranscriptionResult(rawTranscription: "")
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            loadSpeakerProfiles: { _ in storedProfiles },
+            saveSpeakerProfile: { profile in
+                savedProfiles.append(profile)
+                storedProfiles = [profile]
+            },
+            loadRecognizedVoices: { recognizedVoices }
+        )
+
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+
+        controller.setSpeakerRecognizedVoiceID(recognizedVoiceID, for: "Speaker 0")
+
+        XCTAssertEqual(savedProfiles.last?.recognizedVoiceID, recognizedVoiceID)
+        XCTAssertEqual(savedProfiles.last?.displayName, "Jesse Vincent")
+        XCTAssertEqual(savedProfiles.last?.isMe, true)
+        XCTAssertEqual(savedProfiles.last?.evidenceTranscript, "Local evidence.")
+        XCTAssertEqual(controller.displayName(for: "Speaker 0"), "Jesse Vincent")
+
+        controller.setSpeakerRecognizedVoiceID(nil, for: "Speaker 0")
+
+        XCTAssertNil(savedProfiles.last?.recognizedVoiceID)
+        XCTAssertEqual(savedProfiles.last?.evidenceTranscript, "Local evidence.")
     }
 
     func testHistorySpeakerIdentityEditsSyncRecognizedVoiceImmediately() {
@@ -520,6 +645,87 @@ final class TranscriptionLabControllerTests: XCTestCase {
                 ]
             )
         )
+    }
+
+    func testDiarizationVisualizationMarksMatchingRecognizedVoiceSpeakersIncludedInTranscript() {
+        let recognizedVoiceID = UUID(uuidString: "00000000-0000-0000-0000-0000000000CF")!
+        let diarizationSummary = DiarizationSummary(
+            spans: [
+                .init(speakerID: "Speaker 0", startTime: 0.0, endTime: 0.6, isKept: true),
+                .init(speakerID: "Speaker 1", startTime: 0.6, endTime: 1.2, isKept: false)
+            ],
+            mergedKeptSpans: [
+                .init(startTime: 0.0, endTime: 0.6)
+            ],
+            targetSpeakerID: "Speaker 0",
+            targetSpeakerDuration: 0.6,
+            keptAudioDuration: 0.6,
+            usedFallback: false,
+            fallbackReason: nil
+        )
+        let entry = makeEntry(
+            createdAt: Date(),
+            speechModelID: "fluid_parakeet-v3",
+            cleanupModelName: "Qwen 3.5 2B (fast cleanup)",
+            audioDuration: 1.2,
+            diarizationSummary: diarizationSummary,
+            speakerFilteringEnabled: true,
+            speakerFilteringRan: true,
+            speakerFilteringUsedFallback: false
+        )
+        let storedProfiles = [
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 0",
+                displayName: "Speaker 0",
+                isMe: false,
+                recognizedVoiceID: recognizedVoiceID,
+                evidenceTranscript: "First Jesse segment."
+            ),
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 1",
+                displayName: "Speaker 1",
+                isMe: false,
+                recognizedVoiceID: recognizedVoiceID,
+                evidenceTranscript: "Second Jesse segment."
+            )
+        ]
+        let recognizedVoices = [
+            makeRecognizedVoiceProfile(
+                id: recognizedVoiceID,
+                displayName: "Jesse Vincent",
+                isMe: true
+            )
+        ]
+        let controller = TranscriptionLabController(
+            defaultSpeechModelID: SpeechModelCatalog.defaultModelID,
+            defaultSpeakerTaggingEnabled: false,
+            loadStageTimings: { [:] },
+            loadEntries: { [entry] },
+            audioURLForEntry: { _ in URL(fileURLWithPath: "/tmp/sample.bin") },
+            runTranscription: { _, _, _ in
+                TranscriptionLabTranscriptionResult(rawTranscription: "")
+            },
+            runCleanup: { _, _, _, _, _ in
+                TranscriptionLabCleanupResult(correctedTranscription: "", cleanupUsedFallback: false)
+            },
+            loadSpeakerProfiles: { _ in storedProfiles },
+            loadRecognizedVoices: { recognizedVoices }
+        )
+
+        controller.reloadEntries()
+        controller.selectEntry(entry.id)
+
+        XCTAssertEqual(
+            controller.diarizationVisualization?.spans.map(\.isIncludedInTranscript),
+            [true, true]
+        )
+        XCTAssertEqual(
+            controller.diarizationVisualization?.includedSpeakerIDsInDisplayOrder,
+            ["Speaker 0", "Speaker 1"]
+        )
+        XCTAssertEqual(controller.diarizationVisualization?.includedTranscriptDuration, 1.2)
     }
 
     func testDiarizationVisualizationIsHiddenWithoutArchivedSummary() {

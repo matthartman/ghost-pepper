@@ -1,0 +1,7 @@
+// Copy this file to Config/LocalSigning.xcconfig for local signing overrides.
+// Config/LocalSigning.xcconfig is ignored by git.
+
+// DEVELOPMENT_TEAM = YOURTEAMID
+// CODE_SIGN_IDENTITY = Apple Development
+// CODE_SIGN_STYLE = Automatic
+// CODE_SIGNING_ALLOWED = NO

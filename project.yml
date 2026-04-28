@@ -23,6 +23,9 @@ targets:
   GhostPepper:
     type: application
     platform: macOS
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     sources:
       - GhostPepper
     settings:
@@ -34,9 +37,6 @@ targets:
         ENABLE_APP_SANDBOX: NO
         CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
         ENABLE_HARDENED_RUNTIME: NO
-        CODE_SIGN_IDENTITY: "Apple Development"
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: BBVMGXR9AY
     dependencies:
       - package: WhisperKit
       - package: FluidAudio

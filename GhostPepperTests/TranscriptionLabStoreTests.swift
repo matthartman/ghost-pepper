@@ -97,6 +97,54 @@ final class TranscriptionLabStoreTests: XCTestCase {
         XCTAssertTrue(entries.isEmpty)
     }
 
+    func testStorePrunesRecordingsThatDisplayAsZeroSecondsOnLoad() throws {
+        let fixture = makeFixture()
+        let store = TranscriptionLabStore(
+            directoryURL: fixture.directoryURL,
+            maxEntries: 50
+        )
+        let shortEntry = makeEntry(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000051")!,
+            createdAt: Date(timeIntervalSince1970: 300),
+            audioFileName: "too-short.wav",
+            audioDuration: 0.04
+        )
+        let visibleEntry = makeEntry(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000052")!,
+            createdAt: Date(timeIntervalSince1970: 200),
+            audioFileName: "visible.wav",
+            audioDuration: 0.1
+        )
+        let indexURL = fixture.directoryURL.appendingPathComponent("transcription-lab-index.json")
+        let timingsURL = fixture.directoryURL.appendingPathComponent("transcription-lab-timings.json")
+        let shortTiming = TranscriptionLabStageTimings(transcriptionDuration: 0.01, cleanupDuration: nil)
+        let visibleTiming = makeStageTimings()
+
+        try FileManager.default.createDirectory(
+            at: fixture.directoryURL.appendingPathComponent("audio", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data([0x01]).write(to: fixture.audioURL(named: shortEntry.audioFileName))
+        try Data([0x02]).write(to: fixture.audioURL(named: visibleEntry.audioFileName))
+        try JSONEncoder().encode([shortEntry, visibleEntry]).write(to: indexURL)
+        try JSONEncoder().encode([
+            shortEntry.id.uuidString: shortTiming,
+            visibleEntry.id.uuidString: visibleTiming
+        ]).write(to: timingsURL)
+
+        let entries = try store.loadEntries()
+
+        XCTAssertEqual(entries.map(\.id), [visibleEntry.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.audioURL(named: shortEntry.audioFileName).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.audioURL(named: visibleEntry.audioFileName).path))
+        XCTAssertNil(try store.loadStageTimings()[shortEntry.id])
+        XCTAssertEqual(try store.loadStageTimings()[visibleEntry.id], visibleTiming)
+        XCTAssertEqual(
+            try JSONDecoder().decode([TranscriptionLabEntry].self, from: Data(contentsOf: indexURL)).map(\.id),
+            [visibleEntry.id]
+        )
+    }
+
     func testStorePersistsStageTimingsForNewEntries() throws {
         let fixture = makeFixture()
         let store = TranscriptionLabStore(
@@ -214,13 +262,14 @@ final class TranscriptionLabStoreTests: XCTestCase {
     private func makeEntry(
         id: UUID = UUID(),
         createdAt: Date = Date(),
-        audioFileName: String
+        audioFileName: String,
+        audioDuration: TimeInterval = 1.5
     ) -> TranscriptionLabEntry {
         TranscriptionLabEntry(
             id: id,
             createdAt: createdAt,
             audioFileName: audioFileName,
-            audioDuration: 1.5,
+            audioDuration: audioDuration,
             windowContext: OCRContext(windowContents: "Terminal says hello"),
             rawTranscription: "raw text",
             correctedTranscription: "corrected text",

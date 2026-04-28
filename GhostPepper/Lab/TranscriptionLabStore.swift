@@ -6,6 +6,8 @@ struct TranscriptionLabStageTimings: Codable, Equatable {
 }
 
 final class TranscriptionLabStore {
+    private static let minimumDisplayableAudioDuration: TimeInterval = 0.05
+
     private let directoryURL: URL
     private let maxEntries: Int
     private let encoder: JSONEncoder
@@ -29,7 +31,7 @@ final class TranscriptionLabStore {
         do {
             let data = try Data(contentsOf: indexURL)
             let entries = try decoder.decode([TranscriptionLabEntry].self, from: data)
-            return entries.sorted { $0.createdAt > $1.createdAt }
+            return pruneUndisplayableEntries(from: entries).sorted { $0.createdAt > $1.createdAt }
         } catch {
             resetStoredArchive()
             return []
@@ -82,15 +84,8 @@ final class TranscriptionLabStore {
             timings.removeValue(forKey: entryID)
         }
 
-        let data = try encoder.encode(prunedEntries)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        try data.write(to: indexURL, options: .atomic)
-
-        let encodedTimings = Dictionary(uniqueKeysWithValues: timings.map { key, value in
-            (key.uuidString, value)
-        })
-        let timingsData = try encoder.encode(encodedTimings)
-        try timingsData.write(to: timingsURL, options: .atomic)
+        try writeEntries(prunedEntries)
+        try writeStageTimings(timings)
     }
 
     func deleteEntry(id: UUID) throws {
@@ -103,12 +98,8 @@ final class TranscriptionLabStore {
         var timings = try loadStageTimings()
         timings.removeValue(forKey: id)
 
-        let data = try encoder.encode(entries)
-        try data.write(to: indexURL, options: .atomic)
-
-        let encodedTimings = Dictionary(uniqueKeysWithValues: timings.map { ($0.key.uuidString, $0.value) })
-        let timingsData = try encoder.encode(encodedTimings)
-        try timingsData.write(to: timingsURL, options: .atomic)
+        try writeEntries(entries)
+        try writeStageTimings(timings)
     }
 
     func deleteAllEntries() {
@@ -129,6 +120,60 @@ final class TranscriptionLabStore {
 
     private var timingsURL: URL {
         directoryURL.appendingPathComponent("transcription-lab-timings.json")
+    }
+
+    private func pruneUndisplayableEntries(from entries: [TranscriptionLabEntry]) -> [TranscriptionLabEntry] {
+        let visibleEntries = entries.filter { $0.audioDuration >= Self.minimumDisplayableAudioDuration }
+        let removedEntries = entries.filter { $0.audioDuration < Self.minimumDisplayableAudioDuration }
+
+        guard !removedEntries.isEmpty else {
+            return visibleEntries
+        }
+
+        for entry in removedEntries {
+            try? FileManager.default.removeItem(at: audioURL(for: entry.audioFileName))
+        }
+
+        try? writeEntries(visibleEntries)
+        removeStageTimings(for: Set(removedEntries.map(\.id)))
+        return visibleEntries
+    }
+
+    private func removeStageTimings(for entryIDs: Set<UUID>) {
+        guard FileManager.default.fileExists(atPath: timingsURL.path),
+              let data = try? Data(contentsOf: timingsURL),
+              var encodedTimings = try? decoder.decode([String: TranscriptionLabStageTimings].self, from: data) else {
+            return
+        }
+
+        for entryID in entryIDs {
+            encodedTimings.removeValue(forKey: entryID.uuidString)
+        }
+
+        let timingPairs: [(UUID, TranscriptionLabStageTimings)] = encodedTimings.compactMap { key, value in
+            guard let entryID = UUID(uuidString: key) else {
+                return nil
+            }
+
+            return (entryID, value)
+        }
+        let timings = Dictionary(uniqueKeysWithValues: timingPairs)
+        try? writeStageTimings(timings)
+    }
+
+    private func writeEntries(_ entries: [TranscriptionLabEntry]) throws {
+        let data = try encoder.encode(entries)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try data.write(to: indexURL, options: .atomic)
+    }
+
+    private func writeStageTimings(_ timings: [UUID: TranscriptionLabStageTimings]) throws {
+        let encodedTimings = Dictionary(uniqueKeysWithValues: timings.map { key, value in
+            (key.uuidString, value)
+        })
+        let timingsData = try encoder.encode(encodedTimings)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try timingsData.write(to: timingsURL, options: .atomic)
     }
 
     private func resetStoredArchive() {

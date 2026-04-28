@@ -32,7 +32,6 @@
 		2E80774D95EAC6D6B53A226D /* RecordingSessionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD0C972BC69839C41ACA2E8C /* RecordingSessionCoordinatorTests.swift */; };
 		31E37E3EDDB8A0E5011BCA54 /* GhostPepperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF9AE24266DDCCADE832CF33 /* GhostPepperApp.swift */; };
 		3512549BBD28CC74C0137FA3 /* CorrectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 350AC3A5A34A78F96226831C /* CorrectionStoreTests.swift */; };
-		3616DFB43A67CFF21CBC1143 /* DeterministicCorrectionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87C9F07E35DD5E300B3F7D5 /* DeterministicCorrectionEngine.swift */; };
 		361E7532F651C1BF7F0D0724 /* TextCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37863EC2F34067ED0C5B2B6F /* TextCleaner.swift */; };
 		36715F4371E0C7AA79F4504D /* CleanupModelProbeCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCF12D0FBB05F424AAB2E68 /* CleanupModelProbeCLI.swift */; };
 		37669DE8B07FA0D5E77661ED /* TranscriptionLabSpeakerProfileStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3496D74914A4B865A1A0DF /* TranscriptionLabSpeakerProfileStoreTests.swift */; };
@@ -42,7 +41,6 @@
 		3989B83A45309986C17953D8 /* LocalLLMCleanupBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23B813180F29336A298BE44E /* LocalLLMCleanupBackend.swift */; };
 		3B8354B1BAACB0F28DF98815 /* ZoBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FEC2E37841B0CF1F320F326 /* ZoBackend.swift */; };
 		3DD297DFB3E56835BBD705EF /* MeetingTranscriptWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1E1B6653DAE6ED42FE9910B /* MeetingTranscriptWindow.swift */; };
-		3E0533A0DF5754339BF5C410 /* DeterministicCorrectionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E2627BAB1434095C84F80A8 /* DeterministicCorrectionEngine.swift */; };
 		408C8D6C7BE897429324F4F1 /* PerformanceTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 016C38149DDDAA03B88E35C0 /* PerformanceTrace.swift */; };
 		41585ECBAFB5534CB6AE4FC5 /* GranolaImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9452C09EB8A7AC2E5E69A502 /* GranolaImporter.swift */; };
 		41C94A48B97D3A6861EA1E92 /* PostPasteLearningCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABAC2D0F6C311FB1DA3E9ABF /* PostPasteLearningCoordinatorTests.swift */; };
@@ -176,6 +174,7 @@
 		0D91666EEE2CF7B4B78E3061 /* ChordBindingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChordBindingStore.swift; sourceTree = "<group>"; };
 		0EDE03E93B2A9E420B2C74CA /* PostPasteLearningCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostPasteLearningCoordinator.swift; sourceTree = "<group>"; };
 		0F634CFD724E29ECA57C0BB6 /* KeyChordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyChordTests.swift; sourceTree = "<group>"; };
+		112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		11E4B61BA7270EEC11A8AC69 /* ScreenRecordingPermissionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenRecordingPermissionController.swift; sourceTree = "<group>"; };
 		14BBAF87158BF49AB528B979 /* SystemAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioRecorder.swift; sourceTree = "<group>"; };
 		17F70F511A956DAB5778D430 /* WindowCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowCaptureService.swift; sourceTree = "<group>"; };
@@ -207,7 +206,6 @@
 		3A4D4E875210CD0DADAF5D7E /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		3A8F478894D0A3A49A91C8CC /* TrelloBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrelloBackend.swift; sourceTree = "<group>"; };
 		3B68F46BA90BDD633868A8CE /* ModelInventoryViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelInventoryViews.swift; sourceTree = "<group>"; };
-		3E2627BAB1434095C84F80A8 /* DeterministicCorrectionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeterministicCorrectionEngine.swift; sourceTree = "<group>"; };
 		40927DEAA2F7DE3C290536F7 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		4204197D6E98623EA69866C9 /* sprite_frame_2.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = sprite_frame_2.png; sourceTree = "<group>"; };
 		43A2B55CB980E02EC1E16BF2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -312,7 +310,6 @@
 		F33F3CFD8D09D619EAF73E61 /* MeetingSummaryGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryGenerator.swift; sourceTree = "<group>"; };
 		F36633332009332F588C183E /* CleanupPromptBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupPromptBuilderTests.swift; sourceTree = "<group>"; };
 		F5DEE2CB8B9ED5B0CAE8C152 /* RecordingSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingSessionCoordinator.swift; sourceTree = "<group>"; };
-		F87C9F07E35DD5E300B3F7D5 /* DeterministicCorrectionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeterministicCorrectionEngine.swift; sourceTree = "<group>"; };
 		F96030E4F754A444667F7B07 /* RecognizedVoiceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognizedVoiceStore.swift; sourceTree = "<group>"; };
 		FA48EF56983A55149A084D1B /* sprite_frame_3@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_3@2x.png"; sourceTree = "<group>"; };
 		FDC6FD42E70C7163E281332B /* CleanupPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupPromptBuilder.swift; sourceTree = "<group>"; };
@@ -352,7 +349,6 @@
 				FDC6FD42E70C7163E281332B /* CleanupPromptBuilder.swift */,
 				3252290627807046966D956B /* CleanupSettings.swift */,
 				CFECDC789B0C81589A3D6B69 /* CorrectionStore.swift */,
-				F87C9F07E35DD5E300B3F7D5 /* DeterministicCorrectionEngine.swift */,
 				23B813180F29336A298BE44E /* LocalLLMCleanupBackend.swift */,
 				EBAB39218D09F11336C4F684 /* TextCleaner.swift */,
 				CCE81899A3B0F5CB9777BD6A /* TextCleanupManager.swift */,
@@ -450,6 +446,14 @@
 				C1855FD74C5B66BEFC6A9F06 /* GoogleCalendarService.swift */,
 			);
 			path = Calendar;
+			sourceTree = "<group>";
+		};
+		452F90746F13934A1E6E515E /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		4694A9A6CDA9C5FA6623F377 /* Resources */ = {
@@ -551,7 +555,6 @@
 				948064EDD38AFB0872A99BD6 /* CleanupPromptBuilder.swift */,
 				0065F99395EEC3EB77997C2C /* CleanupSettings.swift */,
 				8D087A4D4CD5C6D3C293AE56 /* CorrectionStore.swift */,
-				3E2627BAB1434095C84F80A8 /* DeterministicCorrectionEngine.swift */,
 				BDE96F13974B4DC0EEB3C17E /* LocalLLMCleanupBackend.swift */,
 				0EDE03E93B2A9E420B2C74CA /* PostPasteLearningCoordinator.swift */,
 				37863EC2F34067ED0C5B2B6F /* TextCleaner.swift */,
@@ -565,6 +568,7 @@
 			children = (
 				3CA9EB5192BC2CF7C9D2A16D /* CleanupModelProbe */,
 				C2176D2588E67659D488AE47 /* CleanupModelProbeSupport */,
+				452F90746F13934A1E6E515E /* Config */,
 				1E7F0C5D7440C7594FBB5FB3 /* GhostPepper */,
 				FD52C5E171D3EF7591022762 /* GhostPepperTests */,
 				3705D6F7BCD01CB7D37DF812 /* Products */,
@@ -825,7 +829,6 @@
 				2BEB4B4A879A749C8B92BE44 /* CorrectionStore.swift in Sources */,
 				75509873255097FF99B8071F /* DebugLogStore.swift in Sources */,
 				8990B2F77435E351A458EDD9 /* DebugLogWindow.swift in Sources */,
-				3E0533A0DF5754339BF5C410 /* DeterministicCorrectionEngine.swift in Sources */,
 				F35AB7265B1138C8D2E9C470 /* DiarizationSummary.swift in Sources */,
 				F535CD3D45E362C442AC9AFA /* DualStreamCapture.swift in Sources */,
 				761730C7D555A5E165541B02 /* FluidAudioSpeechSession.swift in Sources */,
@@ -904,7 +907,6 @@
 				6585677AF7949BEA14C0B3B2 /* CleanupSettings.swift in Sources */,
 				B40929D00FF388C3308CACDD /* CorrectionStore.swift in Sources */,
 				E3FB1CC9DA749F6CCCE3EBD3 /* DebugLogStore.swift in Sources */,
-				3616DFB43A67CFF21CBC1143 /* DeterministicCorrectionEngine.swift in Sources */,
 				3989B83A45309986C17953D8 /* LocalLLMCleanupBackend.swift in Sources */,
 				5CCF5560BDC9AD0982A69F3D /* OCRContext.swift in Sources */,
 				B0E4A139001EF2DF0E809935 /* TextCleaner.swift in Sources */,
@@ -968,14 +970,12 @@
 /* Begin XCBuildConfiguration section */
 		1E4BC3C9A2D9995B5339A1F0 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = BBVMGXR9AY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;
@@ -1115,14 +1115,12 @@
 		};
 		E539A0CB0CD4C3B8D54B2855 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				DEVELOPMENT_TEAM = BBVMGXR9AY;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;

@@ -62,6 +62,11 @@ struct MenuBarView: View {
                     .foregroundStyle(.red)
                     .padding(.horizontal, 14)
 
+                if appState.canReloadAudioInput {
+                    Button("Reload Audio Input") {
+                        appState.resetAudioEngine()
+                    }
+                }
                 if error.contains("Input Monitoring") {
                     Button("Open Input Monitoring Settings") {
                         PermissionChecker.openInputMonitoringSettings()

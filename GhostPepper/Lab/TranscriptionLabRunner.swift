@@ -137,8 +137,14 @@ final class TranscriptionLabRunner {
                     speakerTaggedResult.diarizationSummary,
                     speakerTaggedResult.speakerTaggedTranscript
                 )
+                let rawTranscription = transcriptMatchingTargetSpeakerIdentity(
+                    filteredTranscript: filteredTranscript,
+                    diarizationSummary: speakerTaggedResult.diarizationSummary,
+                    speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript,
+                    speakerProfiles: speakerProfiles
+                )
                 return TranscriptionLabTranscriptionResult(
-                    rawTranscription: filteredTranscript,
+                    rawTranscription: rawTranscription,
                     diarizationSummary: speakerTaggedResult.diarizationSummary,
                     speakerTaggedTranscript: speakerTaggedResult.speakerTaggedTranscript,
                     speakerProfiles: speakerProfiles
@@ -177,6 +183,67 @@ final class TranscriptionLabRunner {
         }
 
         return TranscriptionLabTranscriptionResult(rawTranscription: rawTranscription)
+    }
+
+    private func transcriptMatchingTargetSpeakerIdentity(
+        filteredTranscript: String,
+        diarizationSummary: DiarizationSummary,
+        speakerTaggedTranscript: SpeakerTaggedTranscript?,
+        speakerProfiles: [TranscriptionLabSpeakerProfile]
+    ) -> String {
+        guard let targetSpeakerID = diarizationSummary.targetSpeakerID,
+              let speakerTaggedTranscript else {
+            return filteredTranscript
+        }
+
+        let matchingSpeakerIDs = speakerIDsMatchingTargetIdentity(
+            targetSpeakerID: targetSpeakerID,
+            speakerProfiles: speakerProfiles
+        )
+        guard matchingSpeakerIDs.count > 1 else {
+            return filteredTranscript
+        }
+
+        let matchedTranscript = speakerTaggedTranscript.segments
+            .filter { matchingSpeakerIDs.contains($0.speakerID) }
+            .sorted { lhs, rhs in
+                if lhs.startTime == rhs.startTime {
+                    return lhs.endTime < rhs.endTime
+                }
+
+                return lhs.startTime < rhs.startTime
+            }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return matchedTranscript.isEmpty ? filteredTranscript : matchedTranscript
+    }
+
+    private func speakerIDsMatchingTargetIdentity(
+        targetSpeakerID: String,
+        speakerProfiles: [TranscriptionLabSpeakerProfile]
+    ) -> Set<String> {
+        guard let targetProfile = speakerProfiles.first(where: { $0.speakerID == targetSpeakerID }) else {
+            return [targetSpeakerID]
+        }
+
+        var matchingSpeakerIDs: Set<String> = [targetSpeakerID]
+
+        if let recognizedVoiceID = targetProfile.recognizedVoiceID {
+            for profile in speakerProfiles where profile.recognizedVoiceID == recognizedVoiceID {
+                matchingSpeakerIDs.insert(profile.speakerID)
+            }
+        }
+
+        if targetProfile.isMe {
+            for profile in speakerProfiles where profile.isMe {
+                matchingSpeakerIDs.insert(profile.speakerID)
+            }
+        }
+
+        return matchingSpeakerIDs
     }
 
     private func repairedSpeakerTaggedTranscript(

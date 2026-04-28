@@ -137,27 +137,7 @@ final class TextCleaner {
             basePrompt: basePrompt,
             modelKind: modelKind
         )
-        let correctionEngine = DeterministicCorrectionEngine(
-            preferredTranscriptions: correctionStore.preferredTranscriptions,
-            commonlyMisheard: correctionStore.commonlyMisheard
-        )
-        let correctedText = correctionEngine.applyPreCleanupCorrections(to: text)
-        let formattedInput = Self.formatCleanupInput(userInput: correctedText)
-        if correctedText == text {
-            sensitiveDebugLogger?(.cleanup, "Pre-cleanup corrections: no changes applied.")
-        } else {
-            sensitiveDebugLogger?(
-                .cleanup,
-                """
-                Pre-cleanup corrections:
-                input:
-                \(text)
-
-                output:
-                \(correctedText)
-                """
-            )
-        }
+        let formattedInput = Self.formatCleanupInput(userInput: text)
 
         let modelCallStart = Date()
         do {
@@ -174,31 +154,15 @@ final class TextCleaner {
                 debugLogger?(.cleanup, "Stripped model reasoning tags from cleanup output.")
             }
 
-            let finalText = correctionEngine.applyPostCleanupCorrections(to: sanitizedText)
             logCleanupTranscript(
                 prompt: activePrompt,
                 input: formattedInput,
                 rawOutput: cleanedText,
                 sanitizedOutput: sanitizedText,
-                finalOutput: finalText
+                finalOutput: sanitizedText
             )
-            if finalText == sanitizedText {
-                sensitiveDebugLogger?(.cleanup, "Post-cleanup corrections: no changes applied.")
-            } else {
-                sensitiveDebugLogger?(
-                    .cleanup,
-                    """
-                    Post-cleanup corrections:
-                    input:
-                    \(sanitizedText)
-
-                    output:
-                    \(finalText)
-                    """
-                )
-            }
             return TextCleanerResult(
-                text: finalText,
+                text: sanitizedText,
                 performance: TextCleanerPerformance(
                     modelCallDuration: modelCallDuration,
                     postProcessDuration: Date().timeIntervalSince(postProcessStart)
@@ -212,29 +176,13 @@ final class TextCleaner {
             )
         } catch let error as CleanupBackendError {
             let postProcessStart = Date()
-            let finalText = correctionEngine.applyPostCleanupCorrections(to: correctedText)
             let postProcessDuration = Date().timeIntervalSince(postProcessStart)
 
             switch error {
             case .unavailable:
-                debugLogger?(.cleanup, "Cleanup backend unavailable, returning deterministic corrections only.")
-                if finalText == correctedText {
-                    sensitiveDebugLogger?(.cleanup, "Post-cleanup corrections: no changes applied.")
-                } else {
-                    sensitiveDebugLogger?(
-                        .cleanup,
-                        """
-                        Post-cleanup corrections:
-                        input:
-                        \(correctedText)
-
-                        output:
-                        \(finalText)
-                        """
-                    )
-                }
+                debugLogger?(.cleanup, "Cleanup backend unavailable, returning raw transcription.")
                 return TextCleanerResult(
-                    text: finalText,
+                    text: text,
                     performance: TextCleanerPerformance(
                         modelCallDuration: nil,
                         postProcessDuration: postProcessDuration
@@ -244,31 +192,16 @@ final class TextCleaner {
             case .unusableOutput(let rawOutput):
                 let modelCallDuration = Date().timeIntervalSince(modelCallStart)
                 let sanitizedOutput = Self.sanitizeCleanupOutput(rawOutput)
-                debugLogger?(.cleanup, "Cleanup model returned unusable output, falling back to deterministic corrections.")
+                debugLogger?(.cleanup, "Cleanup model returned unusable output, returning raw transcription.")
                 logCleanupTranscript(
                     prompt: activePrompt,
                     input: formattedInput,
                     rawOutput: rawOutput,
                     sanitizedOutput: sanitizedOutput,
-                    finalOutput: finalText
+                    finalOutput: text
                 )
-                if finalText == correctedText {
-                    sensitiveDebugLogger?(.cleanup, "Post-cleanup corrections: no changes applied.")
-                } else {
-                    sensitiveDebugLogger?(
-                        .cleanup,
-                        """
-                        Post-cleanup corrections:
-                        input:
-                        \(correctedText)
-
-                        output:
-                        \(finalText)
-                        """
-                    )
-                }
                 return TextCleanerResult(
-                    text: finalText,
+                    text: text,
                     performance: TextCleanerPerformance(
                         modelCallDuration: modelCallDuration,
                         postProcessDuration: postProcessDuration
@@ -282,26 +215,10 @@ final class TextCleaner {
                 )
             }
         } catch {
-            debugLogger?(.cleanup, "Cleanup backend unavailable, returning deterministic corrections only.")
+            debugLogger?(.cleanup, "Cleanup backend unavailable, returning raw transcription.")
             let postProcessStart = Date()
-            let finalText = correctionEngine.applyPostCleanupCorrections(to: correctedText)
-            if finalText == correctedText {
-                sensitiveDebugLogger?(.cleanup, "Post-cleanup corrections: no changes applied.")
-            } else {
-                sensitiveDebugLogger?(
-                    .cleanup,
-                    """
-                    Post-cleanup corrections:
-                    input:
-                    \(correctedText)
-
-                    output:
-                    \(finalText)
-                    """
-                )
-            }
             return TextCleanerResult(
-                text: finalText,
+                text: text,
                 performance: TextCleanerPerformance(
                     modelCallDuration: nil,
                     postProcessDuration: Date().timeIntervalSince(postProcessStart)

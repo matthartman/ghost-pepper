@@ -24,7 +24,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             modelDisplayName: TextCleanupManager.recommendedFastModel.displayName,
             thinkingMode: .none,
             input: "Okay, it's running now.",
-            correctedInput: "Okay, it's running now.",
+            modelInputText: "Okay, it's running now.",
             modelInput: TextCleaner.formatCleanupInput(userInput: "Okay, it's running now."),
             finalPrompt: "System prompt",
             rawModelOutput: "<think>\nReasoning",
@@ -84,7 +84,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             thinkingMode: .none
         )
 
-        XCTAssertEqual(transcript.correctedInput, "Okay, it's running now.")
+        XCTAssertEqual(transcript.modelInputText, "Okay, it's running now.")
         XCTAssertEqual(
             transcript.modelInput,
             TextCleaner.formatCleanupInput(userInput: "Okay, it's running now.")
@@ -102,7 +102,7 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
         XCTAssertEqual(transcript.elapsed, 1.25, accuracy: 0.001)
     }
 
-    func testRunnerWrapsRawAndNormalizedInputBeforeModelExecution() async {
+    func testRunnerWrapsRawInputAndLeavesCorrectionHintsInPrompt() async {
         let defaults = UserDefaults(suiteName: #function)!
         defaults.removePersistentDomain(forName: #function)
         defer { defaults.removePersistentDomain(forName: #function) }
@@ -112,11 +112,13 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
         let runner = CleanupModelProbeRunner(
             correctionStore: correctionStore,
             promptBuilder: CleanupPromptBuilder(),
-            execute: { input, _, _, _ in
+            execute: { input, prompt, _, _ in
                 XCTAssertEqual(
                     input,
-                    TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")
+                    TextCleaner.formatCleanupInput(userInput: "chat gbt fixes text")
                 )
+                XCTAssertTrue(prompt.contains("Commonly misheard replacements to prefer:"))
+                XCTAssertTrue(prompt.contains("- chat gbt -> ChatGPT"))
 
                 return CleanupModelProbeRawResult(
                     modelKind: .fast,
@@ -133,10 +135,10 @@ final class CleanupModelProbeRunnerTests: XCTestCase {
             thinkingMode: .suppressed
         )
 
-        XCTAssertEqual(transcript.correctedInput, "ChatGPT fixes text")
+        XCTAssertEqual(transcript.modelInputText, "chat gbt fixes text")
         XCTAssertEqual(
             transcript.modelInput,
-            TextCleaner.formatCleanupInput(userInput: "ChatGPT fixes text")
+            TextCleaner.formatCleanupInput(userInput: "chat gbt fixes text")
         )
         XCTAssertEqual(transcript.finalOutput, "ChatGPT fixes text")
     }

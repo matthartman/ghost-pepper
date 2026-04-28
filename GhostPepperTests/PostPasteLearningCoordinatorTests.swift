@@ -245,6 +245,16 @@ final class PostPasteLearningCoordinatorTests: XCTestCase {
         XCTAssertNil(replacement)
     }
 
+    func testInferredReplacementKeepsCaseChangesInsideCandidateReplacement() {
+        let replacement = PostPasteLearningCoordinator.inferredReplacement(
+            from: "please email just see vincent tomorrow",
+            to: "please email Jesse Vincent tomorrow",
+            constrainedTo: "please email just see vincent tomorrow"
+        )
+
+        XCTAssertNil(replacement)
+    }
+
     func testCoordinatorLogsScheduledAndLearnedCorrection() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)

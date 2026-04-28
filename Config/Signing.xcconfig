@@ -1,0 +1,8 @@
+// Default signing settings for the generated Xcode project.
+// Create Config/LocalSigning.xcconfig to override these locally.
+
+CODE_SIGN_IDENTITY = Apple Development
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = BBVMGXR9AY
+
+#include? "LocalSigning.xcconfig"

@@ -323,6 +323,103 @@ final class TranscriptionLabRunnerTests: XCTestCase {
         XCTAssertEqual(transcribeCallCount, 0)
     }
 
+    func testRunnerIncludesSpeakerTaggedSegmentsForMatchingRecognizedVoice() async throws {
+        let recognizedVoiceID = UUID(uuidString: "00000000-0000-0000-0000-0000000000DD")!
+        let diarizationSummary = DiarizationSummary(
+            spans: [
+                .init(speakerID: "Speaker 0", startTime: 0.0, endTime: 0.6, isKept: true),
+                .init(speakerID: "Speaker 1", startTime: 0.6, endTime: 1.1, isKept: false),
+            ],
+            mergedKeptSpans: [
+                .init(startTime: 0.0, endTime: 0.6),
+            ],
+            targetSpeakerID: "Speaker 0",
+            targetSpeakerDuration: 0.6,
+            keptAudioDuration: 0.6,
+            usedFallback: false,
+            fallbackReason: nil
+        )
+        let speakerTaggedTranscript = SpeakerTaggedTranscript(
+            segments: [
+                .init(
+                    speakerID: "Speaker 0",
+                    startTime: 0.0,
+                    endTime: 0.6,
+                    text: "First Jesse segment."
+                ),
+                .init(
+                    speakerID: "Speaker 1",
+                    startTime: 0.6,
+                    endTime: 1.1,
+                    text: "Second Jesse segment."
+                ),
+            ]
+        )
+        var transcribeCallCount = 0
+        let entry = makeEntry()
+        let resolvedProfiles = [
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 0",
+                displayName: "Jesse Vincent",
+                isMe: true,
+                recognizedVoiceID: recognizedVoiceID,
+                evidenceTranscript: "First Jesse segment."
+            ),
+            TranscriptionLabSpeakerProfile(
+                entryID: entry.id,
+                speakerID: "Speaker 1",
+                displayName: "Jesse Vincent",
+                isMe: true,
+                recognizedVoiceID: recognizedVoiceID,
+                evidenceTranscript: "Second Jesse segment."
+            )
+        ]
+        let runner = TranscriptionLabRunner(
+            loadAudioBuffer: { _ in [0.1, 0.2, 0.3] },
+            loadSpeechModel: { _ in },
+            transcribe: { _ in
+                transcribeCallCount += 1
+                return "full transcript"
+            },
+            runSpeakerTagging: { _ in
+                SpeakerTaggedTranscriptionResult(
+                    filteredTranscript: "First Jesse segment.",
+                    diarizationSummary: diarizationSummary,
+                    speakerTaggedTranscript: speakerTaggedTranscript
+                )
+            },
+            resolveSpeakerProfiles: { entryID, _, summary, taggedTranscript in
+                XCTAssertEqual(entryID, entry.id)
+                XCTAssertEqual(summary, diarizationSummary)
+                XCTAssertEqual(taggedTranscript, speakerTaggedTranscript)
+                return resolvedProfiles
+            },
+            clean: { _, _, _ in
+                XCTFail("cleanup should not run in this test")
+                return TextCleanerResult(
+                    text: "",
+                    performance: TextCleanerPerformance(modelCallDuration: nil, postProcessDuration: nil)
+                )
+            },
+            correctionStore: CorrectionStore(defaults: UserDefaults(suiteName: #function)!)
+        )
+
+        let result = try await runner.rerunTranscription(
+            entry: entry,
+            speechModelID: "fluid_parakeet-v3",
+            speakerTaggingEnabled: true,
+            acquirePipeline: { true },
+            releasePipeline: {}
+        )
+
+        XCTAssertEqual(result.rawTranscription, "First Jesse segment. Second Jesse segment.")
+        XCTAssertEqual(result.diarizationSummary, diarizationSummary)
+        XCTAssertEqual(result.speakerTaggedTranscript, speakerTaggedTranscript)
+        XCTAssertEqual(result.speakerProfiles, resolvedProfiles)
+        XCTAssertEqual(transcribeCallCount, 0)
+    }
+
     func testRunnerFallsBackToFullTranscriptionWhenSpeakerTaggingFallsBack() async throws {
         let diarizationSummary = DiarizationSummary(
             spans: [],

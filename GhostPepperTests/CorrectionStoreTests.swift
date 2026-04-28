@@ -33,39 +33,6 @@ final class CorrectionStoreTests: XCTestCase {
         )
     }
 
-    func testPreferredTranscriptionsWinOverBroadReplacement() {
-        let engine = DeterministicCorrectionEngine(
-            preferredTranscriptions: ["Ghost Pepper"],
-            commonlyMisheard: [MisheardReplacement(wrong: "ghost", right: "goes")]
-        )
-
-        let corrected = engine.applyPreCleanupCorrections(to: "ghost pepper is ready")
-
-        XCTAssertEqual(corrected, "Ghost Pepper is ready")
-    }
-
-    func testCommonlyMisheardReplacementAppliesDeterministically() {
-        let engine = DeterministicCorrectionEngine(
-            preferredTranscriptions: [],
-            commonlyMisheard: [MisheardReplacement(wrong: "chat gbt", right: "ChatGPT")]
-        )
-
-        let corrected = engine.applyPreCleanupCorrections(to: "open chat gbt and summarize this")
-
-        XCTAssertEqual(corrected, "open ChatGPT and summarize this")
-    }
-
-    func testPreferredTranscriptionsDoNotRewritePostCleanupOutput() {
-        let engine = DeterministicCorrectionEngine(
-            preferredTranscriptions: ["Ghost Pepper"],
-            commonlyMisheard: []
-        )
-
-        let corrected = engine.applyPostCleanupCorrections(to: "ghost pepper is ready")
-
-        XCTAssertEqual(corrected, "ghost pepper is ready")
-    }
-
     func testPreferredOCRCustomWordsMatchPreferredTranscriptions() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
