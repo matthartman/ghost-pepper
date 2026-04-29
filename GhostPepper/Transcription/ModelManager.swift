@@ -613,7 +613,10 @@ final class ModelManager: ObservableObject {
                 let cacheDir = AsrModels.defaultCacheDirectory(for: .v3)
                 try? FileManager.default.removeItem(at: cacheDir)
             case .qwen3AsrInt8:
-                break // Qwen3 cache cleanup handled by FluidAudio internally
+                if #available(macOS 15, iOS 18, *) {
+                    let cacheDir = Qwen3AsrModels.defaultCacheDirectory(variant: .int8)
+                    try? FileManager.default.removeItem(at: cacheDir)
+                }
             }
         }
     }

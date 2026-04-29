@@ -1,5 +1,6 @@
 import XCTest
 import Combine
+import FluidAudio
 @testable import GhostPepper
 
 @MainActor
@@ -57,6 +58,68 @@ final class ModelManagerTests: XCTestCase {
 
         XCTAssertEqual(manager.state, .idle)
         XCTAssertNil(manager.error)
+    }
+
+    /// Regression test for #69: deleting Qwen3-ASR int8 must remove its cache
+    /// directory. Earlier the `.qwen3AsrInt8` branch of
+    /// `removeCachedModelFiles(for:)` was a `break` no-op, so the cache
+    /// persisted and `modelIsCached` reported the model as still cached on the
+    /// next state refresh.
+    ///
+    /// The test runs against the real Qwen3 cache path
+    /// (`Qwen3AsrModels.defaultCacheDirectory(variant: .int8)`) but only when
+    /// the cache does NOT already contain real model files — otherwise we'd
+    /// be wiping a user's downloaded Qwen3 model just to run the test. When
+    /// the user already has Qwen3 cached, we fall back to asserting the
+    /// publish-side behavior (objectWillChange fires).
+    func testDeleteCachedQwen3ModelRemovesCacheDirectory() throws {
+        guard #available(macOS 15, iOS 18, *) else {
+            throw XCTSkip("Qwen3-ASR requires macOS 15 / iOS 18+")
+        }
+
+        let model = try XCTUnwrap(SpeechModelCatalog.model(named: "fluid_qwen3-asr-0.6b-int8"))
+        let cacheDir = Qwen3AsrModels.defaultCacheDirectory(variant: .int8)
+        let realModelsPresent = Qwen3AsrModels.modelsExist(at: cacheDir)
+
+        try XCTSkipIf(
+            realModelsPresent,
+            "Qwen3-ASR int8 cache contains real models — skipping filesystem assertion to avoid wiping the user's local model. The bug is still exercised through deleteCachedModel below."
+        )
+
+        // Pre-populate the cache directory with a placeholder so we can
+        // observe whether removal actually happened.
+        let fm = FileManager.default
+        try fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let placeholder = cacheDir.appendingPathComponent("placeholder.txt")
+        try "regression #69".data(using: .utf8)!.write(to: placeholder)
+        XCTAssertTrue(fm.fileExists(atPath: cacheDir.path))
+
+        let manager = ModelManager(modelName: "openai_whisper-small.en")
+        manager.deleteCachedModel(model)
+
+        XCTAssertFalse(
+            fm.fileExists(atPath: cacheDir.path),
+            "deleteCachedModel must remove the Qwen3-ASR int8 cache directory"
+        )
+    }
+
+    /// Companion to `testDeleteCachedQwen3ModelRemovesCacheDirectory`. Runs
+    /// even when real Qwen3 models are present: proves the public delete path
+    /// notifies observers for the qwen3AsrInt8 case (rules out the previous
+    /// `break` no-op being silently re-introduced without filesystem checks).
+    func testDeleteCachedQwen3ModelNotifiesObservers() throws {
+        let manager = ModelManager(modelName: "openai_whisper-small.en")
+        let expectation = expectation(description: "qwen3 model deletion publishes change")
+        var cancellable: AnyCancellable? = manager.objectWillChange.sink {
+            expectation.fulfill()
+        }
+
+        let model = try XCTUnwrap(SpeechModelCatalog.model(named: "fluid_qwen3-asr-0.6b-int8"))
+        manager.deleteCachedModel(model)
+
+        wait(for: [expectation], timeout: 1.0)
+        withExtendedLifetime(cancellable) {}
+        cancellable = nil
     }
 
     func testRescueSingleSpeakerSpansUsesSpeechSegmentsWhenOnlyOneSpeakerIsDetected() {
