@@ -175,63 +175,112 @@ final class TextPasterTests: XCTestCase {
         pasteboard.setString("original content", forType: .string)
 
         var scheduledActions = 0
+        var pasteStartCalls = 0
+        var pasteEndCalls = 0
         let paster = TextPaster(
             pasteboard: pasteboard,
             canPasteIntoFocusedElement: { false },
-            prepareCommandV: {
-                XCTFail("prepareCommandV should not be called when no focused input is available")
+            preparePasteShortcutAction: {
+                XCTFail("preparePasteShortcutAction should not be called when no focused input is available")
                 return nil
             },
             schedule: { _, _ in
                 scheduledActions += 1
             }
         )
+        paster.onPasteStart = { pasteStartCalls += 1 }
+        paster.onPasteEnd = { pasteEndCalls += 1 }
 
         let result = paster.paste(text: "new content")
 
         XCTAssertEqual(result, .copiedToClipboard)
         XCTAssertEqual(pasteboard.string(forType: .string), "new content")
         XCTAssertEqual(scheduledActions, 0)
+        XCTAssertEqual(pasteStartCalls, 1)
+        XCTAssertEqual(pasteEndCalls, 1)
 
         pasteboard.releaseGlobally()
     }
 
-    func testPasteSchedulesCommandVAndRestoresClipboardWhenFocusedInputIsAvailable() {
+    func testPasteLeavesTranscriptOnClipboardWhenPasteShortcutCannotBePrepared() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        pasteboard.clearContents()
+        pasteboard.setString("original content", forType: .string)
+
+        var scheduledActions = 0
+        var prepareCalls = 0
+        var pasteStartCalls = 0
+        var pasteEndCalls = 0
+        let paster = TextPaster(
+            pasteboard: pasteboard,
+            canPasteIntoFocusedElement: { true },
+            preparePasteShortcutAction: {
+                prepareCalls += 1
+                return nil
+            },
+            schedule: { _, _ in
+                scheduledActions += 1
+            }
+        )
+        paster.onPasteStart = { pasteStartCalls += 1 }
+        paster.onPasteEnd = { pasteEndCalls += 1 }
+
+        let result = paster.paste(text: "new content")
+
+        XCTAssertEqual(result, .copiedToClipboard)
+        XCTAssertEqual(prepareCalls, 1)
+        XCTAssertEqual(scheduledActions, 0)
+        XCTAssertEqual(pasteboard.string(forType: .string), "new content")
+        XCTAssertEqual(pasteStartCalls, 1)
+        XCTAssertEqual(pasteEndCalls, 1)
+
+        pasteboard.releaseGlobally()
+    }
+
+    func testPasteSchedulesPasteShortcutAndRestoresClipboardWhenFocusedInputIsAvailable() {
         let pasteboard = NSPasteboard.withUniqueName()
         pasteboard.clearContents()
         pasteboard.setString("original content", forType: .string)
 
         var scheduledActions: [() -> Void] = []
-        var postedCommandV = 0
+        var postedPasteShortcut = 0
+        var pasteStartCalls = 0
+        var pasteEndCalls = 0
         let paster = TextPaster(
             pasteboard: pasteboard,
             canPasteIntoFocusedElement: { true },
-            prepareCommandV: {
-                { postedCommandV += 1 }
+            preparePasteShortcutAction: {
+                { postedPasteShortcut += 1 }
             },
             schedule: { _, action in
                 scheduledActions.append(action)
             }
         )
+        paster.onPasteStart = { pasteStartCalls += 1 }
+        paster.onPasteEnd = { pasteEndCalls += 1 }
 
         let result = paster.paste(text: "new content")
 
         XCTAssertEqual(result, .pasted)
         XCTAssertEqual(pasteboard.string(forType: .string), "new content")
-        XCTAssertEqual(postedCommandV, 0)
+        XCTAssertEqual(postedPasteShortcut, 0)
         XCTAssertEqual(scheduledActions.count, 1)
+        XCTAssertEqual(pasteStartCalls, 1)
+        XCTAssertEqual(pasteEndCalls, 0)
 
         let postPasteAction = scheduledActions.removeFirst()
         postPasteAction()
 
-        XCTAssertEqual(postedCommandV, 1)
+        XCTAssertEqual(postedPasteShortcut, 1)
         XCTAssertEqual(scheduledActions.count, 1)
         XCTAssertEqual(pasteboard.string(forType: .string), "new content")
+        XCTAssertEqual(pasteEndCalls, 0)
 
         let restoreClipboardAction = scheduledActions.removeFirst()
         restoreClipboardAction()
 
         XCTAssertEqual(pasteboard.string(forType: .string), "original content")
+        XCTAssertEqual(pasteEndCalls, 1)
 
         pasteboard.releaseGlobally()
     }
@@ -247,7 +296,7 @@ final class TextPasterTests: XCTestCase {
         let paster = TextPaster(
             pasteboard: pasteboard,
             canPasteIntoFocusedElement: { true },
-            prepareCommandV: { {} },
+            preparePasteShortcutAction: { {} },
             pasteSessionProvider: { text, date in
             PasteSession(
                 pastedText: text,

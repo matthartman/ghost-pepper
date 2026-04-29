@@ -62,6 +62,7 @@
 		572FDC1B8744EECF73C0EA86 /* PasteSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 934F425F25CCB580B8202127 /* PasteSession.swift */; };
 		58786AC40C6823691E15369C /* FocusedElementLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E3575D1B5EA81CBB2CD1C2B /* FocusedElementLocator.swift */; };
 		5AB7257704509FD4BC36F69E /* TextPaster.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1EB2D492BFBDC803133A31 /* TextPaster.swift */; };
+		5E7A00010000000000000001 /* KeyboardLayoutPasteShortcutResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00020000000000000001 /* KeyboardLayoutPasteShortcutResolver.swift */; };
 		5AC883ADFD11721A8E9E4D37 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAE65A5741A98AEADF6498D /* ModelManager.swift */; };
 		5AFD58B50823656E71CF3AA9 /* OCRContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDB3BCEA6FF268C1759D1F20 /* OCRContext.swift */; };
 		5CCF5560BDC9AD0982A69F3D /* OCRContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = F27D1ADB87391BB00E156008 /* OCRContext.swift */; };
@@ -88,6 +89,7 @@
 		829C83DF25112D375A8DB767 /* UpdaterController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F85AD0262D40047E6FCA3D8 /* UpdaterController.swift */; };
 		8323B1A2E48B64B493939727 /* GranolaImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89E71C9D2C08957AB78FA5E /* GranolaImportView.swift */; };
 		8990B2F77435E351A458EDD9 /* DebugLogWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2715D9117D8664700616D95A /* DebugLogWindow.swift */; };
+		8A7B00010000000000000001 /* KeyboardLayoutPasteShortcutResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A7B00020000000000000001 /* KeyboardLayoutPasteShortcutResolverTests.swift */; };
 		8BCB1AE8A984462B0635BA09 /* SystemAudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14BBAF87158BF49AB528B979 /* SystemAudioRecorder.swift */; };
 		8F72E86B5335738940C35A67 /* MeetingWindowHeuristicsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15111386E6EE359ACF9BF66 /* MeetingWindowHeuristicsTests.swift */; };
 		90F411F8E3564F1C5DDD1A5F /* TextPasterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8760607B80C14BCBD5F9FC0 /* TextPasterTests.swift */; };
@@ -218,6 +220,7 @@
 		4FCF12D0FBB05F424AAB2E68 /* CleanupModelProbeCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupModelProbeCLI.swift; sourceTree = "<group>"; };
 		518567C8CE0F7841ACE62BD1 /* ChordEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChordEngine.swift; sourceTree = "<group>"; };
 		52BCF852883B9E469B61B56B /* GhostPepper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GhostPepper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5E7A00020000000000000001 /* KeyboardLayoutPasteShortcutResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayoutPasteShortcutResolver.swift; sourceTree = "<group>"; };
 		589AC554EEF132B519736D92 /* HotkeyMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitorTests.swift; sourceTree = "<group>"; };
 		59666FBC728BF70A61983188 /* PerformanceTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceTraceTests.swift; sourceTree = "<group>"; };
 		5D68EDD354F149B2EF3963B7 /* CleanupModelProbe */ = {isa = PBXFileReference; includeInIndex = 0; path = CleanupModelProbe; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -239,6 +242,7 @@
 		79231C6829FD88741536FF4A /* sprite_frame_0@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_0@2x.png"; sourceTree = "<group>"; };
 		7ECFAFC0144B6B9203BF4EE0 /* RecognizedVoiceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognizedVoiceStoreTests.swift; sourceTree = "<group>"; };
 		80731398639640F62FFC4524 /* RecordingOCRPrefetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOCRPrefetchTests.swift; sourceTree = "<group>"; };
+		8A7B00020000000000000001 /* KeyboardLayoutPasteShortcutResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardLayoutPasteShortcutResolverTests.swift; sourceTree = "<group>"; };
 		8348D35B3C14A52DCB5138E2 /* CleanupBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupBackend.swift; sourceTree = "<group>"; };
 		84630A373DA596D94B45E867 /* Secrets.example */ = {isa = PBXFileReference; path = Secrets.example; sourceTree = "<group>"; };
 		853418773B99673FB27791AC /* CleanupModelProbeRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupModelProbeRunner.swift; sourceTree = "<group>"; };
@@ -529,6 +533,7 @@
 				0D91666EEE2CF7B4B78E3061 /* ChordBindingStore.swift */,
 				518567C8CE0F7841ACE62BD1 /* ChordEngine.swift */,
 				FF88392E6B9F0168E43B8C51 /* HotkeyMonitor.swift */,
+				5E7A00020000000000000001 /* KeyboardLayoutPasteShortcutResolver.swift */,
 				9A54422D17879836781B7F71 /* KeyChord.swift */,
 				934F425F25CCB580B8202127 /* PasteSession.swift */,
 				BA57E9C267251FC86A8C8672 /* PhysicalKey.swift */,
@@ -652,6 +657,7 @@
 				9FBC0D906FF181E91A758F58 /* FocusedElementLocatorTests.swift */,
 				363A3F98CDFC4CCAD927835C /* GhostPepperTests.swift */,
 				589AC554EEF132B519736D92 /* HotkeyMonitorTests.swift */,
+				8A7B00020000000000000001 /* KeyboardLayoutPasteShortcutResolverTests.swift */,
 				0F634CFD724E29ECA57C0BB6 /* KeyChordTests.swift */,
 				B112C736F05F0A7CFA7784A2 /* MeetingTranscriptWindowPresentationTests.swift */,
 				B15111386E6EE359ACF9BF66 /* MeetingWindowHeuristicsTests.swift */,
@@ -839,6 +845,7 @@
 				8323B1A2E48B64B493939727 /* GranolaImportView.swift in Sources */,
 				41585ECBAFB5534CB6AE4FC5 /* GranolaImporter.swift in Sources */,
 				BF329CF451CC34A3B74348CC /* HotkeyMonitor.swift in Sources */,
+				5E7A00010000000000000001 /* KeyboardLayoutPasteShortcutResolver.swift in Sources */,
 				77089185C9C0C0EDC4536F0A /* KeyChord.swift in Sources */,
 				CC795C47BAF8CEF62790BAFF /* LocalLLMCleanupBackend.swift in Sources */,
 				FCEE3C748338E66F1246B917 /* MediaPlaybackController.swift in Sources */,
@@ -932,6 +939,7 @@
 				F0598B5D027A5B31EF1B7664 /* FocusedElementLocatorTests.swift in Sources */,
 				FC6AACB283BD40C4FBA78F3D /* GhostPepperTests.swift in Sources */,
 				637A68B05AD8479E0B5D52A7 /* HotkeyMonitorTests.swift in Sources */,
+				8A7B00010000000000000001 /* KeyboardLayoutPasteShortcutResolverTests.swift in Sources */,
 				AB0AC6DC19EC0DB440F5B123 /* KeyChordTests.swift in Sources */,
 				D647909F8F2D5C2046352750 /* MeetingTranscriptWindowPresentationTests.swift in Sources */,
 				8F72E86B5335738940C35A67 /* MeetingWindowHeuristicsTests.swift in Sources */,

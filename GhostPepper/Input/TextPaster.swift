@@ -12,7 +12,7 @@ enum PasteResult: Equatable {
     case copiedToClipboard
 }
 
-/// Pastes transcribed text into the focused text field by simulating Cmd+V.
+/// Pastes transcribed text into the focused text field by simulating the active layout's paste shortcut.
 /// Saves and restores the clipboard around the paste operation to avoid clobbering user data.
 /// Requires Accessibility permission for CGEvent posting.
 final class TextPaster {
@@ -58,15 +58,12 @@ final class TextPaster {
 
     // MARK: - Timing Constants
 
-    /// Delay after writing text to clipboard before simulating Cmd+V.
+    /// Delay after writing text to clipboard before simulating the paste shortcut.
     static let preKeystrokeDelay: TimeInterval = 0.05
 
-    /// Delay after simulating Cmd+V before restoring the original clipboard.
+    /// Delay after simulating the paste shortcut before restoring the original clipboard.
     static let postKeystrokeDelay: TimeInterval = 0.1
 
-    // MARK: - Virtual Key Codes
-
-    private static let vKeyCode: CGKeyCode = 0x09
     var onPaste: ((PasteSession) -> Void)?
     var onPasteStart: (() -> Void)?
     var onPasteEnd: (() -> Void)?
@@ -74,13 +71,13 @@ final class TextPaster {
     private let pasteSessionProvider: PasteSessionProvider
     private let pasteboard: NSPasteboard
     private let canPasteIntoFocusedElement: () -> Bool
-    private let prepareCommandV: () -> (() -> Void)?
+    private let preparePasteShortcutAction: () -> (() -> Void)?
     private let schedule: PasteScheduler
 
     init(
         pasteboard: NSPasteboard = .general,
         canPasteIntoFocusedElement: @escaping () -> Bool = { TextPaster.defaultCanPasteIntoFocusedElement() },
-        prepareCommandV: @escaping () -> (() -> Void)? = { TextPaster.defaultCommandVPasteAction() },
+        preparePasteShortcutAction: @escaping () -> (() -> Void)? = { TextPaster.defaultPasteShortcutAction() },
         pasteSessionProvider: @escaping PasteSessionProvider = { text, date in
             FocusedElementLocator().capturePasteSession(for: text, at: date)
         },
@@ -90,7 +87,7 @@ final class TextPaster {
     ) {
         self.pasteboard = pasteboard
         self.canPasteIntoFocusedElement = canPasteIntoFocusedElement
-        self.prepareCommandV = prepareCommandV
+        self.preparePasteShortcutAction = preparePasteShortcutAction
         self.pasteSessionProvider = pasteSessionProvider
         self.schedule = schedule
     }
@@ -145,7 +142,7 @@ final class TextPaster {
     /// Flow:
     /// 1. Save current clipboard
     /// 2. Write text to clipboard
-    /// 3. After a short delay, simulate Cmd+V
+    /// 3. After a short delay, simulate the paste shortcut
     /// 4. After another delay, restore the original clipboard
     ///
     /// - Parameter text: The text to paste.
@@ -156,13 +153,13 @@ final class TextPaster {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        guard canPasteIntoFocusedElement() || Self.frontmostAppHasPasteMenuItem(), let postCommandV = prepareCommandV() else {
+        guard canPasteIntoFocusedElement() || Self.frontmostAppHasPasteMenuItem(), let postPasteShortcut = preparePasteShortcutAction() else {
             onPasteEnd?()
             return .copiedToClipboard
         }
 
         schedule(Self.preKeystrokeDelay) { [weak self] in
-            postCommandV()
+            postPasteShortcut()
 
             self?.schedule(Self.postKeystrokeDelay) { [weak self] in
                 guard let self else { return }
@@ -426,10 +423,14 @@ final class TextPaster {
 
     // MARK: - Key Simulation
 
-    private static func defaultCommandVPasteAction() -> (() -> Void)? {
+    private static func defaultPasteShortcutAction() -> (() -> Void)? {
+        guard let keyCode = KeyboardLayoutPasteShortcutResolver().currentPasteKeyCode() else {
+            return nil
+        }
+
         let source = CGEventSource(stateID: .hidSystemState)
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: Self.vKeyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: Self.vKeyCode, keyDown: false) else {
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
             return nil
         }
 
