@@ -1523,6 +1523,51 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(result, "just see approved it")
     }
 
+    func testAppStateResolvesWindowContextAfterTranscriptionBeforeCleanup() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        appState.cleanupEnabled = true
+        appState.frontmostWindowContextEnabled = true
+        var events: [String] = []
+        appState.transcribeAudioBufferOverride = { _ in
+            events.append("transcription")
+            return "raw transcript"
+        }
+        appState.cleanedTranscriptionResultOverride = { _, context in
+            events.append("cleanup:\(context?.windowContents ?? "none")")
+            return (
+                text: "clean transcript",
+                prompt: "prompt",
+                attemptedCleanup: true,
+                cleanupUsedFallback: false
+            )
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [0.1, 0.2, 0.3],
+            recordingSessionCoordinator: nil,
+            archivedWindowContext: nil,
+            windowContextProvider: {
+                events.append("ocr")
+                return RecordingOCRPrefetchResult(
+                    context: OCRContext(windowContents: "window context"),
+                    elapsed: 0.01
+                )
+            }
+        )
+
+        XCTAssertEqual(events, [
+            "transcription",
+            "ocr",
+            "cleanup:window context"
+        ])
+    }
+
     func testAppStatePrepareForTerminationShutsDownCleanupBackend() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)

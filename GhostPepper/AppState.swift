@@ -746,9 +746,9 @@ class AppState: ObservableObject {
         overlay.show(message: .transcribing)
         activePerformanceTrace?.transcriptionStartAt = Date()
         let windowContextProvider: WindowContextProvider?
-        if frontmostWindowContextEnabled {
+        if cleanupEnabled && canAttemptCleanup && frontmostWindowContextEnabled {
             windowContextProvider = { [weak self] in
-                await self?.recordingOCRPrefetch.resolve()
+                self?.resolveFrontmostWindowContextForCleanup()
             }
         } else {
             windowContextProvider = nil
@@ -834,20 +834,22 @@ class AppState: ObservableObject {
 
         activePerformanceTrace?.transcriptionEndAt = Date()
         var windowContext = archivedWindowContext
+        let windowContextProviderWasAvailable = windowContextProvider != nil
+        if cleanupEnabled,
+           frontmostWindowContextEnabled,
+           windowContext == nil,
+           let resolvedWindowContext = await windowContextProvider?() {
+            windowContext = resolvedWindowContext.context
+            activePerformanceTrace?.ocrCaptureDuration = resolvedWindowContext.elapsed
+        }
         if cleanupEnabled && canAttemptCleanup {
             activeCleanupAttempted = true
-            if frontmostWindowContextEnabled,
-               windowContext == nil,
-               let resolvedWindowContext = await windowContextProvider?() {
-                windowContext = resolvedWindowContext.context
-                activePerformanceTrace?.ocrCaptureDuration = resolvedWindowContext.elapsed
-            }
             activePerformanceTrace?.cleanupStartAt = Date()
             status = .cleaningUp
             if shouldPaste {
                 overlay.show(message: .cleaningUp)
             }
-            if frontmostWindowContextEnabled, windowContext == nil {
+            if frontmostWindowContextEnabled, windowContext == nil, windowContextProviderWasAvailable == false {
                 debugLogStore.record(category: .ocr, message: "No frontmost-window OCR context was captured.")
             }
         } else {
@@ -889,6 +891,17 @@ class AppState: ObservableObject {
         }
 
         return true
+    }
+
+    private func resolveFrontmostWindowContextForCleanup() -> RecordingOCRPrefetchResult? {
+        let prefetchedContext = recordingOCRPrefetch.resolveIfCompleted()
+        if prefetchedContext == nil {
+            debugLogStore.record(
+                category: .ocr,
+                message: "Frontmost-window OCR context was not ready when cleanup started; continuing without it."
+            )
+        }
+        return prefetchedContext
     }
 
     private func transcribedTextForRecording(

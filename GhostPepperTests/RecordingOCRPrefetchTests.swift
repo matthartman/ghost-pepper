@@ -38,4 +38,31 @@ final class RecordingOCRPrefetchTests: XCTestCase {
         XCTAssertEqual(result?.context?.windowContents, "captured")
         XCTAssertNotNil(result?.elapsed)
     }
+
+    func testResolveIfCompletedReturnsNilWhenCaptureIsStillRunning() async {
+        let prefetch = RecordingOCRPrefetch { _ in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            return OCRContext(windowContents: "late")
+        }
+
+        prefetch.start(customWords: [])
+        let start = Date()
+        let result = prefetch.resolveIfCompleted()
+
+        XCTAssertNil(result)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.05)
+    }
+
+    func testResolveIfCompletedReturnsCapturedContextWhenCaptureFinishesFirst() async {
+        let prefetch = RecordingOCRPrefetch { _ in
+            try? await Task.sleep(nanoseconds: 10_000_000)
+            return OCRContext(windowContents: "captured")
+        }
+
+        prefetch.start(customWords: [])
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let result = prefetch.resolveIfCompleted()
+
+        XCTAssertEqual(result?.context?.windowContents, "captured")
+    }
 }

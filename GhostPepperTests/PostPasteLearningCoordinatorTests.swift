@@ -310,9 +310,10 @@ final class PostPasteLearningCoordinatorTests: XCTestCase {
         }
 
         coordinator.handlePaste(samplePasteSession())
-        while !scheduledCalls.isEmpty {
-            await runNextScheduledCall(&scheduledCalls)
-        }
+        await runScheduledCalls(
+            &scheduledCalls,
+            count: Int(PostPasteLearningCoordinator.observationWindow / PostPasteLearningCoordinator.pollInterval) + 1
+        )
         await waitUntil {
             debugMessages.contains(where: { $0.contains("Post-paste learning skipped because the polling window expired without a stable correction") })
         }
