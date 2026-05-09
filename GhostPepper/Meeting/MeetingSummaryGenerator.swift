@@ -1,5 +1,22 @@
 import Foundation
 
+enum MeetingSummaryError: Error, LocalizedError {
+    case allChunksFailed(underlying: Error)
+    case finalCombineFailed(underlying: Error)
+    case emptyOutput
+
+    var errorDescription: String? {
+        switch self {
+        case .allChunksFailed(let underlying):
+            return "Could not summarize any chunk: \(underlying.localizedDescription)"
+        case .finalCombineFailed(let underlying):
+            return "Could not produce final summary: \(underlying.localizedDescription)"
+        case .emptyOutput:
+            return "Model returned empty output."
+        }
+    }
+}
+
 /// Generates meeting summaries using the local LLM via chunked summarization.
 ///
 /// Strategy: The transcript is split into chunks that fit the model's context window.
@@ -7,7 +24,10 @@ import Foundation
 /// into a final summary with key topics, action items, and a TL;DR.
 @MainActor
 final class MeetingSummaryGenerator {
-    private let cleanupManager: TextCleanupManager
+    typealias Logger = (String) -> Void
+
+    private let cleanupManager: TextCleaningManaging
+    private let logger: Logger
 
     /// Maximum characters per chunk sent to the LLM (~1500 tokens ≈ 6000 chars).
     private let chunkCharLimit = 5000
@@ -34,56 +54,73 @@ final class MeetingSummaryGenerator {
     - Write in present tense for facts, past tense for what happened
     """
 
-    init(cleanupManager: TextCleanupManager) {
+    init(
+        cleanupManager: TextCleaningManaging,
+        logger: @escaping Logger = { _ in }
+    ) {
         self.cleanupManager = cleanupManager
+        self.logger = logger
     }
 
     /// Generate a full summary for a completed meeting transcript.
-    /// Returns the summary as markdown text, or nil if generation fails.
+    /// Throws on failure with a specific reason; the caller should surface it.
     func generateSummary(
         transcript: MeetingTranscript,
         chunkPrompt: String = MeetingSummaryGenerator.defaultPrompt,
         finalPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
-    ) async -> String? {
+    ) async throws -> String {
         let segments = transcript.segments
-        guard !segments.isEmpty else { return nil }
+        guard !segments.isEmpty else {
+            throw MeetingSummaryError.emptyOutput
+        }
 
-        // Build the full transcript text
         let fullText = segments.map { segment in
             "[\(segment.formattedTimestamp)] \(segment.speaker.displayName): \(segment.text)"
         }.joined(separator: "\n")
 
-        // Split into chunks
         let chunks = splitIntoChunks(fullText)
 
-        // Include user notes if available
         let notesText = transcript.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let notesPrefix = notesText.isEmpty ? "" : "User's notes during the meeting:\n\n\(notesText)\n\n"
 
         if chunks.count == 1 {
-            // Short meeting — summarize directly with the final prompt
             let input = "\(notesPrefix)Meeting transcript:\n\n\(chunks[0])"
-            return await runLLM(text: input, prompt: finalPrompt)
-        }
-
-        // Multi-chunk: summarize each chunk, then combine
-        var chunkSummaries: [String] = []
-        for (i, chunk) in chunks.enumerated() {
-            let input = "Meeting transcript (part \(i + 1) of \(chunks.count)):\n\n\(chunk)"
-            if let summary = await runLLM(text: input, prompt: chunkPrompt) {
-                chunkSummaries.append(summary)
+            do {
+                return try await runLLM(text: input, prompt: finalPrompt)
+            } catch {
+                throw MeetingSummaryError.finalCombineFailed(underlying: error)
             }
         }
 
-        guard !chunkSummaries.isEmpty else { return nil }
+        var chunkSummaries: [String] = []
+        var lastChunkError: Error?
+        for (i, chunk) in chunks.enumerated() {
+            let input = "Meeting transcript (part \(i + 1) of \(chunks.count)):\n\n\(chunk)"
+            do {
+                let summary = try await runLLM(text: input, prompt: chunkPrompt)
+                chunkSummaries.append(summary)
+            } catch {
+                lastChunkError = error
+                logger("MeetingSummaryGenerator: chunk \(i + 1)/\(chunks.count) failed — \(error.localizedDescription)")
+            }
+        }
 
-        // Combine chunk summaries into final summary
+        guard !chunkSummaries.isEmpty else {
+            throw MeetingSummaryError.allChunksFailed(
+                underlying: lastChunkError ?? MeetingSummaryError.emptyOutput
+            )
+        }
+
         let combined = chunkSummaries.enumerated().map { i, s in
             "Part \(i + 1):\n\(s)"
         }.joined(separator: "\n\n")
 
         let finalInput = "\(notesPrefix)Combined meeting notes:\n\n\(combined)"
-        return await runLLM(text: finalInput, prompt: finalPrompt)
+        do {
+            return try await runLLM(text: finalInput, prompt: finalPrompt)
+        } catch {
+            throw MeetingSummaryError.finalCombineFailed(underlying: error)
+        }
     }
 
     // MARK: - Private
@@ -110,15 +147,18 @@ final class MeetingSummaryGenerator {
         return chunks
     }
 
-    private func runLLM(text: String, prompt: String) async -> String? {
-        do {
-            let fullPrompt = "\(prompt)\n\n\(text)"
-            let result = try await cleanupManager.clean(text: fullPrompt, prompt: nil)
-            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        } catch {
-            print("MeetingSummaryGenerator: LLM failed — \(error.localizedDescription)")
-            return nil
+    private func runLLM(text: String, prompt: String) async throws -> String {
+        let fullPrompt = "\(prompt)\n\n\(text)"
+        let result = try await cleanupManager.clean(
+            text: fullPrompt,
+            prompt: nil,
+            modelKind: nil,
+            timeout: TextCleanupManager.summaryTimeoutSeconds
+        )
+        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            throw MeetingSummaryError.emptyOutput
         }
+        return trimmed
     }
 }

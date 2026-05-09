@@ -1291,16 +1291,35 @@ class AppState: ObservableObject {
 
     func generateMeetingSummary(for transcript: MeetingTranscript) async {
         guard !transcript.segments.isEmpty else { return }
+        transcript.summaryError = nil
         transcript.isGeneratingSummary = true
-        let generator = MeetingSummaryGenerator(cleanupManager: textCleanupManager)
-        let result = await generator.generateSummary(
-            transcript: transcript,
-            chunkPrompt: MeetingSummaryGenerator.defaultPrompt,
-            finalPrompt: meetingSummaryPrompt
+        let logStore = self.debugLogStore
+        let generator = MeetingSummaryGenerator(
+            cleanupManager: textCleanupManager,
+            logger: { message in
+                logStore.record(category: .model, message: message)
+            }
         )
-        transcript.summary = result
+        do {
+            let result = try await generator.generateSummary(
+                transcript: transcript,
+                chunkPrompt: MeetingSummaryGenerator.defaultPrompt,
+                finalPrompt: meetingSummaryPrompt
+            )
+            transcript.summary = result
+            transcript.summaryError = nil
+            debugLogStore.record(
+                category: .model,
+                message: "Meeting summary generated for \(transcript.meetingName)"
+            )
+        } catch {
+            transcript.summaryError = error.localizedDescription
+            debugLogStore.record(
+                category: .model,
+                message: "Meeting summary failed for \(transcript.meetingName): \(error.localizedDescription)"
+            )
+        }
         transcript.isGeneratingSummary = false
-        debugLogStore.record(category: .model, message: "Meeting summary \(result != nil ? "generated" : "failed") for \(transcript.meetingName)")
     }
 
     func stopMeetingTranscription() {

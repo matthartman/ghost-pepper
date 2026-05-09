@@ -24,7 +24,22 @@ enum CleanupModelState: Equatable {
 }
 
 protocol TextCleaningManaging: AnyObject {
-    func clean(text: String, prompt: String?, modelKind: LocalCleanupModelKind?) async throws -> String
+    func clean(
+        text: String,
+        prompt: String?,
+        modelKind: LocalCleanupModelKind?,
+        timeout: TimeInterval?
+    ) async throws -> String
+}
+
+extension TextCleaningManaging {
+    func clean(
+        text: String,
+        prompt: String?,
+        modelKind: LocalCleanupModelKind?
+    ) async throws -> String {
+        try await clean(text: text, prompt: prompt, modelKind: modelKind, timeout: nil)
+    }
 }
 
 typealias CleanupModelProbeExecutionOverride = @MainActor (
@@ -194,6 +209,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     }
 
     private static let timeoutSeconds: TimeInterval = 15.0
+    static let summaryTimeoutSeconds: TimeInterval = 120.0
     private static let selectedCleanupModelDefaultsKey = "selectedCleanupModelKind"
     private static let systemPromptSentinel = "<|ghost-pepper-system-prefill-split|>"
     private static let userInputSentinel = "<|ghost-pepper-user-prefill-split|>"
@@ -277,7 +293,12 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         objectWillChange.send()
     }
 
-    func clean(text: String, prompt: String? = nil, modelKind: LocalCleanupModelKind? = nil) async throws -> String {
+    func clean(
+        text: String,
+        prompt: String? = nil,
+        modelKind: LocalCleanupModelKind? = nil,
+        timeout: TimeInterval? = nil
+    ) async throws -> String {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
         await loadModel(kind: requestedModelKind)
 
@@ -295,7 +316,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 text: text,
                 prompt: activePrompt,
                 modelKind: requestedModelKind,
-                thinkingMode: .suppressed
+                thinkingMode: .suppressed,
+                timeout: timeout
             )
             let cleaned = result.rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty || cleaned == "..." {
@@ -359,7 +381,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         text: String,
         prompt: String,
         modelKind: LocalCleanupModelKind,
-        thinkingMode: CleanupModelProbeThinkingMode
+        thinkingMode: CleanupModelProbeThinkingMode,
+        timeout: TimeInterval? = nil
     ) async throws -> CleanupModelProbeRawResult {
         await probeExecutionGate.acquire()
         do {
@@ -393,9 +416,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                     preparedCompletionInput = nil
                 }
 
+                let effectiveTimeout = timeout ?? Self.timeoutSeconds
                 let rawOutput: String
                 if let preparedCompletionInput {
-                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) { [self] in
+                    rawOutput = try await withTimeout(seconds: effectiveTimeout) { [self] in
                         await generateFromPreparedContext(
                             llm: llm,
                             completionInput: preparedCompletionInput,
@@ -403,7 +427,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                         )
                     }
                 } else {
-                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) {
+                    rawOutput = try await withTimeout(seconds: effectiveTimeout) {
                         llm.useResolvedTemplate(systemPrompt: prompt)
                         llm.history = []
                         await llm.respond(to: text, thinking: thinkingMode.llmThinkingMode)

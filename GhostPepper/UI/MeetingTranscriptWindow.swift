@@ -9,6 +9,30 @@ enum MeetingTranscriptWindowPresentation {
     ) -> NSWindow.Level {
         shouldFloatWhileRecording && hasActiveRecording ? .floating : .normal
     }
+
+    enum SummaryViewState: Equatable {
+        case recordingPlaceholder
+        case generatingSpinner
+        case showSummary
+        case failure(message: String)
+        case noTranscript
+        case generatePrompt
+    }
+
+    static func summaryViewState(
+        isRecording: Bool,
+        isGeneratingSummary: Bool,
+        summary: String?,
+        summaryError: String?,
+        hasSegments: Bool
+    ) -> SummaryViewState {
+        if isRecording { return .recordingPlaceholder }
+        if isGeneratingSummary { return .generatingSpinner }
+        if summary != nil { return .showSummary }
+        if let summaryError { return .failure(message: summaryError) }
+        if !hasSegments { return .noTranscript }
+        return .generatePrompt
+    }
 }
 
 // MARK: - Window Controller
@@ -966,26 +990,69 @@ struct MeetingTabContentView: View {
         }
     }
 
+    @ViewBuilder
     private var summaryContent: some View {
+        let state = MeetingTranscriptWindowPresentation.summaryViewState(
+            isRecording: tab.isRecording,
+            isGeneratingSummary: tab.transcript.isGeneratingSummary,
+            summary: tab.transcript.summary,
+            summaryError: tab.transcript.summaryError,
+            hasSegments: !tab.transcript.segments.isEmpty
+        )
         VStack(alignment: .leading, spacing: 24) {
-            if tab.isRecording {
+            switch state {
+            case .recordingPlaceholder:
                 VStack(spacing: 12) {
                     Image(systemName: "sparkles").font(.system(size: 32)).foregroundColor(.orange.opacity(0.4))
                     Text("Summary will be generated when the meeting ends").font(.callout).foregroundColor(.secondary)
                 }.frame(maxWidth: .infinity).padding(.vertical, 60)
-            } else if tab.transcript.isGeneratingSummary {
+            case .generatingSpinner:
                 VStack(spacing: 12) {
                     ProgressView().scaleEffect(0.8)
                     Text("Generating summary...").font(.callout).foregroundColor(.secondary)
                 }.frame(maxWidth: .infinity).padding(.vertical, 60)
-            } else if tab.transcript.summary != nil {
+            case .showSummary, .generatePrompt:
                 summaryStats
-            } else if tab.transcript.segments.isEmpty {
+            case .failure(let message):
+                summaryFailure(message: message)
+            case .noTranscript:
                 Text("No transcript to summarize.").font(.callout).foregroundColor(.secondary).padding(.vertical, 40)
-            } else {
-                summaryStats
             }
         }
+    }
+
+    private func summaryFailure(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text("Summary failed")
+                    .font(.callout.weight(.semibold))
+            }
+            Text(message)
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: { regenerateSummary() }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                    Text("Try again")
+                        .font(.caption.weight(.medium))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.orange))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.orange.opacity(0.08))
+        )
     }
 
     private var summaryStats: some View {

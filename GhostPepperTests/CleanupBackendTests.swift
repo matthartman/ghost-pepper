@@ -5,7 +5,12 @@ private final class SpyTextCleaningManager: TextCleaningManaging {
     var cleanedInputs: [(text: String, prompt: String?, modelKind: LocalCleanupModelKind?)] = []
     var nextResult: Result<String, Error> = .failure(CleanupBackendError.unavailable)
 
-    func clean(text: String, prompt: String?, modelKind: LocalCleanupModelKind?) async throws -> String {
+    func clean(
+        text: String,
+        prompt: String?,
+        modelKind: LocalCleanupModelKind?,
+        timeout: TimeInterval?
+    ) async throws -> String {
         cleanedInputs.append((text: text, prompt: prompt, modelKind: modelKind))
         return try nextResult.get()
     }
