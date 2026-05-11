@@ -50,15 +50,19 @@ class RecordingOverlayController {
     private var currentMessage: OverlayMessage?
     var onNoSoundSettingsTapped: (() -> Void)?
 
-    func show(message: OverlayMessage = .recording) {
+    func show(message: OverlayMessage = .recording, onCancel: (() -> Void)? = nil) {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
 
         if let hostingView = hostingView, let panel = panel {
-            let size = panelSize(for: message)
-            hostingView.rootView = OverlayPillView(message: message, onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil)
+            let size = panelSize(for: message, showsCancelButton: onCancel != nil)
+            hostingView.rootView = OverlayPillView(
+                message: message,
+                onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil,
+                onCancel: onCancel
+            )
             panel.setContentSize(size)
-            panel.ignoresMouseEvents = message != .noSoundDetected
+            panel.ignoresMouseEvents = message != .noSoundDetected && onCancel == nil
             panel.contentViewController?.view.frame = NSRect(origin: .zero, size: size)
             hostingView.frame = NSRect(origin: .zero, size: size)
             position(panel: panel)
@@ -68,7 +72,7 @@ class RecordingOverlayController {
             return
         }
 
-        let size = panelSize(for: message)
+        let size = panelSize(for: message, showsCancelButton: onCancel != nil)
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.nonactivatingPanel, .borderless],
@@ -79,11 +83,15 @@ class RecordingOverlayController {
         panel.backgroundColor = .clear
         panel.level = .floating
         panel.hasShadow = true
-        panel.ignoresMouseEvents = message != .noSoundDetected
+        panel.ignoresMouseEvents = message != .noSoundDetected && onCancel == nil
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let container = NSView(frame: NSRect(origin: .zero, size: size))
-        let hosting = NSHostingView(rootView: OverlayPillView(message: message, onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil))
+        let hosting = NSHostingView(rootView: OverlayPillView(
+            message: message,
+            onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil,
+            onCancel: onCancel
+        ))
         hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
@@ -126,12 +134,12 @@ class RecordingOverlayController {
         }
     }
 
-    private func panelSize(for message: OverlayMessage) -> NSSize {
+    private func panelSize(for message: OverlayMessage, showsCancelButton: Bool) -> NSSize {
         switch message {
         case .clipboardFallback, .learnedCorrection, .noSoundDetected:
             return NSSize(width: 420, height: 84)
         default:
-            return NSSize(width: 300, height: 60)
+            return NSSize(width: showsCancelButton ? 330 : 300, height: 60)
         }
     }
 
@@ -153,6 +161,7 @@ class RecordingOverlayController {
 struct OverlayPillView: View {
     let message: OverlayMessage
     var onTap: (() -> Void)?
+    var onCancel: (() -> Void)?
     @State private var isPulsing = false
 
     private var dotColor: Color {
@@ -192,6 +201,7 @@ struct OverlayPillView: View {
                 Text(message.primaryText)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
 
                 if let secondaryText = message.secondaryText {
                     Text(secondaryText)
@@ -199,6 +209,20 @@ struct OverlayPillView: View {
                         .foregroundStyle(.white.opacity(0.8))
                         .lineLimit(2)
                 }
+            }
+
+            if let onCancel {
+                Spacer(minLength: 4)
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(.white.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .help("Cancel")
+                .accessibilityLabel("Cancel \(message.primaryText)")
             }
         }
         .padding(.horizontal, 16)

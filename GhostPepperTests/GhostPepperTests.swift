@@ -199,6 +199,16 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertFalse(panel?.contentView is NSHostingView<OverlayPillView>)
     }
 
+    func testRecordingOverlayAcceptsMouseEventsWhenCancelActionIsAvailable() {
+        let overlay = RecordingOverlayController()
+        overlay.show(message: .recording, onCancel: {})
+        defer { overlay.dismiss() }
+
+        let panel: NSPanel? = unwrapPrivateOptional(named: "panel", from: overlay)
+
+        XCTAssertEqual(panel?.ignoresMouseEvents, false)
+    }
+
     private func unwrapPrivateOptional<T>(named name: String, from object: Any) -> T? {
         let mirror = Mirror(reflecting: object)
         guard let child = mirror.children.first(where: { $0.label == name }) else {
@@ -921,6 +931,31 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(transcriptionSession.cancelCallCount, 1)
         XCTAssertEqual(transcriptionSession.finishCallCount, 0)
         XCTAssertEqual(batchTranscriptionCallCount, 0)
+    }
+
+    func testCancelActiveRecordingCancelsTranscriptionSessionAndReleasesPipeline() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        let transcriptionSession = FakeRecordingTranscriptionSession(finalTranscript: "streamed transcript")
+
+        appState.speechModel = SpeechModelCatalog.parakeetV3.id
+        appState.recordingTranscriptionSessionFactory = { _ in transcriptionSession }
+        XCTAssertTrue(appState.acquirePipeline(for: .liveRecording))
+        await appState.prepareRecordingSessionIfNeeded()
+        appState.status = .transcribing
+
+        await appState.cancelActiveRecording()
+
+        XCTAssertEqual(transcriptionSession.cancelCallCount, 1)
+        XCTAssertNil(appState.activeRecordingTranscriptionSession)
+        XCTAssertNil(appState.audioRecorder.onConvertedAudioChunk)
+        XCTAssertEqual(appState.status, .ready)
+        XCTAssertTrue(appState.acquirePipeline(for: .liveRecording))
     }
 
     func testAppStatePipelineOwnershipAllowsSingleOwnerAtATime() throws {

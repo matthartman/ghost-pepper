@@ -137,6 +137,8 @@ class AppState: ObservableObject {
     var cleanedTranscriptionResultOverride: ((String, OCRContext?) async -> CleanupResult)?
     private(set) var activeRecordingSessionCoordinator: RecordingSessionCoordinator?
     private(set) var activeRecordingTranscriptionSession: RecordingTranscriptionSession?
+    private var activeLiveRecordingToken: UUID?
+    private var cancelledLiveRecordingTokens: Set<UUID> = []
 
     var isReady: Bool {
         status == .ready
@@ -667,6 +669,42 @@ class AppState: ObservableObject {
         activeRecordingTranscriptionSession = nil
     }
 
+    private func clearRecordingAudioRouting() {
+        audioRecorder.onConvertedAudioChunk = nil
+    }
+
+    private func showCancelableLiveRecordingOverlay(message: OverlayMessage) {
+        overlay.show(message: message, onCancel: { [weak self] in
+            Task { @MainActor in
+                await self?.cancelActiveRecording()
+            }
+        })
+    }
+
+    private func shouldContinueLiveRecording(token: UUID?) -> Bool {
+        guard let token else {
+            return true
+        }
+
+        return activeLiveRecordingToken == token && cancelledLiveRecordingTokens.contains(token) == false
+    }
+
+    private func finishLiveRecording(token: UUID?) {
+        guard let token else {
+            clearRecordingSessionCoordinator()
+            releasePipeline(owner: .liveRecording)
+            return
+        }
+
+        if activeLiveRecordingToken == token {
+            activeLiveRecordingToken = nil
+            clearRecordingSessionCoordinator()
+            releasePipeline(owner: .liveRecording)
+        }
+
+        cancelledLiveRecordingTokens.remove(token)
+    }
+
     private var selectedSpeechModelSupportsSpeakerFiltering: Bool {
         SpeechModelCatalog.model(named: speechModel)?.supportsSpeakerFiltering == true
     }
@@ -695,6 +733,8 @@ class AppState: ObservableObject {
         }
 
         do {
+            let recordingToken = UUID()
+            activeLiveRecordingToken = recordingToken
             await prepareRecordingSessionIfNeeded()
             if cleanupEnabled && canAttemptCleanup && frontmostWindowContextEnabled {
                 recordingOCRPrefetch.start(customWords: ocrCustomWords)
@@ -715,10 +755,11 @@ class AppState: ObservableObject {
             try audioRecorder.startRecording()
             debugLogStore.record(category: .hotkey, message: "Recording started.")
             soundEffects.playStart()
-            overlay.show(message: .recording)
+            showCancelableLiveRecordingOverlay(message: .recording)
             isRecording = true
             status = .recording
         } catch {
+            activeLiveRecordingToken = nil
             recordingOCRPrefetch.cancel()
             releasePipeline(owner: .liveRecording)
             activePerformanceTrace = nil
@@ -733,17 +774,18 @@ class AppState: ObservableObject {
         guard status == .recording, !isTranscribing else { return }
         isTranscribing = true
         defer { isTranscribing = false }
+        let recordingToken = activeLiveRecordingToken
 
         debugLogStore.record(category: .hotkey, message: "Recording stopped. Starting transcription.")
         let buffer = await audioRecorder.stopRecording()
         let recordingSessionCoordinator = activeRecordingSessionCoordinator
         let recordingTranscriptionSession = activeRecordingTranscriptionSession
-        clearRecordingSessionCoordinator()
+        clearRecordingAudioRouting()
         soundEffects.playStop()
         mediaPlaybackController.resumeIfPaused()
         isRecording = false
         status = .transcribing
-        overlay.show(message: .transcribing)
+        showCancelableLiveRecordingOverlay(message: .transcribing)
         activePerformanceTrace?.transcriptionStartAt = Date()
         let windowContextProvider: WindowContextProvider?
         if frontmostWindowContextEnabled {
@@ -761,8 +803,16 @@ class AppState: ObservableObject {
             archivedWindowContext: nil,
             windowContextProvider: windowContextProvider,
             shouldPaste: true,
-            shouldRecordDebugSnapshot: true
+            shouldRecordDebugSnapshot: true,
+            shouldContinue: { [weak self] in
+                self?.shouldContinueLiveRecording(token: recordingToken) ?? false
+            }
         )
+
+        guard shouldContinueLiveRecording(token: recordingToken) else {
+            finishLiveRecording(token: recordingToken)
+            return
+        }
 
         if didProduceTranscript {
             overlay.dismiss(ifShowing: .transcribing)
@@ -780,6 +830,40 @@ class AppState: ObservableObject {
         }
 
         status = .ready
+        finishLiveRecording(token: recordingToken)
+    }
+
+    func cancelActiveRecording() async {
+        guard status == .recording || status == .transcribing || status == .cleaningUp else {
+            return
+        }
+
+        let recordingToken = activeLiveRecordingToken
+        if let recordingToken {
+            cancelledLiveRecordingTokens.insert(recordingToken)
+            activeLiveRecordingToken = nil
+        }
+
+        let wasRecording = isRecording
+        debugLogStore.record(category: .hotkey, message: "Recording cancelled from overlay.")
+        overlay.dismiss()
+        recordingOCRPrefetch.cancel()
+        textCleanupManager.cancelPromptPrefill()
+        activeRecordingTranscriptionSession?.cancel()
+        clearRecordingSessionCoordinator()
+        mediaPlaybackController.resumeIfPaused()
+        isRecording = false
+        isTranscribing = false
+        status = .ready
+
+        if wasRecording {
+            _ = await audioRecorder.stopRecording()
+            soundEffects.playStop()
+            if let recordingToken {
+                cancelledLiveRecordingTokens.remove(recordingToken)
+            }
+        }
+
         releasePipeline(owner: .liveRecording)
     }
 
@@ -808,16 +892,25 @@ class AppState: ObservableObject {
         archivedWindowContext: OCRContext?,
         windowContextProvider: WindowContextProvider?,
         shouldPaste: Bool,
-        shouldRecordDebugSnapshot: Bool
+        shouldRecordDebugSnapshot: Bool,
+        shouldContinue: () -> Bool = { true }
     ) async -> Bool {
         let transcriptionResult = await transcribedTextForRecording(
             audioBuffer,
             recordingSessionCoordinator: recordingSessionCoordinator,
-            recordingTranscriptionSession: recordingTranscriptionSession
+            recordingTranscriptionSession: recordingTranscriptionSession,
+            shouldContinue: shouldContinue
         )
+
+        guard shouldContinue() else {
+            return false
+        }
 
         guard let text = transcriptionResult.rawTranscription else {
             recordingOCRPrefetch.cancel()
+            guard shouldContinue() else {
+                return false
+            }
             await archiveRecordingForLab(
                 audioBuffer: audioBuffer,
                 windowContext: archivedWindowContext,
@@ -833,6 +926,9 @@ class AppState: ObservableObject {
         }
 
         activePerformanceTrace?.transcriptionEndAt = Date()
+        guard shouldContinue() else {
+            return false
+        }
         var windowContext = archivedWindowContext
         if cleanupEnabled && canAttemptCleanup {
             activeCleanupAttempted = true
@@ -842,10 +938,13 @@ class AppState: ObservableObject {
                 windowContext = resolvedWindowContext.context
                 activePerformanceTrace?.ocrCaptureDuration = resolvedWindowContext.elapsed
             }
+            guard shouldContinue() else {
+                return false
+            }
             activePerformanceTrace?.cleanupStartAt = Date()
             status = .cleaningUp
             if shouldPaste {
-                overlay.show(message: .cleaningUp)
+                showCancelableLiveRecordingOverlay(message: .cleaningUp)
             }
             if frontmostWindowContextEnabled, windowContext == nil {
                 debugLogStore.record(category: .ocr, message: "No frontmost-window OCR context was captured.")
@@ -859,6 +958,10 @@ class AppState: ObservableObject {
         activeCleanupAttempted = cleanupResult.attemptedCleanup
         if cleanupResult.attemptedCleanup {
             activePerformanceTrace?.cleanupEndAt = Date()
+        }
+
+        guard shouldContinue() else {
+            return false
         }
 
         await archiveRecordingForLab(
@@ -894,7 +997,8 @@ class AppState: ObservableObject {
     private func transcribedTextForRecording(
         _ audioBuffer: [Float],
         recordingSessionCoordinator: RecordingSessionCoordinator?,
-        recordingTranscriptionSession: RecordingTranscriptionSession?
+        recordingTranscriptionSession: RecordingTranscriptionSession?,
+        shouldContinue: () -> Bool
     ) async -> RecordingTranscriptionResult {
         let diarizationTask = recordingSessionCoordinator.map { coordinator in
             Task {
@@ -921,6 +1025,15 @@ class AppState: ObservableObject {
             let diarizationResult = await diarizationTask.value
             diarizationSummary = diarizationResult.summary
 
+            guard shouldContinue() else {
+                recordingTranscriptionSession?.cancel()
+                return RecordingTranscriptionResult(
+                    rawTranscription: nil,
+                    speakerFilteringRan: true,
+                    diarizationSummary: diarizationSummary
+                )
+            }
+
             if diarizationResult.summary.usedFallback == false,
                let filteredTranscript = diarizationResult.filteredTranscript?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -937,8 +1050,26 @@ class AppState: ObservableObject {
         if let streamedTranscriptTask,
            let streamedTranscript = await streamedTranscriptTask.value,
            streamedTranscript.isEmpty == false {
+            guard shouldContinue() else {
+                recordingTranscriptionSession?.cancel()
+                return RecordingTranscriptionResult(
+                    rawTranscription: nil,
+                    speakerFilteringRan: recordingSessionCoordinator != nil,
+                    diarizationSummary: diarizationSummary
+                )
+            }
+
             return RecordingTranscriptionResult(
                 rawTranscription: streamedTranscript,
+                speakerFilteringRan: recordingSessionCoordinator != nil,
+                diarizationSummary: diarizationSummary
+            )
+        }
+
+        guard shouldContinue() else {
+            recordingTranscriptionSession?.cancel()
+            return RecordingTranscriptionResult(
+                rawTranscription: nil,
                 speakerFilteringRan: recordingSessionCoordinator != nil,
                 diarizationSummary: diarizationSummary
             )
@@ -949,6 +1080,15 @@ class AppState: ObservableObject {
            let streamedTranscript = await recordingTranscriptionSession.finishTranscription()?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            streamedTranscript.isEmpty == false {
+            guard shouldContinue() else {
+                recordingTranscriptionSession.cancel()
+                return RecordingTranscriptionResult(
+                    rawTranscription: nil,
+                    speakerFilteringRan: recordingSessionCoordinator != nil,
+                    diarizationSummary: diarizationSummary
+                )
+            }
+
             return RecordingTranscriptionResult(
                 rawTranscription: streamedTranscript,
                 speakerFilteringRan: recordingSessionCoordinator != nil,
@@ -958,6 +1098,15 @@ class AppState: ObservableObject {
 
         if let recordingTranscriptionSession,
            recordingTranscriptionSession.allowsBatchFallback == false {
+            return RecordingTranscriptionResult(
+                rawTranscription: nil,
+                speakerFilteringRan: recordingSessionCoordinator != nil,
+                diarizationSummary: diarizationSummary
+            )
+        }
+
+        guard shouldContinue() else {
+            recordingTranscriptionSession?.cancel()
             return RecordingTranscriptionResult(
                 rawTranscription: nil,
                 speakerFilteringRan: recordingSessionCoordinator != nil,
