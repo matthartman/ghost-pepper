@@ -209,6 +209,16 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(panel?.ignoresMouseEvents, false)
     }
 
+    func testRecordingOverlaySizesCancelableActivePillToContent() throws {
+        let overlay = RecordingOverlayController()
+        overlay.show(message: .recording, onCancel: {})
+        defer { overlay.dismiss() }
+
+        let panel: NSPanel = try XCTUnwrap(unwrapPrivateOptional(named: "panel", from: overlay))
+
+        XCTAssertLessThan(panel.frame.width, 300)
+    }
+
     private func unwrapPrivateOptional<T>(named name: String, from object: Any) -> T? {
         let mirror = Mirror(reflecting: object)
         guard let child = mirror.children.first(where: { $0.label == name }) else {

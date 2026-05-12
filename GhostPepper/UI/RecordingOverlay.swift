@@ -53,14 +53,11 @@ class RecordingOverlayController {
     func show(message: OverlayMessage = .recording, onCancel: (() -> Void)? = nil) {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
+        let rootView = overlayView(message: message, onCancel: onCancel)
 
         if let hostingView = hostingView, let panel = panel {
-            let size = panelSize(for: message, showsCancelButton: onCancel != nil)
-            hostingView.rootView = OverlayPillView(
-                message: message,
-                onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil,
-                onCancel: onCancel
-            )
+            let size = panelSize(for: message, rootView: rootView)
+            hostingView.rootView = rootView
             panel.setContentSize(size)
             panel.ignoresMouseEvents = message != .noSoundDetected && onCancel == nil
             panel.contentViewController?.view.frame = NSRect(origin: .zero, size: size)
@@ -72,7 +69,7 @@ class RecordingOverlayController {
             return
         }
 
-        let size = panelSize(for: message, showsCancelButton: onCancel != nil)
+        let size = panelSize(for: message, rootView: rootView)
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.nonactivatingPanel, .borderless],
@@ -87,11 +84,7 @@ class RecordingOverlayController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let container = NSView(frame: NSRect(origin: .zero, size: size))
-        let hosting = NSHostingView(rootView: OverlayPillView(
-            message: message,
-            onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil,
-            onCancel: onCancel
-        ))
+        let hosting = NSHostingView(rootView: rootView)
         hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
@@ -134,12 +127,21 @@ class RecordingOverlayController {
         }
     }
 
-    private func panelSize(for message: OverlayMessage, showsCancelButton: Bool) -> NSSize {
+    private func overlayView(message: OverlayMessage, onCancel: (() -> Void)?) -> OverlayPillView {
+        OverlayPillView(
+            message: message,
+            onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil,
+            onCancel: onCancel
+        )
+    }
+
+    private func panelSize(for message: OverlayMessage, rootView: OverlayPillView) -> NSSize {
         switch message {
         case .clipboardFallback, .learnedCorrection, .noSoundDetected:
             return NSSize(width: 420, height: 84)
         default:
-            return NSSize(width: showsCancelButton ? 330 : 300, height: 60)
+            let measuringView = NSHostingView(rootView: rootView.fixedSize(horizontal: true, vertical: true))
+            return NSSize(width: ceil(measuringView.fittingSize.width), height: 60)
         }
     }
 
