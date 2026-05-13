@@ -15,6 +15,7 @@
 		0BC5D4645D21CA8AA000972E /* RecordingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A3540C6212101C885EA22CD /* RecordingOverlay.swift */; };
 		0CDA12F05A7C7464334FDD37 /* RecordingOCRPrefetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E9AADC67C525B0A9E382AB /* RecordingOCRPrefetch.swift */; };
 		0D32E8DDD47F77F86D9C1816 /* CleanupModelProbeRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B93B4F9F40EE6BD8525677 /* CleanupModelProbeRunnerTests.swift */; };
+		11681738E6EE0CAD79C1E1C0 /* ManagedPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95E0E28B2DF2BFF2309EC41B /* ManagedPreferences.swift */; };
 		11B19088ACBD174CFD3DD531 /* CleanupPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDC6FD42E70C7163E281332B /* CleanupPromptBuilder.swift */; };
 		17AF31EA19761CA8B7DF5F9A /* CleanupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0065F99395EEC3EB77997C2C /* CleanupSettings.swift */; };
 		194F5FBCC55E0EA3E0351C15 /* SpeechModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD317A8D8E749E5596734DB7 /* SpeechModelCatalog.swift */; };
@@ -253,6 +254,7 @@
 		94DD151A4D6F1474F4F138FD /* GhostPepper.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GhostPepper.entitlements; sourceTree = "<group>"; };
 		94E9AADC67C525B0A9E382AB /* RecordingOCRPrefetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOCRPrefetch.swift; sourceTree = "<group>"; };
 		95281DF90A125CA223FCEE7A /* ContextBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBubbleView.swift; sourceTree = "<group>"; };
+		95E0E28B2DF2BFF2309EC41B /* ManagedPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManagedPreferences.swift; sourceTree = "<group>"; };
 		960D35875D60655B17574DF8 /* AudioRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderTests.swift; sourceTree = "<group>"; };
 		97408213D206AAF1B1C29FFC /* PepperChatBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PepperChatBackend.swift; sourceTree = "<group>"; };
 		9A3540C6212101C885EA22CD /* RecordingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOverlay.swift; sourceTree = "<group>"; };
@@ -381,6 +383,7 @@
 				94DD151A4D6F1474F4F138FD /* GhostPepper.entitlements */,
 				DF9AE24266DDCCADE832CF33 /* GhostPepperApp.swift */,
 				2ADE6885C71A11CEC8B2A50E /* Info.plist */,
+				95E0E28B2DF2BFF2309EC41B /* ManagedPreferences.swift */,
 				CC0F71B32FF6973FD42639C7 /* ModelInventory.swift */,
 				AC1BDC9C549491AC003117EC /* PermissionChecker.swift */,
 				84630A373DA596D94B45E867 /* Secrets.example */,
@@ -757,7 +760,6 @@
 				};
 			};
 			buildConfigurationList = 4DD304029FEB6147483470FD /* Build configuration list for PBXProject "GhostPepper" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -773,6 +775,7 @@
 				E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
 			preferredProjectObjectVersion = 77;
+			productRefGroup = 3705D6F7BCD01CB7D37DF812 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -841,6 +844,7 @@
 				BF329CF451CC34A3B74348CC /* HotkeyMonitor.swift in Sources */,
 				77089185C9C0C0EDC4536F0A /* KeyChord.swift in Sources */,
 				CC795C47BAF8CEF62790BAFF /* LocalLLMCleanupBackend.swift in Sources */,
+				11681738E6EE0CAD79C1E1C0 /* ManagedPreferences.swift in Sources */,
 				FCEE3C748338E66F1246B917 /* MediaPlaybackController.swift in Sources */,
 				47B377ADA2B2F12226744122 /* MeetingDetector.swift in Sources */,
 				C6F4C6C95E2835A2EEB58861 /* MeetingHistory.swift in Sources */,

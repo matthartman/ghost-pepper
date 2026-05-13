@@ -1817,11 +1817,13 @@ struct SettingsView: View {
                         "Enable meeting transcription",
                         isOn: $appState.meetingTranscriptEnabled
                     )
+                    .managedByMDM("meetingTranscriptEnabled")
                     .onChange(of: appState.meetingTranscriptEnabled) { _, _ in
                         appState.setupMeetingDetector()
                     }
 
                     Text("When enabled, Ghost Pepper can detect video calls and offer to transcribe them locally. Requires Screen Recording permission for system audio capture.")
+                        .appendingManagedNote(if: "meetingTranscriptEnabled")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -1830,11 +1832,13 @@ struct SettingsView: View {
                             "Auto-detect meeting apps",
                             isOn: $appState.meetingAutoDetectEnabled
                         )
+                        .managedByMDM("meetingAutoDetectEnabled")
                         .onChange(of: appState.meetingAutoDetectEnabled) { _, _ in
                             appState.setupMeetingDetector()
                         }
 
                         Text("Monitors for Zoom, Teams, FaceTime, Meet, and other call apps. When detected, the pepper character will ask if you'd like to transcribe.")
+                            .appendingManagedNote(if: "meetingAutoDetectEnabled")
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
