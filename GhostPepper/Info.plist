@@ -2,34 +2,34 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
-    <key>CFBundleName</key>
-    <string>Ghost Pepper</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.github.matthartman.ghostpepper</string>
-    <key>CFBundleVersion</key>
-    <string>17</string>
-    <key>CFBundleShortVersionString</key>
-    <string>2.3.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>SUFeedURL</key>
-    <string>https://raw.githubusercontent.com/matthartman/ghost-pepper/main/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>aU72TC8lOwqKtnWlwAkT8z7LhIvB+LRnUNRNNw9DmDQ=</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>Google OAuth Callback</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>com.github.matthartman.ghostpepper</string>
-            </array>
-        </dict>
-    </array>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Ghost Pepper needs microphone access to record your voice for transcription.</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.github.matthartman.ghostpepper</string>
+	<key>CFBundleName</key>
+	<string>Ghost Pepper</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2.4.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Google OAuth Callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.github.matthartman.ghostpepper</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>18</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ghost Pepper needs microphone access to record your voice for transcription.</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/matthartman/ghost-pepper/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>aU72TC8lOwqKtnWlwAkT8z7LhIvB+LRnUNRNNw9DmDQ=</string>
 </dict>
 </plist>
