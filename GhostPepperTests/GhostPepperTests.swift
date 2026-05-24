@@ -231,6 +231,36 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertTrue(window?.isVisible ?? false)
     }
 
+    func testMeetingDetectorStartDoesNotCreatePollingTimer() {
+        let detector = MeetingDetector()
+        detector.start()
+        defer { detector.stop() }
+
+        let pollTimer: Timer? = unwrapPrivateOptional(named: "pollTimer", from: detector)
+        XCTAssertNil(pollTimer)
+    }
+
+    func testMeetingDetectorStartObservesForegroundApplicationChanges() {
+        let detector = MeetingDetector()
+        detector.start()
+        defer { detector.stop() }
+
+        let activationObserver: NSObjectProtocol? = unwrapPrivateOptional(
+            named: "activationObserver",
+            from: detector
+        )
+        XCTAssertNotNil(activationObserver)
+    }
+
+    func testMeetingDetectorStopRemovesActivationObserver() {
+        let detector = MeetingDetector()
+        detector.start()
+
+        detector.stop()
+
+        XCTAssertTrue(isPrivateOptionalNil(named: "activationObserver", from: detector))
+    }
+
     private func unwrapPrivateOptional<T>(named name: String, from object: Any) -> T? {
         let mirror = Mirror(reflecting: object)
         guard let child = mirror.children.first(where: { $0.label == name }) else {
@@ -243,6 +273,16 @@ final class GhostPepperTests: XCTestCase {
         }
 
         return optionalMirror.children.first?.value as? T
+    }
+
+    private func isPrivateOptionalNil(named name: String, from object: Any) -> Bool {
+        let mirror = Mirror(reflecting: object)
+        guard let child = mirror.children.first(where: { $0.label == name }) else {
+            return true
+        }
+
+        let optionalMirror = Mirror(reflecting: child.value)
+        return optionalMirror.displayStyle == .optional && optionalMirror.children.isEmpty
     }
 
     func testAppStateLoadsDefaultShortcutBindingsIntoHotkeyMonitor() async throws {

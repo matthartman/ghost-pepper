@@ -17,7 +17,7 @@ struct DetectedMeeting {
 final class MeetingDetector {
     var onMeetingDetected: ((DetectedMeeting) -> Void)?
 
-    private var pollTimer: Timer?
+    private var activationObserver: NSObjectProtocol?
     private var isRunning = false
 
     /// Bundle IDs that have been detected and dismissed this session (don't re-prompt).
@@ -81,25 +81,30 @@ final class MeetingDetector {
         "com.operasoftware.Opera",
     ]
 
-    /// Start polling for meeting apps.
+    /// Start watching foreground app changes for meeting apps.
     func start() {
         guard !isRunning else { return }
         isRunning = true
 
-        // Poll every 5 seconds — cheap operation.
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.checkForMeetingApps()
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+                return
+            }
+            self?.checkForMeetingApps(application: application)
         }
-
-        // Also check immediately.
-        checkForMeetingApps()
     }
 
-    /// Stop polling.
+    /// Stop watching foreground app changes.
     func stop() {
         isRunning = false
-        pollTimer?.invalidate()
-        pollTimer = nil
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+        }
+        activationObserver = nil
     }
 
     /// Mark a meeting app as dismissed so we don't prompt again this session.
@@ -114,9 +119,8 @@ final class MeetingDetector {
 
     // MARK: - Private
 
-    private func checkForMeetingApps() {
-        guard let frontmost = NSWorkspace.shared.frontmostApplication,
-              let frontmostBundleID = frontmost.bundleIdentifier else { return }
+    private func checkForMeetingApps(application frontmost: NSRunningApplication) {
+        guard let frontmostBundleID = frontmost.bundleIdentifier else { return }
 
         // Check known meeting apps — only when frontmost to avoid false positives
         // from Zoom/Teams running in the background.
