@@ -41,6 +41,10 @@ enum OverlayMessage: Equatable {
             return nil
         }
     }
+
+    var pulsesDot: Bool {
+        self == .recording
+    }
 }
 
 class RecordingOverlayController {
@@ -103,7 +107,8 @@ class RecordingOverlayController {
     func dismiss() {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
-        panel?.orderOut(nil)
+        panel?.contentViewController = nil
+        panel?.close()
         panel = nil
         hostingView = nil
         currentMessage = nil
@@ -184,8 +189,11 @@ struct OverlayPillView: View {
                 Circle()
                     .fill(dotColor)
                     .frame(width: 10, height: 10)
-                    .opacity(isPulsing ? 0.4 : 1.0)
-                    .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: isPulsing)
+                    .opacity(message.pulsesDot && isPulsing ? 0.4 : 1.0)
+                    .animation(
+                        message.pulsesDot ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true) : nil,
+                        value: isPulsing
+                    )
             }
 
             VStack(alignment: .leading, spacing: 2) {

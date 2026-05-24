@@ -182,6 +182,13 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(OverlayMessage.clipboardFallback.secondaryText, "⌘V to paste")
     }
 
+    func testOnlyRecordingOverlayMessagePulsesDot() {
+        XCTAssertTrue(OverlayMessage.recording.pulsesDot)
+        XCTAssertFalse(OverlayMessage.cleaningUp.pulsesDot)
+        XCTAssertFalse(OverlayMessage.transcribing.pulsesDot)
+        XCTAssertFalse(OverlayMessage.noSoundDetected.pulsesDot)
+    }
+
     func testOverlayHostingViewDoesNotManageWindowSizingConstraints() {
         let overlay = RecordingOverlayController()
         overlay.show(message: .recording)
@@ -1416,6 +1423,24 @@ final class GhostPepperTests: XCTestCase {
         }
 
         XCTAssertNotNil(panel.contentViewController)
+    }
+
+    func testRecordingOverlayDismissDetachesPanelContent() throws {
+        let overlay = RecordingOverlayController()
+        let existingWindowNumbers = Set(NSApp.windows.map(\.windowNumber))
+
+        overlay.show(message: .cleaningUp)
+        let panel = try XCTUnwrap(
+            NSApp.windows
+                .filter { !existingWindowNumbers.contains($0.windowNumber) }
+                .compactMap { $0 as? NSPanel }
+                .first
+        )
+
+        overlay.dismiss(ifShowing: .cleaningUp)
+
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertNil(panel.contentViewController)
     }
 
     func testAppStateLoadsPersistedCorrectionSettingsIntoStore() throws {
