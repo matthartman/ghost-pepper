@@ -9,11 +9,13 @@ private final class PepperChatPanel: NSPanel {
 final class PepperChatWindowController: NSObject, NSWindowDelegate {
     private var window: NSPanel?
     private var isMinimized = false
+    private weak var activeSession: PepperChatSession?
     var onOpenInMeetings: ((URL) -> Void)?
     var onSendToTrello: ((String, String?) -> Void)?
     var isTrelloConfigured: () -> Bool = { false }
 
     func show(session: PepperChatSession) {
+        activeSession = session
         if let window {
             if isMinimized {
                 popUp()
@@ -72,7 +74,12 @@ final class PepperChatWindowController: NSObject, NSWindowDelegate {
     }
 
     func popUp() {
-        guard let window else { return }
+        guard let window else {
+            if let activeSession {
+                show(session: activeSession)
+            }
+            return
+        }
         isMinimized = false
         window.alphaValue = 0
         window.makeKeyAndOrderFront(nil)
@@ -90,8 +97,10 @@ final class PepperChatWindowController: NSObject, NSWindowDelegate {
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            window.orderOut(nil)
             self?.isMinimized = true
+            window.contentViewController = nil
+            window.close()
+            self?.window = nil
         })
     }
 

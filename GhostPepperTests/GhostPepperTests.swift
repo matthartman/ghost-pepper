@@ -206,6 +206,31 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertFalse(panel?.contentView is NSHostingView<OverlayPillView>)
     }
 
+    func testPepperChatMinimizeReleasesHostedContent() async throws {
+        let controller = PepperChatWindowController()
+        let session = PepperChatSession(transcriber: SpeechTranscriber(modelManager: ModelManager()))
+        controller.show(session: session)
+
+        controller.minimize()
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let window: NSPanel? = unwrapPrivateOptional(named: "window", from: controller)
+        XCTAssertNil(window)
+    }
+
+    func testPepperChatShowIfOpenRestoresMinimizedWindow() async throws {
+        let controller = PepperChatWindowController()
+        let session = PepperChatSession(transcriber: SpeechTranscriber(modelManager: ModelManager()))
+        controller.show(session: session)
+        controller.minimize()
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        controller.showIfOpen()
+
+        let window: NSPanel? = unwrapPrivateOptional(named: "window", from: controller)
+        XCTAssertTrue(window?.isVisible ?? false)
+    }
+
     private func unwrapPrivateOptional<T>(named name: String, from object: Any) -> T? {
         let mirror = Mirror(reflecting: object)
         guard let child = mirror.children.first(where: { $0.label == name }) else {
