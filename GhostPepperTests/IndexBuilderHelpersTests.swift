@@ -41,6 +41,6 @@ final class IndexBuilderHelpersTests: XCTestCase {
     func testIndexingToolDefinitionsContainsAllFour() {
         let tools = IndexBuilder.indexingToolDefinitions()
         let names = Set(tools.map { $0.name })
-        XCTAssertEqual(names, Set(["grep", "read_file", "list_dir", "write_file"]))
+        XCTAssertEqual(names, Set(["qmd_search", "read_file", "list_dir", "write_file"]))
     }
 }

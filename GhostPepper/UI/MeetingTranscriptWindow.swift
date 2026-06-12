@@ -640,6 +640,7 @@ struct MeetingRootView: View {
     @StateObject private var qaTranscript: QATranscript = QATranscript()
     @State private var currentQATask: Task<Void, Never>? = nil
     @State private var isApplyingDossier: Bool = false
+    @State private var copiedQATurnID: UUID? = nil
     @AppStorage("agentBackend") private var qaAgentBackendStorage: String = "claude:\(ClaudeAPIModel.sonnet.rawValue)"
     @State private var showCommandKSearch: Bool = false
     @State private var showQAMentionSheet: Bool = false
@@ -1110,14 +1111,37 @@ struct MeetingRootView: View {
                         .foregroundStyle(.secondary)
                 }
             } else if !turn.answer.isEmpty {
-                QAAnswerView(source: turn.answer, onLink: handleAnswerLink)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .top, spacing: 6) {
+                    QAAnswerView(source: turn.answer, onLink: handleAnswerLink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button(action: { copyQAAnswer(turn) }) {
+                        Image(systemName: copiedQATurnID == turn.id ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(copiedQATurnID == turn.id ? .green : .secondary)
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .help(copiedQATurnID == turn.id ? "Copied" : "Copy full answer")
+                    .disabled(turn.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
                 if let usage = turn.usage {
                     Text(usageFooterText(usage))
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+
+    private func copyQAAnswer(_ turn: QATurn) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(turn.answer, forType: .string)
+        copiedQATurnID = turn.id
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if copiedQATurnID == turn.id {
+                copiedQATurnID = nil
             }
         }
     }
@@ -1180,12 +1204,7 @@ struct MeetingRootView: View {
     }
 
     private func localPickerLabel(for kind: LocalCleanupModelKind) -> String {
-        switch kind {
-        case .qwen35_0_8b_q4_k_m: return "Qwen 3.5 0.8B (local)"
-        case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B (local)"
-        case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B (local)"
-        case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B (local)"
-        }
+        "\(kind.qaPickerDisplayName) local"
     }
 
     private func formatTraceLine(_ event: QAEvent) -> String {
@@ -1208,7 +1227,7 @@ struct MeetingRootView: View {
 
     private func formatToolStatusLine(name: String, summary: String) -> String {
         switch name {
-        case "grep": return "Searching: \(summary)"
+        case "qmd_search", "grep": return "Searching: \(summary)"
         case "read_file": return "Reading \(summary)"
         case "list_dir": return "Listing \(summary)"
         default: return "\(name): \(summary)"

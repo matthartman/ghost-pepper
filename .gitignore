@@ -13,6 +13,17 @@ Resources/models/
 Config/LocalSigning.xcconfig
 GhostPepper/Secrets.swift
 
+# Local Codex project memory/config
+.codex/
+
+# Local agent/skill tooling and settings (not shared)
+.claude/
+.agents/
+skills-lock.json
+
+# qmd search index (generated at runtime; not shipped — see build-dmg.sh)
+.qmd/
+
 # macOS
 .DS_Store
 

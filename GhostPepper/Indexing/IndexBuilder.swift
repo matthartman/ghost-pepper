@@ -10,15 +10,15 @@ import CryptoKit
 /// so two close-together meeting stops can't race on the same dossier file.
 @MainActor
 final class IndexBuilder {
-    private let provider: AnthropicProvider
-    private let model: ClaudeAPIModel
+    private let provider: LLMProvider
+    let backend: AgentBackend
     private let saveDir: URL
 
     private var perKindChain: [IndexKind: Task<Void, Never>] = [:]
 
-    init(provider: AnthropicProvider, model: ClaudeAPIModel, saveDir: URL) {
+    init(provider: LLMProvider, backend: AgentBackend, saveDir: URL) {
         self.provider = provider
-        self.model = model
+        self.backend = backend
         self.saveDir = saveDir
     }
 
@@ -35,7 +35,7 @@ final class IndexBuilder {
         let url = MarkdownArchivePaths.entryURL(in: saveDir, kind: kind, slug: slug)
         guard var entry = try? IndexEntryFile.read(from: url) else { return }
         entry.generation = GenerationMetadata(
-            model: model.rawValue,
+            model: backend.encoded,
             promptKind: promptKind,
             promptHash: promptHash,
             generatedAt: Date()
@@ -97,13 +97,15 @@ final class IndexBuilder {
             switch event {
             case .textDelta(let delta):
                 merged += delta
-            case .toolUse, .stop:
+            case .toolUse, .malformedToolCall, .stop:
+                // Merge is a pure-generation call with no tools; ignore any
+                // (mal)formed tool-call noise a local model might emit.
                 break
             }
         }
         let body = merged.trimmingCharacters(in: .whitespacesAndNewlines)
         let generation = GenerationMetadata(
-            model: model.rawValue,
+            model: backend.encoded,
             promptKind: "merge-dossier-body",
             promptHash: Self.hashPrompt(system),
             generatedAt: Date()
@@ -122,14 +124,21 @@ final class IndexBuilder {
         let covered = Self.coveredMeetings(in: saveDir, kind: kind)
         let unprocessedCount = allMeetings.filter { !covered.contains($0) }.count
         let existingEntries = Self.countExistingEntries(in: saveDir, kind: kind)
-        let range = ClaudePricing.estimateBuildCostRange(model: model, meetingCount: unprocessedCount)
+        // Local models are free; only Claude has a per-token cost to estimate.
+        let range: (low: Double, high: Double)
+        switch backend {
+        case .claude(let model):
+            range = ClaudePricing.estimateBuildCostRange(model: model, meetingCount: unprocessedCount)
+        case .local:
+            range = (0, 0)
+        }
         return IndexBuildEstimate(
             totalMeetingCount: allMeetings.count,
             alreadyProcessedCount: allMeetings.count - unprocessedCount,
             existingEntryCount: existingEntries,
             likelyLowUSD: range.low,
             likelyHighUSD: range.high,
-            modelDisplayName: model.shortDisplayName
+            modelDisplayName: backend.shortDisplayName
         )
     }
 
@@ -377,14 +386,16 @@ final class IndexBuilder {
     private func makeAgent(systemPrompt: String, indexRoot: URL) -> MeetingQAAgent {
         let readTools = MeetingQATools(root: saveDir)
         let writeTools = MeetingQATools(root: indexRoot)
+        let searchHandler: AgentToolHandler = { input in
+            let query = (input["query"] as? String) ?? (input["pattern"] as? String) ?? ""
+            let path = input["path"] as? String
+            let caseInsensitive = (input["case_insensitive"] as? Bool) ?? true
+            let maxResults = (input["max_results"] as? Int) ?? 50
+            return try await readTools.qmdSearch(query: query, path: path, caseInsensitive: caseInsensitive, maxResults: maxResults)
+        }
         let handlers: [String: AgentToolHandler] = [
-            "grep": { input in
-                let pattern = (input["pattern"] as? String) ?? ""
-                let path = input["path"] as? String
-                let caseInsensitive = (input["case_insensitive"] as? Bool) ?? true
-                let maxResults = (input["max_results"] as? Int) ?? 50
-                return try await readTools.grep(pattern: pattern, path: path, caseInsensitive: caseInsensitive, maxResults: maxResults)
-            },
+            "qmd_search": searchHandler,
+            "grep": searchHandler,
             "read_file": { input in
                 let path = (input["path"] as? String) ?? ""
                 let offset = (input["offset"] as? Int) ?? 1
@@ -403,7 +414,7 @@ final class IndexBuilder {
         ]
         return MeetingQAAgent(
             provider: provider,
-            backend: .claude(model),
+            backend: backend,
             systemPrompt: systemPrompt,
             toolHandlers: handlers,
             toolDefinitions: Self.indexingToolDefinitions(),
@@ -502,7 +513,7 @@ final class IndexBuilder {
 
         \(preview)\(suffix)
 
-        Use `list_dir` and `grep` to explore the rest yourself, then `write_file` one dossier per canonical person.
+        Use `list_dir` and `qmd_search` to explore the rest yourself, then `write_file` one dossier per canonical person.
         """
     }
 }

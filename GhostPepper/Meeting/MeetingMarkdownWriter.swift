@@ -33,6 +33,9 @@ struct MeetingMarkdownWriter {
         if let articleBody = transcript.articleBody {
             return renderReaderMarkdown(transcript: transcript, articleBody: articleBody)
         }
+        if transcript.importedFrom?.lowercased() == "granola" {
+            return renderImportedGranolaMarkdown(transcript: transcript)
+        }
         return renderMeetingMarkdown(transcript: transcript)
     }
 
@@ -101,6 +104,59 @@ struct MeetingMarkdownWriter {
     }
 
     @MainActor
+    private static func renderImportedGranolaMarkdown(transcript: MeetingTranscript) -> String {
+        var lines: [String] = []
+
+        lines.append("---")
+        lines.append("title: \"\(escapeYAMLString(transcript.meetingName))\"")
+        if let importedDateString = transcript.importedDateString, !importedDateString.isEmpty {
+            lines.append("date: \"\(escapeYAMLString(importedDateString))\"")
+        } else {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            lines.append("date: \"\(iso.string(from: transcript.startDate))\"")
+        }
+        if let granolaId = transcript.granolaId, !granolaId.isEmpty {
+            lines.append("granola_id: \"\(escapeYAMLString(granolaId))\"")
+        }
+        lines.append("source_type: meeting")
+        lines.append("imported_from: granola")
+        lines.append("---")
+        lines.append("")
+
+        lines.append("# \(transcript.meetingName)")
+        lines.append("")
+
+        if let summary = transcript.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("## Summary")
+            lines.append("")
+            lines.append(summary)
+            lines.append("")
+        }
+
+        if !transcript.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("## Notes")
+            lines.append("")
+            lines.append(transcript.notes)
+            lines.append("")
+        }
+
+        let rawTranscript = transcript.rawTranscriptMarkdown?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !rawTranscript.isEmpty || !transcript.segments.isEmpty {
+            lines.append("## Transcript")
+            lines.append("")
+            if !rawTranscript.isEmpty {
+                lines.append(rawTranscript)
+            } else {
+                appendRenderedTranscriptSegments(transcript.segments, to: &lines)
+            }
+            lines.append("")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    @MainActor
     private static func renderReaderMarkdown(transcript: MeetingTranscript, articleBody: String) -> String {
         var lines: [String] = []
 
@@ -157,6 +213,8 @@ struct MeetingMarkdownWriter {
         var article = ""
         var importedFrom: String?
         var sourceURL: String?
+        var granolaId: String?
+        var importedDateString: String?
         var inFrontmatter = false
         var frontmatterSeen = false
         var inNotes = false
@@ -165,6 +223,7 @@ struct MeetingMarkdownWriter {
         var inChapters = false
         var inArticle = false
         var transcriptLines: [String] = []
+        var transcriptSectionLines: [String] = []
 
         for line in lines {
             // Parse YAML frontmatter (--- blocks)
@@ -179,11 +238,16 @@ struct MeetingMarkdownWriter {
                 }
             }
             if inFrontmatter {
-                if line.hasPrefix("imported_from:") {
-                    importedFrom = line.replacingOccurrences(of: "imported_from:", with: "").trimmingCharacters(in: .whitespaces)
-                }
-                if line.hasPrefix("source:") {
-                    sourceURL = line.replacingOccurrences(of: "source:", with: "").trimmingCharacters(in: .whitespaces)
+                if let value = frontmatterValue(from: line, key: "title"), title == fileURL.deletingPathExtension().lastPathComponent {
+                    title = value
+                } else if let value = frontmatterValue(from: line, key: "date") {
+                    importedDateString = value
+                } else if let value = frontmatterValue(from: line, key: "granola_id") {
+                    granolaId = value
+                } else if let value = frontmatterValue(from: line, key: "imported_from") {
+                    importedFrom = value
+                } else if let value = frontmatterValue(from: line, key: "source") {
+                    sourceURL = value
                 }
                 continue
             }
@@ -224,6 +288,7 @@ struct MeetingMarkdownWriter {
                 notes += (notes.isEmpty ? "" : "\n") + line
             }
             if inTranscript {
+                transcriptSectionLines.append(line)
                 if line == "*No transcript yet.*" { continue }
                 if !line.isEmpty {
                     transcriptLines.append(line)
@@ -237,7 +302,8 @@ struct MeetingMarkdownWriter {
             }
         }
 
-        let transcript = MeetingTranscript(meetingName: title)
+        let startDate = importedDateString.flatMap(parseImportedDate) ?? Date()
+        let transcript = MeetingTranscript(meetingName: title, startDate: startDate)
         transcript.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript.summary = trimmedSummary.isEmpty ? nil : trimmedSummary
@@ -245,6 +311,12 @@ struct MeetingMarkdownWriter {
         transcript.articleBody = trimmedArticle.isEmpty ? nil : trimmedArticle
         transcript.importedFrom = importedFrom
         transcript.sourceURL = sourceURL
+        transcript.granolaId = granolaId
+        transcript.importedDateString = importedDateString
+        let rawTranscript = transcriptSectionLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !rawTranscript.isEmpty && rawTranscript != "*No transcript yet.*" {
+            transcript.rawTranscriptMarkdown = rawTranscript
+        }
 
         // Parse transcript lines: **[00:00] Me:** text
         for line in transcriptLines {
@@ -331,6 +403,39 @@ struct MeetingMarkdownWriter {
     }
 
     // MARK: - Helpers
+
+    private static func appendRenderedTranscriptSegments(_ segments: [TranscriptSegment], to lines: inout [String]) {
+        for segment in segments {
+            let timestamp = segment.formattedTimestamp
+            let speaker = segment.speaker.displayName
+            lines.append("**[\(timestamp)] \(speaker):** \(segment.text)  ")
+        }
+    }
+
+    private static func frontmatterValue(from line: String, key: String) -> String? {
+        let prefix = "\(key):"
+        guard line.hasPrefix(prefix) else { return nil }
+        var value = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
+            value.removeFirst()
+            value.removeLast()
+        }
+        return value.replacingOccurrences(of: "\\\"", with: "\"")
+    }
+
+    private static func escapeYAMLString(_ value: String) -> String {
+        value.replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func parseImportedDate(_ value: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: value) {
+            return date
+        }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: value)
+    }
 
     /// Formats a date as "2026-04-07" for folder names.
     private static func dateFolderName(for date: Date) -> String {

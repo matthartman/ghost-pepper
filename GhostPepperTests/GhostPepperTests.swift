@@ -151,6 +151,49 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(AppStatus.error.rawValue, "Error")
     }
 
+    func testUpdateSurveyPromptSkipsFirstLaunchButRecordsVersion() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        let policy = UpdateSurveyPromptPolicy(defaults: defaults)
+
+        XCTAssertFalse(policy.shouldPromptAfterLaunch(currentVersion: "2.4.0"))
+        XCTAssertEqual(
+            defaults.string(forKey: UpdateSurveyPromptPolicy.lastLaunchedVersionKey),
+            "2.4.0"
+        )
+        XCTAssertNil(defaults.string(forKey: UpdateSurveyPromptPolicy.lastPromptedVersionKey))
+    }
+
+    func testUpdateSurveyPromptShowsOnceAfterVersionChange() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        defaults.set("2.3.0", forKey: UpdateSurveyPromptPolicy.lastLaunchedVersionKey)
+        let policy = UpdateSurveyPromptPolicy(defaults: defaults)
+
+        XCTAssertTrue(policy.shouldPromptAfterLaunch(currentVersion: "2.4.0"))
+        XCTAssertEqual(
+            defaults.string(forKey: UpdateSurveyPromptPolicy.lastPromptedVersionKey),
+            "2.4.0"
+        )
+        XCTAssertFalse(policy.shouldPromptAfterLaunch(currentVersion: "2.4.0"))
+    }
+
+    func testUpdateSurveyPromptUsesPendingSparkleInstallVersion() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        let policy = UpdateSurveyPromptPolicy(defaults: defaults)
+        policy.markPendingSurveyPrompt(forVersion: "2.4.0")
+
+        XCTAssertTrue(policy.shouldPromptAfterLaunch(currentVersion: "2.4.0"))
+        XCTAssertNil(defaults.string(forKey: UpdateSurveyPromptPolicy.pendingUpdatedVersionKey))
+    }
+
     func testEmptyTranscriptionDispositionCancelsSubThresholdRecordings() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 7_999),

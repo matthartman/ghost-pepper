@@ -40,6 +40,10 @@ struct LocalLLMProvider: LLMProvider {
                             let id = "qtu_\(idCounter)_\(Int(Date().timeIntervalSince1970 * 1000))"
                             emittedToolCall = true
                             continuation.yield(.toolUse(id: id, name: name, input: input))
+                        case .malformedToolCall(let raw):
+                            // Don't surface to the user as text; let the agent
+                            // loop decide to re-prompt.
+                            continuation.yield(.malformedToolCall(raw: raw))
                         }
                     }
                 }
@@ -124,7 +128,13 @@ struct LocalLLMProvider: LLMProvider {
             {"name": "<tool name>", "arguments": {<json arguments>}}
             </tool_call>
 
-            You may emit multiple tool_call blocks in a single turn. After each round of tools, the user message will contain <tool_response> blocks with the results — read them and either continue answering or call more tools. When you've gathered enough information, write your final answer in plain text with no tool_call tags.
+            When the user asks about meetings, transcripts, people in the archive, dates, or timelines, do not answer from memory and do not describe a plan. Emit a tool_call first.
+            Good first call for person timelines:
+            <tool_call>
+            {"name":"qmd_search","arguments":{"query":"Person Full Name","case_insensitive":true,"max_results":50}}
+            </tool_call>
+
+            You may emit multiple tool_call blocks in a single turn. After each round of tools, the user message will contain <tool_response> blocks with the results — read them and either continue answering or call more tools. When you've gathered enough information, write your final answer in plain text with no tool_call tags and no hidden analysis.
             """
         }
         body += "\n"

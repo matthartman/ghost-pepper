@@ -3,9 +3,9 @@ import AppKit
 
 /// Renders a single dossier entry. The body is parsed as markdown blocks
 /// (headers, paragraphs, bullet lists) and rendered with appropriate styles.
-/// `[[Wikilinks]]` are rewritten as `wikilink://<slug>` links so SwiftUI's
-/// AttributedString link rendering keeps them tappable inside flowing text;
-/// taps are intercepted via `.environment(\.openURL, ...)`.
+/// `[[Wikilinks]]` and meeting-path mentions are rewritten as custom links so
+/// SwiftUI's AttributedString link rendering keeps them tappable inside flowing
+/// text; taps are intercepted via `.environment(\.openURL, ...)`.
 struct IndexEntryView: View {
     let entry: IndexEntry
     let saveDir: URL
@@ -47,6 +47,12 @@ struct IndexEntryView: View {
                 } else {
                     onOpenEntry(entry.kind, slug)
                 }
+                return .handled
+            }
+            if url.scheme == "gp", url.host == "meeting" {
+                let relativePath = url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
+                guard !relativePath.isEmpty else { return .discarded }
+                onOpenMeetingInNewTab(relativePath)
                 return .handled
             }
             return .systemAction
@@ -143,13 +149,11 @@ struct IndexEntryView: View {
                 .font(headingFont(for: level))
                 .padding(.top, level <= 2 ? 8 : 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
         case .paragraph(let text):
             inlineText(text)
                 .font(.system(size: 14))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
         case .bulletList(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -161,7 +165,6 @@ struct IndexEntryView: View {
                             .font(.system(size: 14))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
                     }
                 }
             }
@@ -176,12 +179,11 @@ struct IndexEntryView: View {
         }
     }
 
-    /// Renders inline markdown with `[[Wikilink]]` rewritten as
-    /// `[Wikilink](wikilink://slug)` so SwiftUI's AttributedString link parser
-    /// keeps the link tappable inside flowing text. Taps are routed via the
-    /// openURL environment override at the view root.
+    /// Renders inline markdown after rewriting dossier wikilinks and meeting
+    /// path mentions into custom URLs. Taps are routed via the openURL
+    /// environment override at the view root.
     private func inlineText(_ text: String) -> Text {
-        let transformed = Self.transformWikilinks(text)
+        let transformed = IndexEntryInlineLinks.preprocess(text)
         if let attributed = try? AttributedString(
             markdown: transformed,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
@@ -197,23 +199,6 @@ struct IndexEntryView: View {
         case 2: return .system(size: 16, weight: .semibold)
         default: return .system(size: 14, weight: .semibold)
         }
-    }
-
-    private static func transformWikilinks(_ text: String) -> String {
-        let pattern = #"\[\[([^\]]+)\]\]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
-        let range = NSRange(text.startIndex..., in: text)
-        let matches = regex.matches(in: text, range: range)
-        guard !matches.isEmpty else { return text }
-        var result = text
-        for match in matches.reversed() {
-            guard let nameRange = Range(match.range(at: 1), in: result),
-                  let fullRange = Range(match.range, in: result) else { continue }
-            let name = String(result[nameRange])
-            let slug = MarkdownArchivePaths.slugForIndexEntry(name)
-            result.replaceSubrange(fullRange, with: "[\(name)](wikilink://\(slug))")
-        }
-        return result
     }
 
     private var sourcesSection: some View {
@@ -249,6 +234,55 @@ struct IndexEntryView: View {
         return f.string(from: date)
     }
 
+}
+
+enum IndexEntryInlineLinks {
+    static func preprocess(_ source: String) -> String {
+        var text = transformMeetingPaths(source)
+        text = transformWikilinks(text)
+        return text
+    }
+
+    private static func transformMeetingPaths(_ text: String) -> String {
+        let pattern = #"`?(\d{4}-\d{2}-\d{2}/[A-Za-z0-9_\-\.]+\.md)`?(?::(\d+(?:-\d+)?))?"#
+        return replaceMatches(in: text, pattern: pattern) { groups in
+            let path = groups[1]
+            let lineSpec = groups[2]
+            let label = lineSpec.isEmpty ? path : "\(path):\(lineSpec)"
+            let firstLine = lineSpec.split(separator: "-").first.map(String.init) ?? ""
+            let query = firstLine.isEmpty ? "" : "?line=\(firstLine)"
+            return "[\(label)](gp://meeting/\(path)\(query))"
+        }
+    }
+
+    private static func transformWikilinks(_ text: String) -> String {
+        let pattern = #"\[\[([^\]]+)\]\]"#
+        return replaceMatches(in: text, pattern: pattern) { groups in
+            let name = groups[1]
+            let slug = MarkdownArchivePaths.slugForIndexEntry(name)
+            return "[\(name)](wikilink://\(slug))"
+        }
+    }
+
+    private static func replaceMatches(in source: String, pattern: String, transform: ([String]) -> String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return source }
+        let ns = source as NSString
+        var result = ""
+        var lastEnd = 0
+        regex.enumerateMatches(in: source, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+            guard let match else { return }
+            result += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            var groups: [String] = []
+            for idx in 0..<match.numberOfRanges {
+                let range = match.range(at: idx)
+                groups.append(range.location == NSNotFound ? "" : ns.substring(with: range))
+            }
+            result += transform(groups)
+            lastEnd = match.range.location + match.range.length
+        }
+        result += ns.substring(from: lastEnd)
+        return result
+    }
 }
 
 // MARK: - Markdown block parser

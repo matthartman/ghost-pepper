@@ -65,6 +65,7 @@
 		478299189CD80630739E9150 /* MeetingQASystemPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87733132E66F36BCE7103250 /* MeetingQASystemPrompt.swift */; };
 		47B377ADA2B2F12226744122 /* MeetingDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE672F443903BF4B47EF96EF /* MeetingDetector.swift */; };
 		4961DAF729CE58AAAACBC1AC /* MeetingQAAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AFEA05207B7965A3D44D000 /* MeetingQAAgentTests.swift */; };
+		1AFEA05207B7965A3D44D0FF /* QwenToolCallParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AFEA05207B7965A3D44D0AA /* QwenToolCallParserTests.swift */; };
 		4CFBE4928A2B811D649B4140 /* TextCleanupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C0D4F04FFD2C13DEACA238 /* TextCleanupManager.swift */; };
 		4DD74E9C222518EEB0DA2A9B /* RecordingOCRPrefetchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80731398639640F62FFC4524 /* RecordingOCRPrefetchTests.swift */; };
 		4EAE492B8F7F4CB18D2E0FE9 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F5407DA5D09555EDD69CA54 /* AudioRecorder.swift */; };
@@ -228,6 +229,7 @@
 		19DE683197A1CFDF171F2F38 /* ghost-pepper-character.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "ghost-pepper-character.png"; sourceTree = "<group>"; };
 		1AC12AC919C182CDEF77DB11 /* CommandKSearchSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandKSearchSheet.swift; sourceTree = "<group>"; };
 		1AFEA05207B7965A3D44D000 /* MeetingQAAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingQAAgentTests.swift; sourceTree = "<group>"; };
+		1AFEA05207B7965A3D44D0AA /* QwenToolCallParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenToolCallParserTests.swift; sourceTree = "<group>"; };
 		1DC632CC6DD4F55F2FA05480 /* FrontmostWindowOCRService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontmostWindowOCRService.swift; sourceTree = "<group>"; };
 		1FE9E126BC8CAD84D453AD72 /* DebugLogStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogStoreTests.swift; sourceTree = "<group>"; };
 		207AAC1CBC60052D1493D13D /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
@@ -829,6 +831,7 @@
 				64F59E7884CF5A1ABFB3C387 /* PathSandboxTests.swift */,
 				59666FBC728BF70A61983188 /* PerformanceTraceTests.swift */,
 				ABAC2D0F6C311FB1DA3E9ABF /* PostPasteLearningCoordinatorTests.swift */,
+				1AFEA05207B7965A3D44D0AA /* QwenToolCallParserTests.swift */,
 				7ECFAFC0144B6B9203BF4EE0 /* RecognizedVoiceStoreTests.swift */,
 				80731398639640F62FFC4524 /* RecordingOCRPrefetchTests.swift */,
 				AD0C972BC69839C41ACA2E8C /* RecordingSessionCoordinatorTests.swift */,
@@ -1145,6 +1148,7 @@
 				AB0AC6DC19EC0DB440F5B123 /* KeyChordTests.swift in Sources */,
 				EA0A1ECE203067342B2E2CF6 /* MarkdownArchivePathsTests.swift in Sources */,
 				4961DAF729CE58AAAACBC1AC /* MeetingQAAgentTests.swift in Sources */,
+				1AFEA05207B7965A3D44D0FF /* QwenToolCallParserTests.swift in Sources */,
 				190EA523BC8AAF93599DD038 /* MeetingQASystemPromptTests.swift in Sources */,
 				04654E621041E2A81CC2CFC7 /* MeetingQAToolsTests.swift in Sources */,
 				DC6FA0D74F38335D52B5DFA2 /* MeetingQAToolsWriteFileTests.swift in Sources */,

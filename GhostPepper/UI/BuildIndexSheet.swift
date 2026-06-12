@@ -7,7 +7,7 @@ struct BuildIndexSheet: View {
     let fetchBuilder: () -> IndexBuilder?
     let onClose: () -> Void
 
-    @AppStorage("claudeAPIModel") private var storedModel: String = ClaudeAPIModel.sonnet.rawValue
+    @AppStorage("agentBackend") private var storedBackend: String = "claude:\(ClaudeAPIModel.sonnet.rawValue)"
     @State private var phase: Phase = .estimating
     @State private var estimate: IndexBuildEstimate?
     @State private var statusLine: String = ""
@@ -18,8 +18,12 @@ struct BuildIndexSheet: View {
     @State private var errorMessage: String?
     @State private var buildTask: Task<Void, Never>?
 
-    private var selectedModel: ClaudeAPIModel {
-        ClaudeAPIModel(rawValue: storedModel) ?? .sonnet
+    private var selectedBackend: AgentBackend {
+        AgentBackend.decode(storedBackend) ?? .claude(.sonnet)
+    }
+
+    private func localLabel(for kind: LocalCleanupModelKind) -> String {
+        AgentBackend.local(kind).shortDisplayName + " (local)"
     }
 
     enum Phase {
@@ -100,22 +104,38 @@ struct BuildIndexSheet: View {
                     HStack(spacing: 8) {
                         Text("**\(estimate.unprocessedCount)** meetings to process using")
                             .font(.system(size: 13))
-                        Picker("", selection: $storedModel) {
-                            ForEach(ClaudeAPIModel.allCases) { model in
-                                Text(model.shortDisplayName).tag(model.rawValue)
+                        Picker("", selection: $storedBackend) {
+                            Section("Cloud") {
+                                ForEach(ClaudeAPIModel.allCases) { model in
+                                    Text(model.shortDisplayName).tag("claude:\(model.rawValue)")
+                                }
+                            }
+                            Section("Local") {
+                                ForEach(LocalCleanupModelKind.allCases) { kind in
+                                    Text(localLabel(for: kind)).tag("local:\(kind.rawValue)")
+                                }
                             }
                         }
                         .labelsHidden()
-                        .frame(maxWidth: 160)
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 180)
                     }
 
-                    let range = ClaudePricing.estimateBuildCostRange(model: selectedModel, meetingCount: estimate.unprocessedCount)
-                    Text("Likely cost: \(formatCost(range.low)) – \(formatCost(range.high))")
-                        .font(.system(size: 13, weight: .medium))
-
-                    Text("Estimate is order-of-magnitude; running cost is shown during the build, and you can hit Stop at any time.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    switch selectedBackend {
+                    case .claude(let model):
+                        let range = ClaudePricing.estimateBuildCostRange(model: model, meetingCount: estimate.unprocessedCount)
+                        Text("Likely cost: \(formatCost(range.low)) – \(formatCost(range.high))")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Estimate is order-of-magnitude; running cost is shown during the build, and you can hit Stop at any time.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    case .local:
+                        Text("Free — runs on-device")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Local models are slower and less reliable for a long multi-step build than Claude — best on a 9B+ model. You can hit Stop at any time.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 HStack {

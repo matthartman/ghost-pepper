@@ -65,6 +65,23 @@ final class MeetingTranscript: ObservableObject {
     /// Optional source URL — used by Reader entries.
     var sourceURL: String?
 
+    // Imported-note preservation. These fields let parse→render round-trip a
+    // Granola-imported note (or any note carrying YAML frontmatter) without
+    // losing identity or the imported transcript text. The render path checks
+    // `importedFrom` to decide whether to emit a frontmatter block; the raw
+    // transcript body is re-emitted verbatim when there are no live segments.
+    /// Granola note id (`granola_id` in frontmatter). Preserved so re-saves
+    /// don't strip the identity that links a note back to Granola.
+    var granolaId: String?
+    /// Original `date:` frontmatter string, verbatim — preserved so re-saves
+    /// don't replace it with `Date()` reformatted as "(in progress)".
+    var importedDateString: String?
+    /// Raw body of the `## Transcript` section as read from disk. When
+    /// segments are empty on render, we emit this verbatim so an imported
+    /// transcript survives a parse→render round-trip exactly, regardless of
+    /// whether the fallback timestamp-less parser produced segments.
+    var rawTranscriptMarkdown: String?
+
     let sessionID: UUID
 
     init(

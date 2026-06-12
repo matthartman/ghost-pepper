@@ -14,7 +14,7 @@ final class IndexSystemPromptTests: XCTestCase {
     func testFullBuildPromptDescribesAllFourTools() {
         let prompt = IndexSystemPrompt.buildPeopleIndexFullBuild(archiveRootPath: "/a", indexRootPath: "/i")
         XCTAssertTrue(prompt.contains("list_dir"))
-        XCTAssertTrue(prompt.contains("grep"))
+        XCTAssertTrue(prompt.contains("qmd_search"))
         XCTAssertTrue(prompt.contains("read_file"))
         XCTAssertTrue(prompt.contains("write_file"))
     }

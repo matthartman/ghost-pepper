@@ -1089,7 +1089,10 @@ class AppState: ObservableObject {
                     maxIterations = 15
                 case .local(let kind):
                     provider = LocalLLMProvider(cleanupManager: self.textCleanupManager, modelKind: kind)
-                    maxIterations = 10
+                    // Same budget as Claude; "list all X" queries on 9B+ local
+                    // models often need a few search rounds + a synthesis turn,
+                    // which the prior cap of 10 cut too close on.
+                    maxIterations = 15
                 }
                 let agent = MeetingQAAgent(provider: provider, backend: backend, archiveRoot: archiveRoot, maxIterations: maxIterations)
                 // Build the conversation: every prior (Q, A) becomes alternating
@@ -1437,30 +1440,36 @@ class AppState: ObservableObject {
 
     // MARK: - Index updates
 
-    private var peopleIndexBuilder: (model: ClaudeAPIModel, builder: IndexBuilder)?
+    private var peopleIndexBuilder: (backend: AgentBackend, builder: IndexBuilder)?
 
-    /// Lazily constructs the per-kind index builder, returning nil if the
-    /// Claude API key isn't configured (incremental updates skip silently in
-    /// that case — the user will still get to build an index on demand once
-    /// they configure a key).
+    /// Lazily constructs the per-kind index builder. Uses the same
+    /// `agentBackend` selection that drives Q&A: a Claude model needs an API
+    /// key (returns nil if missing, so incremental updates skip silently until
+    /// a key is configured), while a local model runs on-device with no key.
     ///
-    /// Cache is keyed on the model — if the user changes their selection in
-    /// Settings or the build sheet, the next call recreates the builder with
+    /// Cache is keyed on the backend — if the user changes their selection in
+    /// the build sheet or Q&A picker, the next call recreates the builder with
     /// the new model rather than returning a stale one.
     private func indexBuilder(for kind: IndexKind) -> IndexBuilder? {
         switch kind {
         case .people:
-            guard let key = KeychainHelper.get(AnthropicProvider.keychainKey), !key.isEmpty else {
-                return nil
+            let backend = AgentBackend.resolveFromDefaults()
+            let provider: LLMProvider
+            switch backend {
+            case .claude(let model):
+                guard let key = KeychainHelper.get(AnthropicProvider.keychainKey), !key.isEmpty else {
+                    return nil
+                }
+                provider = AnthropicProvider(model: model, apiKey: key)
+            case .local(let modelKind):
+                provider = LocalLLMProvider(cleanupManager: self.textCleanupManager, modelKind: modelKind)
             }
-            let model = ClaudeAPIModel(rawValue: self.claudeAPIModel) ?? .sonnet
-            if let existing = peopleIndexBuilder, existing.model == model {
+            if let existing = peopleIndexBuilder, existing.backend == backend {
                 return existing.builder
             }
-            let provider = AnthropicProvider(model: model, apiKey: key)
             let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
-            let builder = IndexBuilder(provider: provider, model: model, saveDir: saveDir)
-            peopleIndexBuilder = (model, builder)
+            let builder = IndexBuilder(provider: provider, backend: backend, saveDir: saveDir)
+            peopleIndexBuilder = (backend, builder)
             return builder
         }
     }

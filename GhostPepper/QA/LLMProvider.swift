@@ -33,6 +33,11 @@ struct LLMTool {
 enum ProviderEvent {
     case textDelta(String)
     case toolUse(id: String, name: String, input: [String: Any])
+    /// A tool call the backend recognized as a tool-call attempt but could not
+    /// turn into a usable `toolUse` (unparseable JSON, no inferable tool). The
+    /// agent loop re-prompts the model instead of ending the turn. Only the
+    /// local Qwen backend emits this; structured backends (Anthropic) do not.
+    case malformedToolCall(raw: String)
     case stop(reason: StopReason, usage: ProviderUsage)
 }
 

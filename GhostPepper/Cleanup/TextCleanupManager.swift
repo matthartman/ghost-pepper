@@ -55,6 +55,9 @@ enum LocalCleanupModelKind: String, CaseIterable, Equatable, Identifiable {
     case qwen35_0_8b_q4_k_m
     case qwen35_2b_q4_k_m
     case qwen35_4b_q4_k_m
+    case qwen35_9b_q4_k_m
+    case qwen35_27b_q4_k_m
+    case qwen35_35b_a3b_q4_k_m
     case deepseek_r1_qwen_7b_q4_k_m
 
     var id: String { rawValue }
@@ -164,10 +167,54 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         recommendation: nil
     )
 
+    /// Qwen 3.5 9B — dense, a solid step up from 4B for the agent loop while
+    /// staying small (~5.7 GB) and fast. Genuine `<tool_call>` tool-caller.
+    static let qwen35_9BModel = CleanupModelDescriptor(
+        kind: .qwen35_9b_q4_k_m,
+        displayName: "Qwen 3.5 9B Q4_K_M (Agent)",
+        sizeDescription: "~5.7 GB",
+        fileName: "Qwen3.5-9B-Q4_K_M.gguf",
+        url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+        maxTokenCount: 16384,
+        recommendation: nil
+    )
+
+    /// Qwen 3.5 27B — dense, strongest dense quality that still fits a 48 GB
+    /// machine (~16.7 GB). Slower than the MoE since all 27B params are active
+    /// per token, but high quality for the agent loop.
+    static let qwen35_27BModel = CleanupModelDescriptor(
+        kind: .qwen35_27b_q4_k_m,
+        displayName: "Qwen 3.5 27B Q4_K_M (Agent)",
+        sizeDescription: "~16.7 GB",
+        fileName: "Qwen3.5-27B-Q4_K_M.gguf",
+        url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf",
+        maxTokenCount: 16384,
+        recommendation: nil
+    )
+
+    /// Qwen 3.5 35B-A3B — a Mixture-of-Experts model: 35B total parameters
+    /// (large-model reasoning quality) but only ~3B active per token, so it
+    /// runs at roughly 9B-dense speed. Added specifically for the agentic
+    /// meeting Q&A loop, where reliable `<tool_call>` emission and multi-hop
+    /// reasoning matter more than the tiny cleanup models can deliver. Needs
+    /// ~22 GB on disk and comfortable headroom on a 32 GB+ machine.
+    static let qwen35_35bA3BModel = CleanupModelDescriptor(
+        kind: .qwen35_35b_a3b_q4_k_m,
+        displayName: "Qwen 3.5 35B-A3B Q4_K_M (Agent)",
+        sizeDescription: "~22 GB",
+        fileName: "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+        url: "https://huggingface.co/unsloth/Qwen3.5-35B-A3B-GGUF/resolve/main/Qwen3.5-35B-A3B-Q4_K_M.gguf",
+        maxTokenCount: 16384,
+        recommendation: nil
+    )
+
     static let cleanupModels = [
         compactModel,
         recommendedFastModel,
         recommendedFullModel,
+        qwen35_9BModel,
+        qwen35_27BModel,
+        qwen35_35bA3BModel,
         deepseekR1Qwen7BModel,
     ]
     static let fastModel = recommendedFastModel

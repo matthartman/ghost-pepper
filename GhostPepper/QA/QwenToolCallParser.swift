@@ -15,6 +15,11 @@ final class QwenToolCallParser {
     enum Output: Equatable {
         case text(String)
         case toolCall(name: String, input: [String: Any])
+        /// A `<tool_call>` block that could neither be parsed as JSON nor have
+        /// its tool inferred from the argument shape. Carries the raw payload so
+        /// the agent loop can re-prompt the model rather than treating the blob
+        /// as a final answer. See memory note qwen-toolcall-malformed.
+        case malformedToolCall(raw: String)
 
         static func == (lhs: Output, rhs: Output) -> Bool {
             switch (lhs, rhs) {
@@ -22,6 +27,8 @@ final class QwenToolCallParser {
                 return a == b
             case (.toolCall(let na, _), .toolCall(let nb, _)):
                 return na == nb
+            case (.malformedToolCall(let a), .malformedToolCall(let b)):
+                return a == b
             default:
                 return false
             }
@@ -128,8 +135,14 @@ final class QwenToolCallParser {
                         }
                         outputs.append(.toolCall(name: parsed.name, input: parsed.input))
                     } else {
-                        // malformed — surface raw payload as text so the user sees something
-                        textRun.append(Self.openMarker + jsonBuffer + Self.closeMarker)
+                        // Unparseable / uninferable: emit a distinct malformed
+                        // signal so the agent loop can re-prompt instead of
+                        // treating the blob as a final answer.
+                        if !textRun.isEmpty {
+                            outputs.append(.text(textRun))
+                            textRun = ""
+                        }
+                        outputs.append(.malformedToolCall(raw: jsonBuffer))
                     }
                     state = .text
                     jsonBuffer = ""
@@ -161,9 +174,11 @@ final class QwenToolCallParser {
         case .openTag:
             outputs.append(.text(pendingTag))
         case .toolCall:
-            outputs.append(.text(Self.openMarker + jsonBuffer))
+            // Stream ended mid tool_call (never closed) — treat as malformed so
+            // the loop can recover rather than dumping the partial JSON as text.
+            outputs.append(.malformedToolCall(raw: jsonBuffer))
         case .closeTag:
-            outputs.append(.text(Self.openMarker + jsonBuffer + pendingTag))
+            outputs.append(.malformedToolCall(raw: jsonBuffer))
         case .thinkBlock, .thinkCloseTag:
             // unclosed think block — discard, don't surface internal reasoning
             break
@@ -178,8 +193,51 @@ final class QwenToolCallParser {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = trimmed.data(using: .utf8) else { return nil }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        guard let name = obj["name"] as? String else { return nil }
-        let arguments = obj["arguments"] as? [String: Any] ?? [:]
-        return (name, arguments)
+
+        // Arguments may be nested under "arguments"/"parameters", or — when the
+        // model emits a bare call — sit at the top level alongside (or instead
+        // of) "name".
+        let arguments: [String: Any]
+        if let nested = obj["arguments"] as? [String: Any] {
+            arguments = nested
+        } else if let nested = obj["parameters"] as? [String: Any] {
+            arguments = nested
+        } else {
+            arguments = obj.filter { $0.key != "name" }
+        }
+
+        if let name = obj["name"] as? String, !name.isEmpty {
+            return (name, arguments)
+        }
+
+        // Recovery: local Qwen 3.5 (q4) models sometimes emit a tool_call whose
+        // JSON drops the required "name" and carries only the arguments. Rather
+        // than surface it as a dead-end text blob (which the agent treats as a
+        // final answer and stops on), infer the tool from the argument shape —
+        // the agent's tools have distinguishable signatures. See memory note
+        // qwen-toolcall-malformed.
+        if let inferred = inferToolName(fromArguments: arguments) {
+            return (inferred, arguments)
+        }
+        return nil
+    }
+
+    /// Maps a tool_call's argument keys back to a tool name when the model
+    /// omitted it. The meeting-QA / indexing tools (qmd_search, read_file, list_dir,
+    /// write_file) have non-overlapping enough signatures to disambiguate:
+    ///   - `query`/`pattern`    → qmd_search
+    ///   - `content`            → write_file
+    ///   - `offset`/`limit`     → read_file
+    ///   - `path` only          → read_file if it points at a .md file, else list_dir
+    private static func inferToolName(fromArguments args: [String: Any]) -> String? {
+        let keys = Set(args.keys)
+        if keys.contains("query") || keys.contains("pattern") { return "qmd_search" }
+        if keys.contains("content") { return "write_file" }
+        if keys.contains("offset") || keys.contains("limit") { return "read_file" }
+        if keys.contains("path") {
+            if let path = args["path"] as? String, path.hasSuffix(".md") { return "read_file" }
+            return "list_dir"
+        }
+        return nil
     }
 }

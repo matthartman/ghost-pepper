@@ -168,7 +168,7 @@ struct ModelsSidebarView: View {
                 LocalModelRow(
                     title: desc.displayName,
                     subtitle: desc.sizeDescription,
-                    capabilities: ["cleanup", "meeting summary"],
+                    capabilities: ["cleanup", "Q&A \(desc.kind.qaProfileLabel.lowercased())"],
                     isDownloaded: downloaded,
                     isActive: isActive,
                     progress: progress,
@@ -291,12 +291,7 @@ struct ModelsSidebarView: View {
     private var agentBackendIsLocal: Bool { agentBackend.isLocal }
 
     private func localAgentLabel(for kind: LocalCleanupModelKind) -> String {
-        switch kind {
-        case .qwen35_0_8b_q4_k_m: return "Qwen 3.5 0.8B (local)"
-        case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B (local)"
-        case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B (local)"
-        case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B (local)"
-        }
+        "\(kind.qaPickerDisplayName) local"
     }
 
     private var diarizationLabel: String {

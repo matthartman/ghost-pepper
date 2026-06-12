@@ -54,6 +54,7 @@ struct GhostPepperApp: App {
                     Task {
                         await appState.initialize()
                         appState.showMeetingTranscriptWindow()
+                        lazyUpdater.controller.askForSurveyAfterUpdateIfNeeded()
                     }
                 } else {
                     onboardingController.show(appState: appState) {
@@ -61,6 +62,7 @@ struct GhostPepperApp: App {
                         Task {
                             await appState.initialize()
                             appState.showMeetingTranscriptWindow()
+                            lazyUpdater.controller.askForSurveyAfterUpdateIfNeeded()
                         }
                     }
                 }

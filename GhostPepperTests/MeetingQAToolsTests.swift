@@ -34,33 +34,54 @@ final class MeetingQAToolsTests: XCTestCase {
         try? FileManager.default.removeItem(at: rootDir)
     }
 
-    // MARK: - grep
+    // MARK: - qmd_search
 
-    func testGrepFindsMatchAcrossArchive() async throws {
+    func testQMDSearchFindsMatchAcrossArchive() async throws {
         let tools = MeetingQATools(root: rootDir)
-        let result = try await tools.grep(pattern: "Quinn", path: nil, caseInsensitive: true, maxResults: 50)
+        let result = try await tools.qmdSearch(query: "Quinn", path: nil, caseInsensitive: true, maxResults: 50)
         XCTAssertTrue(result.contains("2025-01-29/dana-matt.md:"), "Expected file:line match in output: \(result)")
         XCTAssertTrue(result.contains("2026-01-07/team-standup.md:"), "Expected second-file match in output: \(result)")
     }
 
-    func testGrepRespectsMaxResults() async throws {
+    func testQMDSearchOutputContainsCitationReadyContext() async throws {
         let tools = MeetingQATools(root: rootDir)
-        let result = try await tools.grep(pattern: "Quinn", path: nil, caseInsensitive: true, maxResults: 1)
-        let matchLines = result.split(separator: "\n").filter { $0.contains(".md:") }
-        XCTAssertEqual(matchLines.count, 1, "Expected exactly 1 match line, got: \(result)")
-        XCTAssertTrue(result.contains("max_results was 1"), "Expected hit-cap meta line: \(result)")
+        let result = try await tools.qmdSearch(query: "Sam Rivers", path: nil, caseInsensitive: true, maxResults: 10)
+        XCTAssertTrue(result.contains("2026-01-07/team-standup.md:"), "Expected cited match line: \(result)")
+        XCTAssertTrue(result.contains("Sam Rivers"), "Expected matched text in output: \(result)")
+        XCTAssertFalse(result.contains("2025-01-30: 4,000+ lines"), "Search should return source context, not a generic date-only timeline: \(result)")
     }
 
-    func testGrepReturnsNoMatchesMessage() async throws {
+    func testQMDSearchStillFindsExactTextWhenQMDIsBypassed() async throws {
         let tools = MeetingQATools(root: rootDir)
-        let result = try await tools.grep(pattern: "definitelynotinanyfile", path: nil, caseInsensitive: false, maxResults: 50)
+        let result = try await tools.qmdSearch(query: "\"Sam Rivers\"", path: nil, caseInsensitive: false, maxResults: 10)
+        XCTAssertTrue(result.contains("2026-01-07/team-standup.md:"), "Expected pure Swift fallback cited match line: \(result)")
+        XCTAssertTrue(result.contains("Sam Rivers"), "Expected matched text in fallback output: \(result)")
+    }
+
+    func testLegacyGrepToolAliasStillSearchesArchive() async throws {
+        let tools = MeetingQATools(root: rootDir)
+        let result = try await tools.grep(pattern: "Quinn Adler", path: nil, caseInsensitive: true, maxResults: 10)
+        XCTAssertTrue(result.contains("2025-01-29/dana-matt.md:"), "Expected legacy grep alias to return qmd/search-style citations: \(result)")
+    }
+
+    func testQMDSearchRespectsMaxResults() async throws {
+        let tools = MeetingQATools(root: rootDir)
+        let result = try await tools.qmdSearch(query: "Quinn", path: nil, caseInsensitive: true, maxResults: 1)
+        let matchLines = result.split(separator: "\n").filter { $0.contains(".md:") }
+        XCTAssertEqual(matchLines.count, 1, "Expected exactly 1 match line, got: \(result)")
+        XCTAssertTrue(result.contains("max_results hit"), "Expected hit-cap meta line: \(result)")
+    }
+
+    func testQMDSearchReturnsNoMatchesMessage() async throws {
+        let tools = MeetingQATools(root: rootDir)
+        let result = try await tools.qmdSearch(query: "definitelynotinanyfile", path: nil, caseInsensitive: false, maxResults: 50)
         XCTAssertTrue(result.contains("No matches found"), result)
     }
 
-    func testGrepRejectsPathOutsideRoot() async {
+    func testQMDSearchRejectsPathOutsideRoot() async {
         let tools = MeetingQATools(root: rootDir)
         do {
-            _ = try await tools.grep(pattern: "anything", path: "../outside", caseInsensitive: true, maxResults: 10)
+            _ = try await tools.qmdSearch(query: "anything", path: "../outside", caseInsensitive: true, maxResults: 10)
             XCTFail("Expected pathOutsideRoot error")
         } catch let error as PathSandboxError {
             guard case .pathOutsideRoot = error else { XCTFail("Wrong error: \(error)"); return }

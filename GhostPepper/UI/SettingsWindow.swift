@@ -160,6 +160,7 @@ struct RecordingSpeakerFilteringToggleState {
 
 struct SettingsView: View {
     @ObservedObject var appState: AppState
+    @AppStorage("agentBackend") private var agentBackendStorage: String = "claude:\(ClaudeAPIModel.sonnet.rawValue)"
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -1823,46 +1824,66 @@ struct SettingsView: View {
     private var crossMeetingQACard: some View {
         SettingsCard("Cross-Meeting Q&A") {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Ask questions across all meeting transcripts. The assistant searches your archive with grep / read_file / list_dir and cites sources.")
+                Text("Ask questions across all meeting transcripts. The assistant searches locally with qmd, reads exact source lines, and verifies local-model answers before showing them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Picker("Provider", selection: .constant(LLMProviderKind.anthropic)) {
-                    ForEach(LLMProviderKind.allCases) { provider in
-                        Text(provider.displayName).tag(provider)
+                Picker("Q&A model", selection: $agentBackendStorage) {
+                    Section("Cloud") {
+                        ForEach(ClaudeAPIModel.allCases) { model in
+                            Text(model.displayName).tag("claude:\(model.rawValue)")
+                        }
+                    }
+                    Section("Local") {
+                        ForEach(LocalCleanupModelKind.allCases) { kind in
+                            Text(kind.qaPickerDisplayName).tag("local:\(kind.rawValue)")
+                        }
+                    }
+                }
+                .onChange(of: agentBackendStorage) { _, newValue in
+                    if case .claude(let model) = AgentBackend.decode(newValue) {
+                        appState.claudeAPIModel = model.rawValue
                     }
                 }
 
-                Picker("Model", selection: $appState.claudeAPIModel) {
-                    ForEach(ClaudeAPIModel.allCases) { model in
-                        Text(model.displayName).tag(model.rawValue)
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    SecureField("sk-ant-...", text: $claudeAPIKeyInput)
-                        .textFieldStyle(.roundedBorder)
-                        .onChange(of: claudeAPIKeyInput) { _, _ in
+                switch selectedQABackend {
+                case .claude:
+                    HStack(spacing: 8) {
+                        SecureField("sk-ant-...", text: $claudeAPIKeyInput)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: claudeAPIKeyInput) { _, _ in
+                                claudeAPIKeySaved = false
+                            }
+                        Button(claudeAPIKeySaved ? "Saved" : "Save") {
+                            _ = KeychainHelper.set(claudeAPIKeyInput, for: AnthropicProvider.keychainKey)
+                            claudeAPIKeySaved = true
+                        }
+                        .disabled(claudeAPIKeyInput.isEmpty)
+                        Button("Clear") {
+                            KeychainHelper.delete(AnthropicProvider.keychainKey)
+                            claudeAPIKeyInput = ""
                             claudeAPIKeySaved = false
                         }
-                    Button(claudeAPIKeySaved ? "Saved" : "Save") {
-                        _ = KeychainHelper.set(claudeAPIKeyInput, for: AnthropicProvider.keychainKey)
-                        claudeAPIKeySaved = true
+                        .disabled(claudeAPIKeyInput.isEmpty && !claudeAPIKeySaved)
                     }
-                    .disabled(claudeAPIKeyInput.isEmpty)
-                    Button("Clear") {
-                        KeychainHelper.delete(AnthropicProvider.keychainKey)
-                        claudeAPIKeyInput = ""
-                        claudeAPIKeySaved = false
-                    }
-                    .disabled(claudeAPIKeyInput.isEmpty && !claudeAPIKeySaved)
-                }
 
-                Text("API key is stored in your macOS Keychain. Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys). Cost is shown after each answer; prompt caching keeps follow-up questions cheap.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Text("API key is stored in your macOS Keychain. Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys). Cost is shown after each answer; prompt caching keeps follow-up questions cheap.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .local(let kind):
+                    Text(kind.qaProfileDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Local Q&A runs on-device. For citation-heavy answers, 9B or larger models are the better starting point.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
+    }
+
+    private var selectedQABackend: AgentBackend {
+        AgentBackend.decode(agentBackendStorage) ?? .claude(.sonnet)
     }
 
     private var meetingTranscriptSection: some View {

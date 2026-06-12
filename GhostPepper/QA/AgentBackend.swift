@@ -31,12 +31,7 @@ enum AgentBackend: Equatable {
     /// catalog. nonisolated so MeetingQAAgent's runLoop (which runs on a
     /// non-MainActor Task) can call it when emitting usage events.
     private static func localDisplayName(for kind: LocalCleanupModelKind) -> String {
-        switch kind {
-        case .qwen35_0_8b_q4_k_m: return "Qwen 3.5 0.8B"
-        case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B"
-        case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B"
-        case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B"
-        }
+        kind.qaBaseDisplayName
     }
 
     /// Cost in USD for one round-trip's worth of usage. Local is always free.
@@ -97,5 +92,55 @@ enum AgentBackend: Equatable {
         let resolved: AgentBackend = .claude(model)
         defaults.set(resolved.encoded, forKey: "agentBackend")
         return resolved
+    }
+}
+
+extension LocalCleanupModelKind {
+    var qaBaseDisplayName: String {
+        switch self {
+        case .qwen35_0_8b_q4_k_m: return "Qwen 3.5 0.8B"
+        case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B"
+        case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B"
+        case .qwen35_9b_q4_k_m: return "Qwen 3.5 9B"
+        case .qwen35_27b_q4_k_m: return "Qwen 3.5 27B"
+        case .qwen35_35b_a3b_q4_k_m: return "Qwen 3.5 35B-A3B"
+        case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B"
+        }
+    }
+
+    var qaProfileLabel: String {
+        switch self {
+        case .qwen35_0_8b_q4_k_m, .qwen35_2b_q4_k_m:
+            return "Fast"
+        case .qwen35_4b_q4_k_m:
+            return "Balanced"
+        case .qwen35_9b_q4_k_m, .qwen35_35b_a3b_q4_k_m:
+            return "Quality"
+        case .qwen35_27b_q4_k_m:
+            return "Long context"
+        case .deepseek_r1_qwen_7b_q4_k_m:
+            return "Experimental"
+        }
+    }
+
+    var qaPickerDisplayName: String {
+        "\(qaBaseDisplayName) (\(qaProfileLabel))"
+    }
+
+    var qaProfileDescription: String {
+        switch self {
+        case .qwen35_0_8b_q4_k_m, .qwen35_2b_q4_k_m:
+            return "Fast local answers; best for quick lookups after qmd has found the evidence."
+        case .qwen35_4b_q4_k_m:
+            return "Balanced local model; useful for short Q&A, but larger models are better for timelines and synthesis."
+        case .qwen35_9b_q4_k_m:
+            return "Recommended local starting point for source-backed Q&A and tool use."
+        case .qwen35_27b_q4_k_m:
+            return "Best dense local option here for longer evidence packets, if your machine has the memory."
+        case .qwen35_35b_a3b_q4_k_m:
+            return "Quality-oriented MoE option; good experiment for local synthesis with Qwen-style tool calls."
+        case .deepseek_r1_qwen_7b_q4_k_m:
+            return "Experimental for Q&A; reasoning models can expose planning text, so Ghost Pepper applies extra verification."
+        }
     }
 }

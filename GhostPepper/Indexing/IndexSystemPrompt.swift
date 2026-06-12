@@ -23,7 +23,7 @@ enum IndexSystemPrompt {
         ## Tools
 
         - `list_dir(path)` — discover date folders in the archive (YYYY-MM-DD/).
-        - `grep(pattern, ...)` — find name mentions across meetings. Cheaper than reading whole files.
+        - `qmd_search(query, ...)` — find name mentions across meetings. Cheaper than reading whole files.
         - `read_file(path, offset, limit)` — read meeting transcripts to gather context.
         - `write_file(path, content)` — write a dossier entry. Path must be a flat `<slug>.md` filename in the index directory.
 
@@ -105,7 +105,7 @@ enum IndexSystemPrompt {
            rather than overwriting. Treat every existing entry as the source
            of truth for that person's canonical name and existing aliases.
         2. `list_dir` the archive root to enumerate date folders.
-        3. For each date folder, `list_dir` to find meetings. `grep` is your
+        3. For each date folder, `list_dir` to find meetings. `qmd_search` is your
            friend for finding capitalized name patterns and `**Attendees:**`
            lines.
         4. Build a working canonical-name list as you go. When you encounter a
@@ -185,7 +185,7 @@ enum IndexSystemPrompt {
         ## Tools
 
         - `read_file(path, offset, limit)` — read the new meeting transcript and existing dossiers.
-        - `grep(pattern, ...)` — confirm a name's context if needed.
+        - `qmd_search(query, ...)` — confirm a name's context if needed.
         - `list_dir(path)` — list the index directory if you need to discover existing entries.
         - `write_file(path, content)` — write or overwrite a dossier entry.
 

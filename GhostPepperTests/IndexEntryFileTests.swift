@@ -103,3 +103,35 @@ final class IndexEntryFileTests: XCTestCase {
         XCTAssertEqual(parsed.canonicalName, "Dr. Foo: The Sequel")
     }
 }
+
+final class IndexEntryInlineLinksTests: XCTestCase {
+    func testPreprocessLinksBacktickedMeetingMentions() {
+        let source = "In `2026-04-28/standup.md`: introduced the deploy pipeline."
+        let processed = IndexEntryInlineLinks.preprocess(source)
+
+        XCTAssertEqual(
+            processed,
+            "In [2026-04-28/standup.md](gp://meeting/2026-04-28/standup.md): introduced the deploy pipeline."
+        )
+    }
+
+    func testPreprocessPreservesLineSpecInMeetingMentionLabel() {
+        let source = "See 2026-04-28/standup.md:71-72 for the original context."
+        let processed = IndexEntryInlineLinks.preprocess(source)
+
+        XCTAssertEqual(
+            processed,
+            "See [2026-04-28/standup.md:71-72](gp://meeting/2026-04-28/standup.md?line=71) for the original context."
+        )
+    }
+
+    func testPreprocessKeepsPersonWikilinksTappable() {
+        let source = "Often works with [[Lara Chen]]."
+        let processed = IndexEntryInlineLinks.preprocess(source)
+
+        XCTAssertEqual(
+            processed,
+            "Often works with [Lara Chen](wikilink://lara-chen)."
+        )
+    }
+}

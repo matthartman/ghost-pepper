@@ -249,11 +249,14 @@ final class GranolaImporter: ObservableObject {
             let slug = Self.slugify(title)
             let filePath = directory.appendingPathComponent(dateFolder).appendingPathComponent("\(slug).md")
 
-            // Skip if file already has both transcript and summary (fully enriched)
+            // Skip only if the file already has real transcript and summary
+            // content. Placeholder sections from native Ghost Pepper notes
+            // should still be eligible for Granola enrichment.
             let fileExists = FileManager.default.fileExists(atPath: filePath.path)
             if fileExists {
                 if let existing = try? String(contentsOf: filePath, encoding: .utf8),
-                   existing.contains("## Transcript") && existing.contains("## Summary") { continue }
+                   Self.sectionHasRealContent(in: existing, header: "Transcript"),
+                   Self.sectionHasRealContent(in: existing, header: "Summary") { continue }
             }
 
             // Fetch with transcript
@@ -429,7 +432,20 @@ final class GranolaImporter: ObservableObject {
         }
         guard inSection else { return nil }
         let joined = collected.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return joined.isEmpty ? nil : joined
+        if joined.isEmpty { return nil }
+
+        switch header {
+        case "Notes" where joined == "*No notes.*" || joined == "*No notes yet.*":
+            return nil
+        case "Transcript" where joined == "*No transcript yet.*":
+            return nil
+        default:
+            return joined
+        }
+    }
+
+    private static func sectionHasRealContent(in markdown: String, header: String) -> Bool {
+        extractSectionBody(from: markdown, header: header) != nil
     }
 
     private static func extractTranscript(from transcriptData: Any?) -> String {
