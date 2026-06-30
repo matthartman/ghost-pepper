@@ -100,7 +100,7 @@ final class ChordEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(.keyDown(extra)), [])
         XCTAssertEqual(engine.handle(.keyUp(extra)), [])
 
-        // Releasing a chord key clears the latch, so a fresh press fires again.
+        // Releasing a chord key breaks the superset, so a fresh press fires again.
         XCTAssertEqual(engine.handle(.keyUp(space)), [])
         XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
         XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
