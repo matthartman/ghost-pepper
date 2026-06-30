@@ -95,7 +95,7 @@ class AppState: ObservableObject {
     @Published private(set) var copyLastTranscriptionChord: KeyChord?
     @Published private(set) var openHistoryChord: KeyChord?
     /// Most recent dictation result (push-to-talk) — cleaned if cleanup ran, else raw;
-    /// not meeting text. Backs "Copy Last Transcription"; nil until the first dictation.
+    /// not meeting text. Backs "Copy Last Transcription".
     @Published private(set) var lastTranscription: String?
     @Published var postPasteLearningEnabled: Bool {
         didSet {
@@ -917,7 +917,7 @@ class AppState: ObservableObject {
 
         let cleanupResult = await cleanedTranscriptionResult(text, windowContext: windowContext)
         let finalText = cleanupResult.text
-        // Single dictation funnel — the only write site for "Copy Last Transcription".
+        // An empty cleanup result keeps the prior value rather than clearing the menu item.
         if !finalText.isEmpty {
             lastTranscription = finalText
         }

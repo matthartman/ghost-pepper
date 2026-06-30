@@ -15,33 +15,25 @@ struct ChordEngine {
     private let bindings: [ChordAction: KeyChord]
     private(set) var pressedKeys: Set<PhysicalKey> = []
     private(set) var activeRecordingAction: ChordAction?
-    /// Latches the simple action that fired for the current press so it cannot fire
-    /// again while its chord stays held; cleared once a chord key is released.
-    private var firedSimpleAction: ChordAction?
 
     init(bindings: [ChordAction: KeyChord]) {
         self.bindings = bindings
     }
 
     mutating func handle(_ inputEvent: InputEvent) -> [Effect] {
+        let previousPressedKeys = pressedKeys
         guard updatePressedKeys(for: inputEvent) else { return [] }
-        return evaluateStateTransition()
+        return evaluateStateTransition(previousPressedKeys: previousPressedKeys)
     }
 
     mutating func syncPressedKeys(_ pressedKeys: Set<PhysicalKey>) -> [Effect] {
         guard self.pressedKeys != pressedKeys else { return [] }
+        let previousPressedKeys = self.pressedKeys
         self.pressedKeys = pressedKeys
-        return evaluateStateTransition()
+        return evaluateStateTransition(previousPressedKeys: previousPressedKeys)
     }
 
-    private mutating func evaluateStateTransition() -> [Effect] {
-        // Release the simple-action latch once its chord is no longer fully held.
-        if let firedSimpleAction,
-           let chord = bindings[firedSimpleAction],
-           !pressedKeys.isSuperset(of: chord.keys) {
-            self.firedSimpleAction = nil
-        }
-
+    private mutating func evaluateStateTransition(previousPressedKeys: Set<PhysicalKey>) -> [Effect] {
         switch activeRecordingAction {
         case .pushToTalk:
             if matchResult() == .exact(.toggleToTalk) {
@@ -83,18 +75,16 @@ struct ChordEngine {
             return []
 
         case .copyLastTranscription, .openHistory:
-            // One-shot actions never hold.
-            activeRecordingAction = nil
+            // Unreachable: simple actions never become the active recording action.
             return []
 
         case nil:
             switch matchResult() {
             case .exact(let action) where action.isSimpleAction:
-                // Edge-triggered: fire once per press. The latch suppresses re-fires while
-                // the chord stays held (auto-repeat key-downs, or a superset collapsing back
-                // to exact); it clears when a chord key lifts.
-                guard firedSimpleAction != action else { return [] }
-                firedSimpleAction = action
+                // Fire only when the chord is completed by adding a key, not when a larger
+                // held set collapses back down onto it (which would re-fire on key release).
+                guard let chord = bindings[action],
+                      !previousPressedKeys.isSuperset(of: chord.keys) else { return [] }
                 return [.fireSimpleAction(action)]
             case .exact(let action):
                 activeRecordingAction = action
@@ -108,7 +98,6 @@ struct ChordEngine {
     mutating func reset() {
         pressedKeys.removeAll()
         activeRecordingAction = nil
-        firedSimpleAction = nil
     }
 
     func matchResult() -> ChordMatchResult {

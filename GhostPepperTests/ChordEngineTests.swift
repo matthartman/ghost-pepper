@@ -107,6 +107,21 @@ final class ChordEngineTests: XCTestCase {
         XCTAssertEqual(engine.handle(.keyDown(space)), [.fireSimpleAction(.copyLastTranscription)])
     }
 
+    func testOverlappingSimpleActionDoesNotRefireWhenSupersetCollapses() throws {
+        let extra = PhysicalKey(keyCode: 4) // H
+        var engine = ChordEngine(bindings: [
+            .copyLastTranscription: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space]))),
+            .openHistory: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space, extra])))
+        ])
+
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.keyDown(space)), [.fireSimpleAction(.copyLastTranscription)])
+        XCTAssertEqual(engine.handle(.keyDown(extra)), [.fireSimpleAction(.openHistory)])
+
+        // Collapsing the superset back to the smaller chord must not re-fire it.
+        XCTAssertEqual(engine.handle(.keyUp(extra)), [])
+    }
+
     func testRecordingChordStillStartsWhenASimpleActionIsAlsoBound() throws {
         var engine = ChordEngine(bindings: [
             .pushToTalk: try XCTUnwrap(KeyChord(keys: Set([rightCommand, rightOption]))),
