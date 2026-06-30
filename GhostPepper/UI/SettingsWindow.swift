@@ -1918,6 +1918,19 @@ struct SettingsView: View {
                 }
             }
 
+            SettingsCard("Automation") {
+                VStack(alignment: .leading, spacing: 18) {
+                    Toggle(
+                        "Allow automation",
+                        isOn: $appState.allowAutomation
+                    )
+
+                    Text("Lets the ghostpepper:// URL scheme and Shortcuts start or stop meetings, summarize, and read the last transcription. Off by default because a URL scheme is unauthenticated. Starting a meeting still asks for consent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if appState.meetingTranscriptEnabled {
                 SettingsCard("Google Calendar") {
                     VStack(alignment: .leading, spacing: 12) {

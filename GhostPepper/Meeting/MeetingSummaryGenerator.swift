@@ -45,15 +45,9 @@ final class MeetingSummaryGenerator {
         chunkPrompt: String = MeetingSummaryGenerator.defaultPrompt,
         finalPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
     ) async -> String? {
-        let segments = transcript.segments
-        guard !segments.isEmpty else { return nil }
+        guard !transcript.segments.isEmpty else { return nil }
 
-        // Build the full transcript text
-        let fullText = segments.map { segment in
-            "[\(segment.formattedTimestamp)] \(segment.speaker.displayName): \(segment.text)"
-        }.joined(separator: "\n")
-
-        // Split into chunks
+        let fullText = transcript.plainText
         let chunks = splitIntoChunks(fullText)
 
         // Include user notes if available
