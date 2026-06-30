@@ -221,6 +221,7 @@ class AppState: ObservableObject {
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
     @AppStorage("claudeAPIModel") var claudeAPIModel: String = ClaudeAPIModel.sonnet.rawValue
     @AppStorage(MediaRecordingBehavior.storageKey) var mediaRecordingBehavior: String = MediaRecordingBehavior.pause.rawValue
+    @AppStorage(MediaRecordingBehavior.duckVolumePercentKey) var mediaDuckVolumePercent: Double = MediaRecordingBehavior.defaultDuckVolumePercent
     var resolvedMediaRecordingBehavior: MediaRecordingBehavior {
         MediaRecordingBehavior(rawValue: mediaRecordingBehavior) ?? .pause
     }
@@ -959,7 +960,7 @@ class AppState: ObservableObject {
         case .pause:
             mediaPlaybackController.pauseIfPlaying()
         case .duck:
-            audioDucker.duck()
+            audioDucker.duck(toFraction: Float32(mediaDuckVolumePercent / 100))
         }
     }
 

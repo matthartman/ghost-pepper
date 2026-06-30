@@ -221,6 +221,8 @@ struct SettingsView: View {
     @State private var isRunningExperiment = false
     @StateObject private var dictationTestController: SettingsDictationTestController
     @StateObject private var transcriptionLabController: TranscriptionLabController
+    @AppStorage(MediaRecordingBehavior.storageKey) private var mediaBehaviorRaw = MediaRecordingBehavior.pause.rawValue
+    @AppStorage(MediaRecordingBehavior.duckVolumePercentKey) private var duckVolumePercent = MediaRecordingBehavior.defaultDuckVolumePercent
 
     private static let savedExperimentPromptsDefaultsKey = "modelExperimentSavedPrompts"
     private static let experimentRunHistoryDefaultsKey = "modelExperimentRunHistory"
@@ -984,13 +986,26 @@ struct SettingsView: View {
                     )
 
                     SettingsField("While recording") {
-                        Picker("While recording", selection: $appState.mediaRecordingBehavior) {
+                        Picker("While recording", selection: $mediaBehaviorRaw) {
                             ForEach(MediaRecordingBehavior.allCases) { behavior in
                                 Text(behavior.displayName).tag(behavior.rawValue)
                             }
                         }
                         .labelsHidden()
                         .frame(maxWidth: 320, alignment: .leading)
+                    }
+
+                    if mediaBehaviorRaw == MediaRecordingBehavior.duck.rawValue {
+                        SettingsField("Duck to") {
+                            HStack(spacing: 12) {
+                                Slider(value: $duckVolumePercent, in: 10...90, step: 5)
+                                    .frame(maxWidth: 240)
+                                Text("\(Int(duckVolumePercent))%")
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 40, alignment: .trailing)
+                            }
+                        }
                     }
 
                     Text("Lower the volume keeps background audio playing quietly while you record and restores it when you stop. Pause playback stops it instead.")

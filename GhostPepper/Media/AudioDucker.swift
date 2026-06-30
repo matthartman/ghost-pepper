@@ -8,8 +8,6 @@ import Foundation
 /// style as `AudioDeviceManager`. Falls back to per-channel volume for devices
 /// that don't expose a single main volume channel.
 final class AudioDucker {
-    /// Fraction of the original volume to duck down to.
-    private static let duckFactor: Float32 = 0.25
     /// How far the live volume may drift from what we set before we assume the
     /// user changed it themselves and skip the restore.
     private static let manualChangeTolerance: Float32 = 0.05
@@ -18,14 +16,16 @@ final class AudioDucker {
     private var savedVolume: Float32?
     private var appliedVolume: Float32?
 
-    /// Lower the output volume. A no-op if already ducked, if there is no usable
-    /// output device, or if the device has no settable volume (some external DACs).
-    func duck() {
+    /// Lower the output volume to `fraction` of its current level (clamped to a
+    /// sane range). A no-op if already ducked, if there is no usable output
+    /// device, or if the device has no settable volume (some external DACs).
+    func duck(toFraction fraction: Float32) {
         guard duckedDevice == nil else { return }
         guard let device = Self.defaultOutputDevice(),
               let current = Self.outputVolume(for: device) else { return }
 
-        let target = current * Self.duckFactor
+        let clampedFraction = min(max(fraction, 0.01), 1)
+        let target = current * clampedFraction
         guard Self.setOutputVolume(target, for: device) else { return }
 
         duckedDevice = device

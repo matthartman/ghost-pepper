@@ -25,6 +25,10 @@ extension MediaRecordingBehavior {
     static let storageKey = "mediaRecordingBehavior"
     /// Legacy boolean key this setting replaced.
     static let legacyPauseKey = "pauseMediaWhileRecording"
+    /// UserDefaults key for the duck target volume, as a percentage (0-100).
+    static let duckVolumePercentKey = "mediaDuckVolumePercent"
+    /// Default duck target: lower background audio to this percent of its level.
+    static let defaultDuckVolumePercent: Double = 30
 
     /// One-time migration of the old `pauseMediaWhileRecording` boolean.
     /// `true` (the old default) becomes `.pause`, `false` becomes `.off`.
