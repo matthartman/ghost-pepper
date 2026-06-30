@@ -4,7 +4,7 @@ import CoreGraphics
 
 struct ShortcutRecorderView: View {
     let title: String
-    let chord: KeyChord
+    let chord: KeyChord?
     let onRecordingStateChange: (Bool) -> Void
     let onChange: (KeyChord) -> Void
 
@@ -54,7 +54,7 @@ struct ShortcutRecorderView: View {
             return "Press Shortcut"
         }
 
-        return chord.shortcutRecorderDisplayString
+        return chord?.shortcutRecorderDisplayString ?? "Record Shortcut"
     }
 
     private func toggleRecording() {

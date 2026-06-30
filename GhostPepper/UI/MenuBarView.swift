@@ -12,6 +12,17 @@ struct MenuBarView: View {
                 appState.showSettings()
             }
 
+            Button("History...") {
+                appState.showSettings(section: .transcriptionLab)
+            }
+
+            Button("Copy Last Transcription") {
+                appState.copyLastTranscriptionToPasteboard()
+            }
+            .disabled(appState.lastTranscription == nil)
+
+            Divider()
+
             if appState.pepperChatEnabled {
                 Button("Context Bundler...") {
                     appState.showPepperChat()

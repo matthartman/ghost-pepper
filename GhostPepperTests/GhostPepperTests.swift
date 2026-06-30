@@ -12,6 +12,7 @@ private final class FakeHotkeyMonitor: HotkeyMonitoring {
     var onToggleToTalkStop: (() -> Void)?
     var onPepperChatStart: (() -> Void)?
     var onPepperChatStop: (() -> Void)?
+    var onSimpleAction: ((ChordAction) -> Void)?
     var onRecordingRestart: (() -> Void)?
 
     var updatedBindings: [ChordAction: KeyChord] = [:]
@@ -304,6 +305,78 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(appState.toggleToTalkChord, originalToggleChord)
         XCTAssertEqual(monitor.updatedBindings[.toggleToTalk], originalToggleChord)
         XCTAssertEqual(appState.shortcutErrorMessage, "That shortcut is already in use.")
+    }
+
+    func testAppStateLeavesMenuShortcutsUnsetByDefault() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let monitor = FakeHotkeyMonitor()
+        let appState = AppState(hotkeyMonitor: monitor, chordBindingStore: ChordBindingStore(defaults: defaults))
+
+        await appState.startHotkeyMonitor()
+
+        XCTAssertNil(appState.copyLastTranscriptionChord)
+        XCTAssertNil(appState.openHistoryChord)
+        XCTAssertNil(monitor.updatedBindings[.copyLastTranscription])
+        XCTAssertNil(monitor.updatedBindings[.openHistory])
+        XCTAssertNotNil(monitor.onSimpleAction)
+    }
+
+    func testAppStateUpdateShortcutBindsMenuActionGlobally() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let monitor = FakeHotkeyMonitor()
+        let appState = AppState(hotkeyMonitor: monitor, chordBindingStore: ChordBindingStore(defaults: defaults))
+        let chord = try XCTUnwrap(KeyChord(keys: Set([
+            PhysicalKey(keyCode: 54),
+            PhysicalKey(keyCode: 4)
+        ])))
+
+        appState.updateShortcut(chord, for: .copyLastTranscription)
+
+        XCTAssertEqual(appState.copyLastTranscriptionChord, chord)
+        XCTAssertEqual(monitor.updatedBindings[.copyLastTranscription], chord)
+    }
+
+    func testAppStateRecordsLastTranscriptionAtDictationFunnel() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        XCTAssertNil(appState.lastTranscription)
+
+        appState.transcribeAudioBufferOverride = { _ in "raw transcript" }
+        appState.cleanedTranscriptionResultOverride = { _, _ in
+            (text: "cleaned transcript", prompt: "", attemptedCleanup: true, cleanupUsedFallback: false)
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: nil,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(appState.lastTranscription, "cleaned transcript")
+    }
+
+    func testCopyLastTranscriptionToPasteboardNoOpsWhenEmpty() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("sentinel", forType: .string)
+
+        appState.copyLastTranscriptionToPasteboard()
+
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "sentinel")
     }
 
     func testAppStateLoadsPersistedCleanupBackendSelection() throws {

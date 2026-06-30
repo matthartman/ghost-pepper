@@ -90,6 +90,13 @@ class AppState: ObservableObject {
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
     @Published private(set) var pepperChatChord: KeyChord
+    /// Configurable global hotkeys for the menu affordances. Unset by default so a
+    /// system-wide chord is opt-in rather than clobbering an existing shortcut.
+    @Published private(set) var copyLastTranscriptionChord: KeyChord?
+    @Published private(set) var openHistoryChord: KeyChord?
+    /// Most recent dictation result (push-to-talk) — cleaned if cleanup ran, else raw;
+    /// not meeting text. Backs "Copy Last Transcription"; nil until the first dictation.
+    @Published private(set) var lastTranscription: String?
     @Published var postPasteLearningEnabled: Bool {
         didSet {
             cleanupSettingsDefaults.set(
@@ -243,6 +250,8 @@ class AppState: ObservableObject {
         self.pushToTalkChord = chordBindingStore.binding(for: .pushToTalk) ?? AppState.defaultPushToTalkChord
         self.toggleToTalkChord = chordBindingStore.binding(for: .toggleToTalk) ?? AppState.defaultToggleToTalkChord
         self.pepperChatChord = chordBindingStore.binding(for: .pepperChat) ?? AppState.defaultPepperChatChord
+        self.copyLastTranscriptionChord = chordBindingStore.binding(for: .copyLastTranscription)
+        self.openHistoryChord = chordBindingStore.binding(for: .openHistory)
         self.textCleanupManager = textCleanupManager ?? TextCleanupManager(defaults: cleanupSettingsDefaults)
         self.frontmostWindowOCRService = frontmostWindowOCRService
         self.recordingOCRPrefetch = RecordingOCRPrefetch { [frontmostWindowOCRService] customWords in
@@ -622,6 +631,12 @@ class AppState: ObservableObject {
             // No-op on key release — toggle mode handles everything on key down
         }
 
+        hotkeyMonitor.onSimpleAction = { [weak self] action in
+            Task { @MainActor in
+                self?.performSimpleHotkeyAction(action)
+            }
+        }
+
         hotkeyMonitor.updateBindings(shortcutBindings)
 
         if hotkeyMonitorStarted {
@@ -902,6 +917,10 @@ class AppState: ObservableObject {
 
         let cleanupResult = await cleanedTranscriptionResult(text, windowContext: windowContext)
         let finalText = cleanupResult.text
+        // Single dictation funnel — the only write site for "Copy Last Transcription".
+        if !finalText.isEmpty {
+            lastTranscription = finalText
+        }
         activeCleanupAttempted = cleanupResult.attemptedCleanup
         if cleanupResult.attemptedCleanup {
             activePerformanceTrace?.cleanupEndAt = Date()
@@ -1162,6 +1181,23 @@ class AppState: ObservableObject {
 
     func showSettings(section: SettingsSection? = nil) {
         settingsController.show(appState: self, section: section)
+    }
+
+    func copyLastTranscriptionToPasteboard() {
+        guard let lastTranscription else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lastTranscription, forType: .string)
+    }
+
+    private func performSimpleHotkeyAction(_ action: ChordAction) {
+        switch action {
+        case .copyLastTranscription:
+            copyLastTranscriptionToPasteboard()
+        case .openHistory:
+            showSettings(section: .transcriptionLab)
+        case .pushToTalk, .toggleToTalk, .pepperChat:
+            break
+        }
     }
 
     func showPromptEditor() {
@@ -1499,6 +1535,14 @@ class AppState: ObservableObject {
             bindings[.pepperChat] = pepperChatChord
         }
 
+        if let copyLastTranscriptionChord {
+            bindings[.copyLastTranscription] = copyLastTranscriptionChord
+        }
+
+        if let openHistoryChord {
+            bindings[.openHistory] = openHistoryChord
+        }
+
         return bindings
     }
 
@@ -1506,6 +1550,8 @@ class AppState: ObservableObject {
         try? chordBindingStore.setBinding(pushToTalkChord, for: .pushToTalk)
         try? chordBindingStore.setBinding(toggleToTalkChord, for: .toggleToTalk)
         try? chordBindingStore.setBinding(pepperChatChord, for: .pepperChat)
+        try? chordBindingStore.setBinding(copyLastTranscriptionChord, for: .copyLastTranscription)
+        try? chordBindingStore.setBinding(openHistoryChord, for: .openHistory)
     }
 
     private var canAttemptCleanup: Bool {
@@ -1816,6 +1862,8 @@ class AppState: ObservableObject {
         let previousPushChord = pushToTalkChord
         let previousToggleChord = toggleToTalkChord
         let previousPepperChatChord = pepperChatChord
+        let previousCopyLastChord = copyLastTranscriptionChord
+        let previousOpenHistoryChord = openHistoryChord
 
         do {
             try chordBindingStore.setBinding(chord, for: action)
@@ -1828,6 +1876,10 @@ class AppState: ObservableObject {
                 toggleToTalkChord = chord
             case .pepperChat:
                 pepperChatChord = chord
+            case .copyLastTranscription:
+                copyLastTranscriptionChord = chord
+            case .openHistory:
+                openHistoryChord = chord
             }
 
             hotkeyMonitor.updateBindings(shortcutBindings)
@@ -1835,6 +1887,8 @@ class AppState: ObservableObject {
             pushToTalkChord = previousPushChord
             toggleToTalkChord = previousToggleChord
             pepperChatChord = previousPepperChatChord
+            copyLastTranscriptionChord = previousCopyLastChord
+            openHistoryChord = previousOpenHistoryChord
             shortcutErrorMessage = "That shortcut is already in use."
         }
     }

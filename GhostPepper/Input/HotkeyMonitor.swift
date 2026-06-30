@@ -12,6 +12,7 @@ protocol HotkeyMonitoring: AnyObject {
     var onToggleToTalkStop: (() -> Void)? { get set }
     var onPepperChatStart: (() -> Void)? { get set }
     var onPepperChatStop: (() -> Void)? { get set }
+    var onSimpleAction: ((ChordAction) -> Void)? { get set }
 
     func start() -> Bool
     func stop()
@@ -29,12 +30,14 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
         let startAction: ChordAction?
         let stopAction: ChordAction?
         let restartAction: ChordAction?
+        let simpleAction: ChordAction?
 
-        init(logMessage: String?, startAction: ChordAction? = nil, stopAction: ChordAction? = nil, restartAction: ChordAction? = nil) {
+        init(logMessage: String?, startAction: ChordAction? = nil, stopAction: ChordAction? = nil, restartAction: ChordAction? = nil, simpleAction: ChordAction? = nil) {
             self.logMessage = logMessage
             self.startAction = startAction
             self.stopAction = stopAction
             self.restartAction = restartAction
+            self.simpleAction = simpleAction
         }
     }
 
@@ -55,6 +58,7 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
     var onToggleToTalkStop: (() -> Void)?
     var onPepperChatStart: (() -> Void)?
     var onPepperChatStop: (() -> Void)?
+    var onSimpleAction: ((ChordAction) -> Void)?
 
     // MARK: - State
 
@@ -310,6 +314,8 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
                 "stop"
             case .restartRecording:
                 "restart"
+            case .fireSimpleAction(let action):
+                "fire(\(action.rawValue))"
             }
         }.joined(separator: ", ")
         let actionDescription = currentAction?.rawValue ?? "none"
@@ -319,7 +325,11 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
         let startAction = effects.contains(.startRecording) ? currentAction : nil
         let stopAction = effects.contains(.stopRecording) ? previousAction : nil
         let restartAction = effects.contains(.restartRecording) ? currentAction : nil
-        return HandlingResult(logMessage: logMessage, startAction: startAction, stopAction: stopAction, restartAction: restartAction)
+        var simpleAction: ChordAction?
+        for case .fireSimpleAction(let action) in effects {
+            simpleAction = action
+        }
+        return HandlingResult(logMessage: logMessage, startAction: startAction, stopAction: stopAction, restartAction: restartAction, simpleAction: simpleAction)
     }
 
     private func currentPressedKeys() -> Set<PhysicalKey> {
@@ -385,6 +395,10 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
             debugLogger?(.hotkey, logMessage)
         }
 
+        if let simpleAction = result.simpleAction {
+            onSimpleAction?(simpleAction)
+        }
+
         if let startAction = result.startAction {
             switch startAction {
             case .pushToTalk:
@@ -401,6 +415,8 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
                 }
             case .pepperChat:
                 onPepperChatStart?()
+            case .copyLastTranscription, .openHistory:
+                break
             }
         }
 
@@ -409,7 +425,7 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
             switch restartAction {
             case .pushToTalk, .toggleToTalk:
                 onRecordingRestart?()
-            case .pepperChat:
+            case .pepperChat, .copyLastTranscription, .openHistory:
                 break
             }
         }
@@ -430,6 +446,8 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
                 }
             case .pepperChat:
                 onPepperChatStop?()
+            case .copyLastTranscription, .openHistory:
+                break
             }
         }
     }
