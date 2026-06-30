@@ -220,7 +220,10 @@ class AppState: ObservableObject {
     @AppStorage("meetingWindowFloatsWhileRecording") var meetingWindowFloatsWhileRecording: Bool = true
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
     @AppStorage("claudeAPIModel") var claudeAPIModel: String = ClaudeAPIModel.sonnet.rawValue
-    @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
+    @AppStorage(MediaRecordingBehavior.storageKey) var mediaRecordingBehavior: String = MediaRecordingBehavior.pause.rawValue
+    var resolvedMediaRecordingBehavior: MediaRecordingBehavior {
+        MediaRecordingBehavior(rawValue: mediaRecordingBehavior) ?? .pause
+    }
     @Published private(set) var pushToTalkChord: KeyChord
     @Published private(set) var toggleToTalkChord: KeyChord
     @Published private(set) var pepperChatChord: KeyChord
@@ -258,8 +261,9 @@ class AppState: ObservableObject {
     lazy var soundEffects = SoundEffects(isEnabled: { [weak self] in
         self?.playSounds ?? true
     })
+    private let audioDucker = AudioDucker()
     private lazy var mediaPlaybackController = MediaPlaybackController(enabled: { [weak self] in
-        self?.pauseMediaWhileRecording ?? true
+        self?.resolvedMediaRecordingBehavior == .pause
     })
     let hotkeyMonitor: HotkeyMonitoring
     let overlay = RecordingOverlayController()
@@ -377,6 +381,7 @@ class AppState: ObservableObject {
         selectedInputDeviceIDProvider: @escaping () -> AudioDeviceID? = { AudioDeviceManager.selectedInputDeviceID() },
         resetAudioRecorder: (() -> Void)? = nil
     ) {
+        MediaRecordingBehavior.migrateLegacySettingIfNeeded()
         self.hotkeyMonitor = hotkeyMonitor
         self.chordBindingStore = chordBindingStore
         self.cleanupSettingsDefaults = cleanupSettingsDefaults
@@ -929,7 +934,7 @@ class AppState: ObservableObject {
             } else {
                 textCleanupManager.cancelPromptPrefill()
             }
-            mediaPlaybackController.pauseIfPlaying()
+            applyMediaBehaviorAtRecordingStart()
             audioRecorder.targetDeviceID = selectedInputDeviceIDProvider()
             try audioRecorder.startRecording()
             debugLogStore.record(category: .hotkey, message: "Recording started.")
@@ -946,6 +951,26 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Applies the user's "while recording" media choice when recording starts.
+    private func applyMediaBehaviorAtRecordingStart() {
+        switch resolvedMediaRecordingBehavior {
+        case .off:
+            break
+        case .pause:
+            mediaPlaybackController.pauseIfPlaying()
+        case .duck:
+            audioDucker.duck()
+        }
+    }
+
+    /// Undoes whatever `applyMediaBehaviorAtRecordingStart()` did. Always
+    /// restores a ducked volume so a mid-session settings change can't leave it
+    /// stuck low; the pause path is a no-op by design.
+    private func applyMediaBehaviorAtRecordingStop() {
+        audioDucker.restore()
+        mediaPlaybackController.resumeIfPaused()
+    }
+
     private var isTranscribing = false
 
     private func stopRecordingAndTranscribe() async {
@@ -959,7 +984,7 @@ class AppState: ObservableObject {
         let recordingTranscriptionSession = activeRecordingTranscriptionSession
         clearRecordingSessionCoordinator()
         soundEffects.playStop()
-        mediaPlaybackController.resumeIfPaused()
+        applyMediaBehaviorAtRecordingStop()
         isRecording = false
         status = .transcribing
         overlay.show(message: .transcribing)

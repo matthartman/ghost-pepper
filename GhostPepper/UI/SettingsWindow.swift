@@ -983,10 +983,19 @@ struct SettingsView: View {
                         )
                     )
 
-                    Toggle(
-                        "Pause media while recording",
-                        isOn: $appState.pauseMediaWhileRecording
-                    )
+                    SettingsField("While recording") {
+                        Picker("While recording", selection: $appState.mediaRecordingBehavior) {
+                            ForEach(MediaRecordingBehavior.allCases) { behavior in
+                                Text(behavior.displayName).tag(behavior.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 320, alignment: .leading)
+                    }
+
+                    Text("Lower the volume keeps background audio playing quietly while you record and restores it when you stop. Pause playback stops it instead.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     if speakerFilteringToggleState.isVisible {
                         Toggle(
