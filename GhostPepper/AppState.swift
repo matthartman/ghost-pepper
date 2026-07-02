@@ -766,6 +766,8 @@ class AppState: ObservableObject {
         } catch {
             recordingOCRPrefetch.cancel()
             releasePipeline(owner: .liveRecording)
+            // Recording never started, so restore any media we paused above.
+            mediaPlaybackController.resumeIfPaused()
             activePerformanceTrace = nil
             errorMessage = "Failed to start recording: \(error.localizedDescription)"
             status = .error

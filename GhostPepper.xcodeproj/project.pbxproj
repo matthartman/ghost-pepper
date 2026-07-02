@@ -185,6 +185,7 @@
 		E62BA209042B0FA8B53E2C76 /* CleanupPromptEvalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA783B889855B0811E210751 /* CleanupPromptEvalTests.swift */; };
 		E6D90B88DFC16CA9EFD343B4 /* SpeakerIdentityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA71CE818E7248813A08248 /* SpeakerIdentityResolver.swift */; };
 		EA0A1ECE203067342B2E2CF6 /* MarkdownArchivePathsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2703FAF4A3B8D55B84100BA /* MarkdownArchivePathsTests.swift */; };
+		EC9D3DF50039DB0403DDEC20 /* MediaPlaybackControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB83ECF2249CB96A4DC0AEDB /* MediaPlaybackControllerTests.swift */; };
 		ED6279A88A99C00B4F6C49CC /* ReaderCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27AFC0BE8F74723D68B647A6 /* ReaderCapture.swift */; };
 		EE25B297BB7834C3C90423B9 /* TextCleanerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49848DB685A19FBB6557B76E /* TextCleanerTests.swift */; };
 		F0598B5D027A5B31EF1B7664 /* FocusedElementLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBC0D906FF181E91A758F58 /* FocusedElementLocatorTests.swift */; };
@@ -403,6 +404,7 @@
 		F96030E4F754A444667F7B07 /* RecognizedVoiceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecognizedVoiceStore.swift; sourceTree = "<group>"; };
 		FA48EF56983A55149A084D1B /* sprite_frame_3@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_3@2x.png"; sourceTree = "<group>"; };
 		FA652178AA004E557356FA93 /* IndexEntryFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexEntryFileTests.swift; sourceTree = "<group>"; };
+		FB83ECF2249CB96A4DC0AEDB /* MediaPlaybackControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPlaybackControllerTests.swift; sourceTree = "<group>"; };
 		FB90C0FCC4C82E14297BE616 /* ReaderCaptureSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderCaptureSheet.swift; sourceTree = "<group>"; };
 		FDC6FD42E70C7163E281332B /* CleanupPromptBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupPromptBuilder.swift; sourceTree = "<group>"; };
 		FECE990F52DED36EC4C5458D /* AppRelauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRelauncher.swift; sourceTree = "<group>"; };
@@ -818,6 +820,7 @@
 				AF04305B5AE9665D25C23A2C /* IndexSystemPromptTests.swift */,
 				0F634CFD724E29ECA57C0BB6 /* KeyChordTests.swift */,
 				D2703FAF4A3B8D55B84100BA /* MarkdownArchivePathsTests.swift */,
+				FB83ECF2249CB96A4DC0AEDB /* MediaPlaybackControllerTests.swift */,
 				1AFEA05207B7965A3D44D000 /* MeetingQAAgentTests.swift */,
 				35A699887678B31BAF27498A /* MeetingQASystemPromptTests.swift */,
 				785F5D6EDD25D78F6220268E /* MeetingQAToolsTests.swift */,
@@ -927,7 +930,6 @@
 				};
 			};
 			buildConfigurationList = 4DD304029FEB6147483470FD /* Build configuration list for PBXProject "GhostPepper" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -943,6 +945,7 @@
 				E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
 			preferredProjectObjectVersion = 77;
+			productRefGroup = 3705D6F7BCD01CB7D37DF812 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -1144,6 +1147,7 @@
 				5A4D2E405B6F7A519BA6F6F0 /* IndexSystemPromptTests.swift in Sources */,
 				AB0AC6DC19EC0DB440F5B123 /* KeyChordTests.swift in Sources */,
 				EA0A1ECE203067342B2E2CF6 /* MarkdownArchivePathsTests.swift in Sources */,
+				EC9D3DF50039DB0403DDEC20 /* MediaPlaybackControllerTests.swift in Sources */,
 				4961DAF729CE58AAAACBC1AC /* MeetingQAAgentTests.swift in Sources */,
 				190EA523BC8AAF93599DD038 /* MeetingQASystemPromptTests.swift in Sources */,
 				04654E621041E2A81CC2CFC7 /* MeetingQAToolsTests.swift in Sources */,
