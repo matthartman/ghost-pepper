@@ -13,6 +13,15 @@ final class URLActionHandlerTests: XCTestCase {
         return Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, last in last })
     }
 
+    /// The JSON object carried in `url`'s `param` query item (percent-decoded by `queryDict`).
+    private func jsonPayload(in url: URL, param: String) -> [String: Any]? {
+        guard let value = queryDict(url)[param],
+              let data = value.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return object
+    }
+
     // MARK: - Action-token parsing
 
     func testParsesActionFromCallbackPath() {
@@ -181,6 +190,125 @@ final class URLActionHandlerTests: XCTestCase {
         // The raw query must be escaped (no stray separators), yet decode back to the original.
         XCTAssertFalse(callback.absoluteString.contains("a&b=c"))
         XCTAssertEqual(queryDict(callback)["text"], text)
+    }
+
+    // MARK: - Callback shaping: retParam (no retFormat)
+
+    func testRetParamRenamesSingleValuePayload() {
+        let request = parse("ghostpepper://x-callback-url/get-last-transcription?retParam=q&x-success=tuna://text")!
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "caught a tuna")))!
+        XCTAssertEqual(queryDict(callback)["q"], "caught a tuna")
+        XCTAssertNil(queryDict(callback)["text"])
+    }
+
+    func testRetParamOnMultiValuePayloadIsBadRequest() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retParam=context&x-success=raycast://ok&x-error=raycast://err")!
+        let result = GhostPepperActionResult.status(recording: true, appStatus: "recording", meetingID: "m", meetingName: "n")
+        let dict = queryDict(URLActionHandler.callbackURL(for: request, result: .success(result))!)
+        // No field is silently dropped — the caller is told to use retFormat=json.
+        XCTAssertEqual(dict["errorCode"], "BAD_REQUEST")
+        XCTAssertNil(dict["recording"])
+        XCTAssertNil(dict["appStatus"])
+    }
+
+    func testRetParamOnMeetingStartedIsBadRequest() {
+        let request = parse("ghostpepper://x-callback-url/start-meeting?retParam=out&x-success=raycast://ok&x-error=raycast://err")!
+        let id = "33333333-3333-3333-3333-333333333333"
+        let result = GhostPepperActionResult.meetingStarted(id: id, viewURL: URLActionHandler.viewURL(forMeetingID: id))
+        XCTAssertEqual(queryDict(URLActionHandler.callbackURL(for: request, result: .success(result))!)["errorCode"], "BAD_REQUEST")
+    }
+
+    func testEmptyRetParamFallsBackToNaturalNames() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retParam=&x-success=raycast://done")!
+        let result = GhostPepperActionResult.status(recording: false, appStatus: "idle", meetingID: nil, meetingName: nil)
+        let dict = queryDict(URLActionHandler.callbackURL(for: request, result: .success(result))!)
+        XCTAssertEqual(dict["appStatus"], "idle")
+        XCTAssertEqual(dict["recording"], "false")
+    }
+
+    func testRetParamNeverReachesWebSuccess() {
+        let request = parse("ghostpepper://x-callback-url/get-last-transcription?retParam=q&x-success=https://evil.example")!
+        XCTAssertNil(URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "secret"))))
+    }
+
+    // MARK: - Callback shaping: retFormat=json
+
+    func testJSONFormatEncodesStatusPayloadUnderRetParam() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retFormat=json&retParam=context&x-success=raycast://extensions/me/ext/cmd")!
+        let result = GhostPepperActionResult.status(recording: true, appStatus: "recording", meetingID: "mid", meetingName: "Standup")
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(result))!
+        let json = jsonPayload(in: callback, param: "context")
+        XCTAssertEqual(json?["recording"] as? Bool, true)
+        XCTAssertEqual(json?["appStatus"] as? String, "recording")
+        XCTAssertEqual(json?["meetingID"] as? String, "mid")
+        XCTAssertEqual(json?["meetingName"] as? String, "Standup")
+        // recording is a JSON boolean, not the string "true" or the number 1.
+        XCTAssertTrue(queryDict(callback)["context"]!.contains("\"recording\":true"))
+    }
+
+    func testJSONFormatDefaultsEnvelopeToPayload() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retFormat=json&x-success=raycast://done")!
+        let result = GhostPepperActionResult.status(recording: false, appStatus: "idle", meetingID: nil, meetingName: nil)
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(result))!
+        let json = jsonPayload(in: callback, param: "payload")
+        XCTAssertEqual(json?["recording"] as? Bool, false)
+        XCTAssertEqual(json?["appStatus"] as? String, "idle")
+        // Nil meeting fields stay out of the JSON object.
+        XCTAssertNil(json?["meetingID"])
+        XCTAssertNil(json?["meetingName"])
+    }
+
+    func testJSONFormatEncodesTranscription() {
+        let request = parse("ghostpepper://x-callback-url/get-last-transcription?retFormat=json&retParam=arguments&x-success=raycast://extensions/me/ext/cmd")!
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "the whole thing")))!
+        let json = jsonPayload(in: callback, param: "arguments")
+        XCTAssertEqual(json?["text"] as? String, "the whole thing")
+        XCTAssertEqual(json?.count, 1)
+    }
+
+    func testJSONFormatNeverReachesWebSuccess() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retFormat=json&x-success=http://evil.example")!
+        let result = GhostPepperActionResult.status(recording: true, appStatus: "recording", meetingID: "m", meetingName: "n")
+        XCTAssertNil(URLActionHandler.callbackURL(for: request, result: .success(result)))
+    }
+
+    func testUnsupportedRetFormatIsBadRequest() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retFormat=xml&x-success=raycast://ok&x-error=raycast://err")!
+        let result = GhostPepperActionResult.status(recording: true, appStatus: "recording", meetingID: nil, meetingName: nil)
+        XCTAssertEqual(queryDict(URLActionHandler.callbackURL(for: request, result: .success(result))!)["errorCode"], "BAD_REQUEST")
+    }
+
+    func testJSONFormatEncodesMeetingStarted() {
+        let request = parse("ghostpepper://x-callback-url/start-meeting?retFormat=json&x-success=raycast://done")!
+        let id = "44444444-4444-4444-4444-444444444444"
+        let viewURL = URLActionHandler.viewURL(forMeetingID: id)
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(.meetingStarted(id: id, viewURL: viewURL)))!
+        let json = jsonPayload(in: callback, param: "payload")
+        XCTAssertEqual(json?["meetingID"] as? String, id)
+        XCTAssertEqual(json?["viewURL"] as? String, viewURL.absoluteString)
+    }
+
+    func testOkIgnoresShapingParams() {
+        // A no-payload success just opens x-success; retParam/retFormat have nothing to shape.
+        let request = parse("ghostpepper://x-callback-url/stop-meeting?retFormat=json&retParam=p&x-success=raycast://done")!
+        XCTAssertEqual(URLActionHandler.callbackURL(for: request, result: .success(.ok)), URL(string: "raycast://done"))
+    }
+
+    // A user-controlled retParam becomes a query-item name; a reserved character in it must
+    // be percent-encoded, not fed raw to URLComponents (which traps and would crash on the
+    // unauthenticated URL scheme).
+
+    func testRetParamNameWithReservedCharIsEncoded() {
+        let request = parse("ghostpepper://x-callback-url/get-last-transcription?retParam=q%26r&x-success=tuna://text")!
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "hi")))!
+        XCTAssertEqual(queryDict(callback)["q&r"], "hi")
+    }
+
+    func testJSONEnvelopeNameWithReservedCharIsEncoded() {
+        let request = parse("ghostpepper://x-callback-url/get-status?retFormat=json&retParam=a%20b&x-success=raycast://done")!
+        let result = GhostPepperActionResult.status(recording: false, appStatus: "idle", meetingID: nil, meetingName: nil)
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(result))!
+        XCTAssertEqual(jsonPayload(in: callback, param: "a b")?["appStatus"] as? String, "idle")
     }
 
     // MARK: - Callback mapping: errors
