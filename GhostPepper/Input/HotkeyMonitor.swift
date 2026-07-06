@@ -415,7 +415,7 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
                 }
             case .pepperChat:
                 onPepperChatStart?()
-            case .copyLastTranscription, .openHistory:
+            case .copyLastVocalRecording, .openHistory:
                 break
             }
         }
@@ -425,7 +425,7 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
             switch restartAction {
             case .pushToTalk, .toggleToTalk:
                 onRecordingRestart?()
-            case .pepperChat, .copyLastTranscription, .openHistory:
+            case .pepperChat, .copyLastVocalRecording, .openHistory:
                 break
             }
         }
@@ -446,7 +446,7 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
                 }
             case .pepperChat:
                 onPepperChatStop?()
-            case .copyLastTranscription, .openHistory:
+            case .copyLastVocalRecording, .openHistory:
                 break
             }
         }

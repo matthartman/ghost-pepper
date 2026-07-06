@@ -598,17 +598,23 @@ struct SettingsView: View {
                     }
 
                     ShortcutRecorderView(
-                        title: "Copy Last Transcription",
-                        chord: appState.copyLastTranscriptionChord,
-                        onRecordingStateChange: appState.setShortcutCaptureActive
+                        title: "Copy Last Vocal Recording",
+                        chord: appState.copyLastVocalRecordingChord,
+                        onRecordingStateChange: appState.setShortcutCaptureActive,
+                        onClear: {
+                            appState.clearShortcut(for: .copyLastVocalRecording)
+                        }
                     ) { chord in
-                        appState.updateShortcut(chord, for: .copyLastTranscription)
+                        appState.updateShortcut(chord, for: .copyLastVocalRecording)
                     }
 
                     ShortcutRecorderView(
                         title: "Open History",
                         chord: appState.openHistoryChord,
-                        onRecordingStateChange: appState.setShortcutCaptureActive
+                        onRecordingStateChange: appState.setShortcutCaptureActive,
+                        onClear: {
+                            appState.clearShortcut(for: .openHistory)
+                        }
                     ) { chord in
                         appState.updateShortcut(chord, for: .openHistory)
                     }
@@ -619,7 +625,7 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                     }
 
-                    Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord. Copy Last Transcription and Open History are unset by default — record a chord to enable each as a global shortcut.")
+                    Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord. Copy Last Vocal Recording and Open History are unset by default — record a chord to enable each as a global shortcut.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

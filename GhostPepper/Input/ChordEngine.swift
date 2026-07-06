@@ -74,7 +74,7 @@ struct ChordEngine {
 
             return []
 
-        case .copyLastTranscription, .openHistory:
+        case .copyLastVocalRecording, .openHistory:
             // Unreachable: simple actions never become the active recording action.
             return []
 

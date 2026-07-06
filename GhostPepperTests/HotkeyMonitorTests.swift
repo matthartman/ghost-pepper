@@ -75,6 +75,35 @@ final class HotkeyMonitorTests: XCTestCase {
         XCTAssertEqual(events, ["start", "stop"])
     }
 
+    func testSimpleActionTriggersCallbackOnceOnKeyDownEdge() throws {
+        var keyStates: [PhysicalKey: Bool] = [:]
+        let monitor = HotkeyMonitor(
+            bindings: [
+                .copyLastVocalRecording: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space])))
+            ],
+            keyStateProvider: { keyStates[$0] ?? false }
+        )
+        var actions: [ChordAction] = []
+
+        monitor.onSimpleAction = { action in
+            actions.append(action)
+        }
+
+        keyStates[rightCommand] = true
+        monitor.handleInput(.flagsChanged(rightCommand))
+        keyStates[space] = true
+        monitor.handleInput(.keyDown(space))
+        monitor.handleInput(.keyDown(space))
+        keyStates[a] = true
+        monitor.handleInput(.keyDown(a))
+        keyStates[a] = false
+        monitor.handleInput(.keyUp(a))
+        keyStates[space] = false
+        monitor.handleInput(.keyUp(space))
+
+        XCTAssertEqual(actions, [.copyLastVocalRecording])
+    }
+
     func testPushChordStartsWhenCurrentKeyStateLagsBehindModifierEvents() throws {
         var keyStates: [PhysicalKey: Bool] = [:]
         let monitor = HotkeyMonitor(

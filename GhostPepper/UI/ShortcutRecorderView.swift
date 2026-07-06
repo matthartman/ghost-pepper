@@ -6,17 +6,36 @@ struct ShortcutRecorderView: View {
     let title: String
     let chord: KeyChord?
     let onRecordingStateChange: (Bool) -> Void
+    let onClear: (() -> Void)?
     let onChange: (KeyChord) -> Void
 
     @State private var isRecording = false
     @State private var captureState = ShortcutCaptureState()
     @State private var localMonitor: Any?
 
+    init(
+        title: String,
+        chord: KeyChord?,
+        onRecordingStateChange: @escaping (Bool) -> Void,
+        onClear: (() -> Void)? = nil,
+        onChange: @escaping (KeyChord) -> Void
+    ) {
+        self.title = title
+        self.chord = chord
+        self.onRecordingStateChange = onRecordingStateChange
+        self.onClear = onClear
+        self.onChange = onChange
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
                 Spacer()
+                if !isRecording, chord != nil, let onClear {
+                    Button("Clear", action: onClear)
+                        .buttonStyle(.borderless)
+                }
                 if isRecording {
                     Button(action: toggleRecording) {
                         Text(buttonLabel)

@@ -16,10 +16,10 @@ struct MenuBarView: View {
                 appState.showSettings(section: .transcriptionLab)
             }
 
-            Button("Copy Last Transcription") {
-                appState.copyLastTranscriptionToPasteboard()
+            Button("Copy Last Vocal Recording") {
+                appState.copyLastVocalRecordingToPasteboard()
             }
-            .disabled(appState.lastTranscription == nil)
+            .disabled(appState.lastVocalRecording == nil)
 
             Divider()
 
