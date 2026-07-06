@@ -85,6 +85,8 @@ enum URLActionHandler {
             return .success(.stopMeeting)
         case "get-last-transcription":
             return .success(.getLastTranscription)
+        case "copy-last-recording":
+            return .success(.copyLastRecording)
         case "get-status":
             return .success(.getStatus)
         case "summarize-meeting":

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - Shared instance + readiness gate
@@ -48,6 +49,8 @@ extension AppState {
             return stopMeetingAction()
         case .getLastTranscription:
             return await getLastTranscriptionAction()
+        case .copyLastRecording:
+            return copyLastRecordingAction()
         case .getStatus:
             return .success(statusSnapshot())
         case .summarizeMeeting(let ref):
@@ -135,6 +138,28 @@ extension AppState {
             }
         }
         return .failure(.notFound("No transcription available."))
+    }
+
+    /// Put the newest saved dictation's text on the clipboard, app-side. Writing here
+    /// (not in `URLActionHandler`, which stays pure) is what lets a launcher that can
+    /// only open a URL fire-and-forget: one `ghostpepper://copy-last-recording` lands
+    /// the text on the pasteboard with no callback. The text is also returned so a
+    /// caller that does pass `x-success` (or uses the App Intent) still receives it.
+    private func copyLastRecordingAction() -> Result<GhostPepperActionResult, GhostPepperActionError> {
+        guard transcriptionLabEnabled else {
+            return .failure(.notFound("No saved recordings. Turn on the Transcription Lab in Settings to keep them."))
+        }
+
+        // `loadEntries()` returns newest-first; take the newest entry that actually
+        // has transcribed text (an entry can hold audio but no transcription).
+        let entries = (try? loadTranscriptionLabEntries()) ?? []
+        guard let text = entries.lazy.map(\.preferredTranscript).first(where: { !$0.isEmpty }) else {
+            return .failure(.notFound("The last recording has no transcribed text to copy."))
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        return .success(.transcription(text: text))
     }
 
     // MARK: Summarize

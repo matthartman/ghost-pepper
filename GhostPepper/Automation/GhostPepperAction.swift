@@ -13,6 +13,9 @@ enum GhostPepperAction: Equatable {
     case startMeeting(name: String?)
     case stopMeeting
     case getLastTranscription
+    /// Copy the newest Transcription Lab recording's text to the clipboard, app-side.
+    /// Distinct from `getLastTranscription`, which reads the meeting archive.
+    case copyLastRecording
     case getStatus
     /// `nil` ref → the active meeting.
     case summarizeMeeting(MeetingRef?)
@@ -25,7 +28,7 @@ enum GhostPepperAction: Equatable {
         switch self {
         case .getStatus, .openMeeting:
             return false
-        case .startMeeting, .stopMeeting, .getLastTranscription, .summarizeMeeting:
+        case .startMeeting, .stopMeeting, .getLastTranscription, .copyLastRecording, .summarizeMeeting:
             return true
         }
     }

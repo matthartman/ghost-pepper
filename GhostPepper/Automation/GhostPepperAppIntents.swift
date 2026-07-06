@@ -64,6 +64,17 @@ struct GetLastTranscriptionIntent: AppIntent {
     }
 }
 
+struct CopyLastRecordingIntent: AppIntent {
+    static var title: LocalizedStringResource = "Copy Last Recording"
+    static var description = IntentDescription("Copy the transcript of your most recent recording to the clipboard, and return it.")
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let result = try await GhostPepperIntentRunner.run(.copyLastRecording)
+        return .result(value: result.transcriptionText ?? "")
+    }
+}
+
 struct GetMeetingStatusIntent: AppIntent {
     static var title: LocalizedStringResource = "Get Status"
     static var description = IntentDescription("Return whether Ghost Pepper is recording, and the app's current state.")
@@ -127,6 +138,12 @@ struct GhostPepperShortcuts: AppShortcutsProvider {
             phrases: ["Get the last \(.applicationName) transcription"],
             shortTitle: "Last Transcription",
             systemImageName: "text.quote"
+        )
+        AppShortcut(
+            intent: CopyLastRecordingIntent(),
+            phrases: ["Copy the last \(.applicationName) recording"],
+            shortTitle: "Copy Last Recording",
+            systemImageName: "doc.on.clipboard"
         )
         AppShortcut(
             intent: GetMeetingStatusIntent(),

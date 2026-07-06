@@ -59,6 +59,8 @@ final class URLActionHandlerTests: XCTestCase {
         XCTAssertEqual(map("ghostpepper://x-callback-url/start-meeting?name=Sync"), .startMeeting(name: "Sync"))
         XCTAssertEqual(map("ghostpepper://stop-meeting"), .stopMeeting)
         XCTAssertEqual(map("ghostpepper://get-last-transcription"), .getLastTranscription)
+        XCTAssertEqual(map("ghostpepper://copy-last-recording"), .copyLastRecording)
+        XCTAssertEqual(map("ghostpepper://x-callback-url/copy-last-recording"), .copyLastRecording)
         XCTAssertEqual(map("ghostpepper://get-status"), .getStatus)
         XCTAssertEqual(map("ghostpepper://summarize-meeting"), .summarizeMeeting(nil))
         XCTAssertEqual(map("ghostpepper://x-callback-url/summarize-meeting?id=xyz"), .summarizeMeeting(.id("xyz")))
@@ -75,6 +77,13 @@ final class URLActionHandlerTests: XCTestCase {
 
     func testOpenMeetingWithoutRefIsBadRequest() {
         XCTAssertEqual(mapError("ghostpepper://open-meeting")?.code, .badRequest)
+    }
+
+    // Copy-last-recording exposes transcript text, so it must be behind the automation
+    // opt-in. `perform` enforces this uniformly for any consent-gated action; asserting
+    // the contract here locks it in without needing the app context.
+    func testCopyLastRecordingRequiresAutomationConsent() {
+        XCTAssertTrue(GhostPepperAction.copyLastRecording.requiresAutomationConsent)
     }
 
     private func map(_ string: String) -> GhostPepperAction? {
@@ -309,6 +318,48 @@ final class URLActionHandlerTests: XCTestCase {
         let result = GhostPepperActionResult.status(recording: false, appStatus: "idle", meetingID: nil, meetingName: nil)
         let callback = URLActionHandler.callbackURL(for: request, result: .success(result))!
         XCTAssertEqual(jsonPayload(in: callback, param: "a b")?["appStatus"] as? String, "idle")
+    }
+
+    // MARK: - copy-last-recording
+
+    // The clipboard write happens app-side in AppState; over URL the action reuses the
+    // transcription payload, so the same delivery + web-scheme rules apply.
+
+    func testCopyLastRecordingFireAndForgetIsNoOp() {
+        // The launcher-facing path: no x-success, so nothing to open — the copy already
+        // happened app-side.
+        let request = parse("ghostpepper://copy-last-recording")!
+        XCTAssertNil(URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "dictated text"))))
+    }
+
+    func testCopyLastRecordingAppendsTextToNonWebSuccess() {
+        let request = parse("ghostpepper://x-callback-url/copy-last-recording?x-success=raycast://done")!
+        let callback = URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "dictated text")))!
+        XCTAssertEqual(queryDict(callback)["text"], "dictated text")
+    }
+
+    func testCopyLastRecordingDropsTextForWebSuccess() {
+        for scheme in ["http", "https"] {
+            let request = parse("ghostpepper://x-callback-url/copy-last-recording?x-success=\(scheme)://evil.example")!
+            XCTAssertNil(
+                URLActionHandler.callbackURL(for: request, result: .success(.transcription(text: "secret"))),
+                "\(scheme) x-success must not receive the copied transcript"
+            )
+        }
+    }
+
+    func testCopyLastRecordingNotFoundGoesToErrorCallback() {
+        let request = parse("ghostpepper://x-callback-url/copy-last-recording?x-error=raycast://err")!
+        let error = GhostPepperActionError.notFound("The last recording has no transcribed text to copy.")
+        let dict = queryDict(URLActionHandler.callbackURL(for: request, result: .failure(error))!)
+        XCTAssertEqual(dict["errorCode"], "NOT_FOUND")
+    }
+
+    func testCopyLastRecordingForbiddenGoesToErrorCallback() {
+        let request = parse("ghostpepper://x-callback-url/copy-last-recording?x-error=raycast://err")!
+        let error = GhostPepperActionError.forbidden("Automation is disabled.")
+        let dict = queryDict(URLActionHandler.callbackURL(for: request, result: .failure(error))!)
+        XCTAssertEqual(dict["errorCode"], "FORBIDDEN")
     }
 
     // MARK: - Callback mapping: errors
