@@ -81,6 +81,11 @@ class AppState: ObservableObject {
     @AppStorage("trelloDefaultListId") var trelloDefaultListId: String = ""
     @Published var trelloBoards: [TrelloBoard] = []
     @AppStorage("meetingTranscriptEnabled") var meetingTranscriptEnabled: Bool = false
+    /// Opt-in for the `ghostpepper://` URL scheme and App Intents. Off by default:
+    /// a custom URL scheme is unauthenticated and web-reachable, so state-changing
+    /// and value-returning automation is refused until the user enables this. See
+    /// `AppState.perform(_:)`.
+    @AppStorage("allowAutomation") var allowAutomation: Bool = false
     @Published var showWhatsNew = false
     @AppStorage("meetingAutoDetectEnabled") var meetingAutoDetectEnabled: Bool = true
     @AppStorage("meetingWindowFloatsWhileRecording") var meetingWindowFloatsWhileRecording: Bool = true
@@ -432,6 +437,10 @@ class AppState: ObservableObject {
         self.textCleaner.sensitiveDebugLogger = sensitiveComponentDebugLogger
         self.postPasteLearningCoordinator.debugLogger = componentDebugLogger
         self.modelManager.debugLogger = componentDebugLogger
+
+        // Publish this instance for automation front-ends (URL scheme / App Intents),
+        // which can be invoked before SwiftUI finishes building the scene.
+        AppState.registerShared(self)
     }
 
     func initialize(skipPermissionPrompts: Bool = false) async {
@@ -1130,6 +1139,9 @@ class AppState: ObservableObject {
     }()
     private let meetingDetector = MeetingDetector()
     @Published var activeMeetingSession: MeetingSession?
+
+    /// Resolves `open-meeting?id=…` to a saved file. Built off-main, updated on save.
+    let meetingSessionIndex = MeetingSessionIndex()
     private(set) lazy var pepperChatSession: PepperChatSession = {
         let session = PepperChatSession(transcriber: transcriber)
         session.debugLogger = debugLogStore.record
@@ -1360,6 +1372,12 @@ class AppState: ObservableObject {
         meetingTranscriptWindowController.show()
     }
 
+    /// Used by automation, which can't reach the private window controller directly.
+    func openSavedMeeting(at url: URL) {
+        meetingTranscriptWindowController.show()
+        meetingTranscriptWindowController.windowState?.openFile(url)
+    }
+
     func showOrCreateMeetingWindow() {
         meetingTranscriptWindowController.show()
     }
@@ -1432,6 +1450,8 @@ class AppState: ObservableObject {
         NotificationCenter.default.post(name: .meetingRecordingStopped, object: savedURL)
         if let savedURL = savedURL {
             triggerIndexUpdates(for: savedURL)
+            let sessionID = session.transcript.sessionID
+            Task { await meetingSessionIndex.register(sessionID: sessionID, url: savedURL) }
         }
     }
 

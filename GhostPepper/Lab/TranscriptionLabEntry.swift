@@ -105,3 +105,15 @@ struct TranscriptionLabEntry: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(diarizationSummary, forKey: .diarizationSummary)
     }
 }
+
+extension TranscriptionLabEntry {
+    /// The transcript text to surface when copying this recording: the corrected
+    /// transcription when it holds text, else the raw transcription. Empty when the
+    /// entry has no usable text (e.g. audio archived but transcription failed).
+    var preferredTranscript: String {
+        if let corrected = correctedTranscription, !corrected.isEmpty {
+            return corrected
+        }
+        return rawTranscription ?? ""
+    }
+}

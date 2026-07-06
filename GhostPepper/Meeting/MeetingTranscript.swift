@@ -84,6 +84,13 @@ final class MeetingTranscript: ObservableObject {
         segments.append(segment)
     }
 
+    /// The transcript as flat, timestamped text: `[MM:SS] Speaker: text`, one line per segment.
+    var plainText: String {
+        segments
+            .map { "[\($0.formattedTimestamp)] \($0.speaker.displayName): \($0.text)" }
+            .joined(separator: "\n")
+    }
+
     /// Duration of the meeting so far, in seconds.
     var duration: TimeInterval {
         let end = endDate ?? Date()

@@ -40,6 +40,14 @@ struct MeetingMarkdownWriter {
     private static func renderMeetingMarkdown(transcript: MeetingTranscript) -> String {
         var lines: [String] = []
 
+        // Machine-managed YAML frontmatter. The session id lets automation
+        // (URL scheme / App Intents) reopen a saved meeting by id. It is a stable,
+        // user-visible contract — do not edit it by hand.
+        lines.append("---")
+        lines.append("id: \(transcript.sessionID.uuidString)")
+        lines.append("---")
+        lines.append("")
+
         // Title
         lines.append("# \(transcript.meetingName)")
         lines.append("")
@@ -105,6 +113,7 @@ struct MeetingMarkdownWriter {
         var lines: [String] = []
 
         lines.append("---")
+        lines.append("id: \(transcript.sessionID.uuidString)")
         lines.append("type: reader")
         if let source = transcript.sourceURL, !source.isEmpty {
             lines.append("source: \(source)")
@@ -157,6 +166,7 @@ struct MeetingMarkdownWriter {
         var article = ""
         var importedFrom: String?
         var sourceURL: String?
+        var sessionID: UUID?
         var inFrontmatter = false
         var frontmatterSeen = false
         var inNotes = false
@@ -184,6 +194,9 @@ struct MeetingMarkdownWriter {
                 }
                 if line.hasPrefix("source:") {
                     sourceURL = line.replacingOccurrences(of: "source:", with: "").trimmingCharacters(in: .whitespaces)
+                }
+                if let id = MeetingHistory.sessionID(fromFrontmatterLine: line) {
+                    sessionID = id
                 }
                 continue
             }
@@ -237,7 +250,7 @@ struct MeetingMarkdownWriter {
             }
         }
 
-        let transcript = MeetingTranscript(meetingName: title)
+        let transcript = MeetingTranscript(meetingName: title, sessionID: sessionID ?? UUID())
         transcript.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript.summary = trimmedSummary.isEmpty ? nil : trimmedSummary

@@ -8,6 +8,7 @@ class LazyUpdaterController {
 @main
 struct GhostPepperApp: App {
     private static let automaticTerminationReason = "Ghost Pepper keeps a persistent menu bar presence."
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
     @State private var hasInitialized = false

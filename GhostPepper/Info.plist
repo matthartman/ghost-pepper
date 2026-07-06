@@ -20,6 +20,14 @@
 				<string>com.github.matthartman.ghostpepper</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Ghost Pepper Automation</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ghostpepper</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>18</string>
