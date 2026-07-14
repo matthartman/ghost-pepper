@@ -1337,14 +1337,23 @@ class AppState: ObservableObject {
         Task { @MainActor in
             do {
                 try await session.start()
+                guard session.isActive else {
+                    if activeMeetingSession === session {
+                        activeMeetingSession = nil
+                    }
+                    return
+                }
                 // Count the attempt — usage-report semantics value "how often
                 // does the user try to use this?" over "did the file save."
                 // Captures abandoned/cancelled recordings too.
                 usageStats.record(.meetingRecord)
                 debugLogStore.record(category: .model, message: "Meeting transcription started: \(name)")
             } catch {
+                await session.stop()
                 debugLogStore.record(category: .model, message: "Meeting transcription failed to start: \(error.localizedDescription)")
-                activeMeetingSession = nil
+                if activeMeetingSession === session {
+                    activeMeetingSession = nil
+                }
             }
         }
 

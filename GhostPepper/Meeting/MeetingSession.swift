@@ -37,6 +37,7 @@ final class MeetingSession: ObservableObject {
     private var inactiveMeetingPollCount = 0
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
+    private var stopRequested = false
 
     init(
         meetingName: String,
@@ -58,7 +59,7 @@ final class MeetingSession: ObservableObject {
 
     /// Start dual-stream capture and chunked transcription.
     func start() async throws {
-        guard !isActive, !isDraining, !isStarting else { return }
+        guard !isActive, !isDraining, !isStarting, !stopRequested else { return }
         isStarting = true
         defer {
             isStarting = false
@@ -159,7 +160,10 @@ final class MeetingSession: ObservableObject {
             return
         }
 
-        guard isActive || isStarting || pipeline != nil else { return }
+        guard isActive || isStarting || pipeline != nil else {
+            stopRequested = true
+            return
+        }
         if isStarting {
             await withCheckedContinuation { continuation in
                 startWaiters.append(continuation)

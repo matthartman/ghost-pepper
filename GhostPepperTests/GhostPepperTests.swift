@@ -769,6 +769,53 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertFalse(session.isDraining)
     }
 
+    func testMeetingSessionStopBeforeStartupCancelsNextStart() async throws {
+        var captureStartCallCount = 0
+        let session = MeetingSession(
+            meetingName: "Cancelled meeting",
+            transcriber: SpeechTranscriber(modelManager: ModelManager()),
+            saveDirectory: FileManager.default.temporaryDirectory,
+            captureStartOverride: {
+                captureStartCallCount += 1
+            }
+        )
+
+        await session.stop()
+        try await session.start()
+
+        XCTAssertEqual(captureStartCallCount, 0)
+        XCTAssertFalse(session.isActive)
+        XCTAssertFalse(session.isStarting)
+        XCTAssertFalse(session.isDraining)
+    }
+
+    func testMeetingSessionStopCleansUpAfterStartupFailure() async throws {
+        struct StartupFailure: Error {}
+        let session = MeetingSession(
+            meetingName: "Failed meeting",
+            transcriber: SpeechTranscriber(modelManager: ModelManager()),
+            saveDirectory: FileManager.default.temporaryDirectory,
+            captureStartOverride: {
+                throw StartupFailure()
+            }
+        )
+
+        do {
+            try await session.start()
+            XCTFail("Expected meeting startup to fail")
+        } catch is StartupFailure {
+            // Expected failure from the injected capture startup.
+        }
+
+        await session.stop()
+
+        XCTAssertFalse(session.isActive)
+        XCTAssertFalse(session.isStarting)
+        XCTAssertFalse(session.isDraining)
+        XCTAssertNotNil(session.fileURL)
+        XCTAssertNotNil(session.transcript.endDate)
+    }
+
     func testAppStateWaitsForPepperChatTranscriptionBeforeReloadingSpeechAnalyzer() async throws {
         guard #available(macOS 26, *) else {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
