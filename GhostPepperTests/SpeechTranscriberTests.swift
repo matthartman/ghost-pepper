@@ -149,6 +149,44 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertNil(result, "Should return nil when model is not loaded")
     }
 
+    func testChunkedPipelineStopWaitsForPendingTranscription() async {
+        let transcriptionStarted = PipelineTestGate()
+        let releaseTranscription = PipelineTestGate()
+        let stopReturned = PipelineTestGate()
+        let pipeline = ChunkedTranscriptionPipeline(
+            transcribeChunk: { _ in
+                await transcriptionStarted.release()
+                await releaseTranscription.wait()
+                return "finished"
+            },
+            chunkDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("GhostPepperTests")
+                .appendingPathComponent(UUID().uuidString),
+            chunkInterval: 60
+        )
+
+        pipeline.start()
+        pipeline.appendAudio(
+            TaggedAudioChunk(source: .mic, samples: [1, 2, 3], timestamp: 0)
+        )
+
+        let stopTask = Task {
+            await pipeline.stop()
+            await stopReturned.release()
+        }
+
+        await transcriptionStarted.wait()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let returnedBeforeTranscriptionFinished = await stopReturned.isOpen
+        XCTAssertFalse(returnedBeforeTranscriptionFinished)
+
+        await releaseTranscription.release()
+        await stopTask.value
+
+        let returnedAfterTranscriptionFinished = await stopReturned.isOpen
+        XCTAssertTrue(returnedAfterTranscriptionFinished)
+    }
+
     // MARK: - Qwen3-ASR ModelManager Tests
 
     func testModelManagerLoadsQwen3AsrModelThroughOverride() async throws {
@@ -217,6 +255,27 @@ final class SpeechTranscriberTests: XCTestCase {
             "openai_whisper-small.en",
             "fluid_qwen3-asr-0.6b-int8",
         ])
+    }
+}
+
+private actor PipelineTestGate {
+    private var isReleased = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var isOpen: Bool { isReleased }
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        isReleased = true
+        let pendingWaiters = waiters
+        waiters.removeAll()
+        pendingWaiters.forEach { $0.resume() }
     }
 }
 

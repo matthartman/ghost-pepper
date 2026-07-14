@@ -6,6 +6,7 @@ import Foundation
 @MainActor
 final class MeetingSession: ObservableObject {
     @Published var isActive = false
+    @Published private(set) var isDraining = false
     @Published var fileURL: URL?
     @Published var noAudioDetected = false
 
@@ -49,7 +50,7 @@ final class MeetingSession: ObservableObject {
 
     /// Start dual-stream capture and chunked transcription.
     func start() async throws {
-        guard !isActive else { return }
+        guard !isActive, !isDraining else { return }
 
         let chunkDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("GhostPepper")
@@ -133,9 +134,11 @@ final class MeetingSession: ObservableObject {
     /// Stop capture, process remaining audio, finalize transcript.
     func stop() async {
         guard isActive else { return }
+        isDraining = true
         isActive = false
+        defer { isDraining = false }
 
-        pipeline?.stop()
+        await pipeline?.stop()
         _ = await capture.stop()
 
         transcript.endDate = Date()

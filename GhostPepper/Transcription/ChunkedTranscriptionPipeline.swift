@@ -20,7 +20,6 @@ final class ChunkedTranscriptionPipeline {
     /// Called when chunk audio is saved to disk (for optional post-meeting diarization).
     var onChunkSaved: ((URL, AudioStreamSource) -> Void)?
 
-    private let transcriber: SpeechTranscriber
     private let chunkInterval: TimeInterval
     private let overlapDuration: TimeInterval = 1.0 // 1 second overlap for dedup
 
@@ -39,6 +38,8 @@ final class ChunkedTranscriptionPipeline {
     /// Serial queue for transcription tasks to prevent race conditions on tail state.
     private let transcriptionQueue = DispatchQueue(label: "com.whispercat.chunked-transcription", qos: .userInitiated)
     private let transcriptionSemaphore = DispatchSemaphore(value: 1)
+    private let transcriptionGroup = DispatchGroup()
+    private let transcribeChunk: ([Float]) async -> String?
 
     /// Directory for saving chunk WAV files.
     private let chunkDirectory: URL
@@ -46,7 +47,19 @@ final class ChunkedTranscriptionPipeline {
     private let sampleRate: Double = 16000
 
     init(transcriber: SpeechTranscriber, chunkDirectory: URL, chunkInterval: TimeInterval = 30.0) {
-        self.transcriber = transcriber
+        self.transcribeChunk = { samples in
+            await transcriber.transcribe(audioBuffer: samples)
+        }
+        self.chunkDirectory = chunkDirectory
+        self.chunkInterval = chunkInterval
+    }
+
+    init(
+        transcribeChunk: @escaping ([Float]) async -> String?,
+        chunkDirectory: URL,
+        chunkInterval: TimeInterval = 30.0
+    ) {
+        self.transcribeChunk = transcribeChunk
         self.chunkDirectory = chunkDirectory
         self.chunkInterval = chunkInterval
     }
@@ -70,7 +83,7 @@ final class ChunkedTranscriptionPipeline {
     }
 
     /// Stop the pipeline and process any remaining audio.
-    func stop() {
+    func stop() async {
         guard isRunning else { return }
         isRunning = false
         chunkTimer?.invalidate()
@@ -78,6 +91,12 @@ final class ChunkedTranscriptionPipeline {
 
         // Process final partial chunk.
         drainAndTranscribe()
+
+        await withCheckedContinuation { continuation in
+            transcriptionGroup.notify(queue: .global(qos: .userInitiated)) {
+                continuation.resume()
+            }
+        }
     }
 
     /// Feed audio chunks from DualStreamCapture into the pipeline.
@@ -110,11 +129,19 @@ final class ChunkedTranscriptionPipeline {
         chunkIndex += 1
 
         // Serialize transcription to prevent races on previousMicTail/previousSystemTail.
-        transcriptionQueue.async { [weak self, transcriptionSemaphore] in
+        transcriptionGroup.enter()
+        transcriptionQueue.async { [weak self, transcriptionSemaphore, transcriptionGroup] in
+            guard let self = self else {
+                transcriptionGroup.leave()
+                return
+            }
             transcriptionSemaphore.wait()
             let task = Task { [weak self] in
+                defer {
+                    transcriptionSemaphore.signal()
+                    self?.transcriptionGroup.leave()
+                }
                 guard let self = self else { return }
-                defer { transcriptionSemaphore.signal() }
 
                 if !micSamples.isEmpty {
                     await self.processChunk(
@@ -162,7 +189,7 @@ final class ChunkedTranscriptionPipeline {
         }
 
         // Transcribe the chunk.
-        guard let rawText = await transcriber.transcribe(audioBuffer: samples) else { return }
+        guard let rawText = await transcribeChunk(samples) else { return }
         let cleaned = SpeechTranscriber.removeArtifacts(from: rawText)
         guard !cleaned.isEmpty else { return }
 
