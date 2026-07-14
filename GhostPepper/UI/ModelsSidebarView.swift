@@ -73,6 +73,9 @@ struct ModelsSidebarView: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
+                .onChange(of: selectedSpeechModelID) { _, modelID in
+                    onDownloadSpeechModel(modelID)
+                }
             }
 
             FunctionRow(
@@ -132,10 +135,12 @@ struct ModelsSidebarView: View {
         }
     }
 
-    /// Speech models the user has actually downloaded — only these can drive
-    /// speech-to-text, so the picker is filtered to them.
+    /// Speech models that are ready to drive speech-to-text. System-managed
+    /// assets are usable before a locale-specific download is requested.
     private var downloadedSpeechModels: [SpeechModelDescriptor] {
-        SpeechModelCatalog.availableModels.filter { ModelManager.isCached($0) }
+        SpeechModelCatalog.availableModels.filter {
+            $0.isSystemManaged || ModelManager.isCached($0)
+        }
     }
 
     /// Cleanup models the user has actually downloaded.
@@ -148,7 +153,7 @@ struct ModelsSidebarView: View {
     private var localModelsSection: some View {
         section(title: "Local models") {
             ForEach(SpeechModelCatalog.availableModels, id: \.id) { model in
-                let downloaded = ModelManager.isCached(model)
+                let downloaded = model.isSystemManaged || ModelManager.isCached(model)
                 let isActive = model.id == selectedSpeechModelID
                 LocalModelRow(
                     title: model.pickerTitle,
@@ -156,9 +161,13 @@ struct ModelsSidebarView: View {
                     capabilities: capabilities(for: model),
                     isDownloaded: downloaded,
                     isActive: isActive,
-                    progress: speechRowProgress(for: model.id, downloaded: downloaded),
-                    onDownload: downloaded ? nil : { onDownloadSpeechModel(model.id) },
-                    onDelete: (downloaded && !isActive) ? { modelManager.deleteCachedModel(model) } : nil
+                    progress: speechRowProgress(for: model, downloaded: downloaded),
+                    onDownload: (!model.isSystemManaged && !downloaded)
+                        ? { onDownloadSpeechModel(model.id) }
+                        : nil,
+                    onDelete: (!model.isSystemManaged && downloaded && !isActive)
+                        ? { modelManager.deleteCachedModel(model) }
+                        : nil
                 )
             }
             ForEach(TextCleanupManager.cleanupModels, id: \.kind) { desc in
@@ -189,10 +198,13 @@ struct ModelsSidebarView: View {
     /// Inline progress for a speech-model row. The speech `ModelManager` only
     /// tracks one in-flight download/load at a time and tags it via
     /// `modelName`, so only the matching row reports a non-nil value.
-    private func speechRowProgress(for modelID: String, downloaded: Bool) -> RowProgress? {
-        guard modelManager.modelName == modelID else { return nil }
+    private func speechRowProgress(for model: SpeechModelDescriptor, downloaded: Bool) -> RowProgress? {
+        guard modelManager.modelName == model.id else { return nil }
         switch modelManager.state {
         case .loading:
+            if model.isSystemManaged {
+                return .downloading(modelManager.downloadProgress)
+            }
             return downloaded ? .loading : .downloading(modelManager.downloadProgress)
         case .idle, .ready, .error:
             return nil

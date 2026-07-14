@@ -98,6 +98,56 @@ final class RuntimeModelInventoryTests: XCTestCase {
         XCTAssertEqual(row(named: "Qwen 3.5 2B Q4_K_M (Fast)", in: rows)?.isSelected, true)
     }
 
+    func testSpeechAnalyzerRowIsSystemManagedWithoutManualActions() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        let rows = RuntimeModelInventory.rows(
+            selectedSpeechModelName: SpeechModelCatalog.speechAnalyzer.id,
+            activeSpeechModelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechModelState: .ready,
+            speechDownloadProgress: nil,
+            cachedSpeechModelNames: [],
+            cleanupState: .idle,
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cachedCleanupKinds: []
+        )
+        let row = try XCTUnwrap(rows.first { $0.id == SpeechModelCatalog.speechAnalyzer.id })
+
+        XCTAssertEqual(row.name, "Apple SpeechAnalyzer")
+        XCTAssertEqual(row.sizeDescription, "Managed by macOS")
+        XCTAssertEqual(row.status, .systemManaged)
+        XCTAssertFalse(row.allowsManualDownload)
+        XCTAssertFalse(row.allowsDeletion)
+    }
+
+    func testSpeechAnalyzerRowShowsAssetDownloadProgressWithoutManualActions() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        let rows = RuntimeModelInventory.rows(
+            selectedSpeechModelName: SpeechModelCatalog.speechAnalyzer.id,
+            activeSpeechModelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechModelState: .loading,
+            speechDownloadProgress: 0.35,
+            cachedSpeechModelNames: [SpeechModelCatalog.speechAnalyzer.id],
+            cleanupState: .idle,
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cachedCleanupKinds: []
+        )
+        let row = try XCTUnwrap(rows.first { $0.id == SpeechModelCatalog.speechAnalyzer.id })
+
+        XCTAssertEqual(row.status, .downloading(progress: 0.35))
+        XCTAssertFalse(row.allowsManualDownload)
+        XCTAssertFalse(row.allowsDeletion)
+        XCTAssertEqual(
+            RuntimeModelInventory.activeDownloadText(rows: rows),
+            "Downloading Apple SpeechAnalyzer (35%)..."
+        )
+    }
+
     private func row(named name: String, in rows: [RuntimeModelRow]) -> RuntimeModelRow? {
         rows.first(where: { $0.name == name })
     }

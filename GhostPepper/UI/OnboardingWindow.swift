@@ -582,6 +582,10 @@ private struct OnboardingModelRow: View {
             Image(systemName: "circle")
                 .foregroundStyle(.quaternary)
                 .font(.caption)
+        case .systemManaged:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.caption)
         }
     }
 
@@ -592,6 +596,7 @@ private struct OnboardingModelRow: View {
         case .downloading(let progress?): "Downloading \(Int(progress * 100))%"
         case .downloading(nil): "Preparing..."
         case .notLoaded: size
+        case .systemManaged: "Managed by macOS"
         }
     }
 }
