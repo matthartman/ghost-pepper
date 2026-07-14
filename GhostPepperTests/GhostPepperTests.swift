@@ -76,10 +76,33 @@ private final class FakeRecordingTranscriptionSession: RecordingTranscriptionSes
 
 @MainActor
 final class GhostPepperTests: XCTestCase {
+    private static let usageStatsBackfillKey = "usageStats.backfill.v2"
+    private static var previousUsageStatsBackfillValue: Any?
+
     private let pepperChatAppStorageKeys = [
         "pepperChatEnabled",
         "pepperChatApiKey"
     ]
+
+    override class func setUp() {
+        super.setUp()
+        let defaults = UserDefaults.standard
+        previousUsageStatsBackfillValue = defaults.object(forKey: usageStatsBackfillKey)
+        // AppState startup backfill scans the user's Documents directory. The
+        // app-state tests use temporary fixtures, so skip that disk scan here
+        // to keep XCTest from prompting for TCC access to Documents.
+        defaults.set(true, forKey: usageStatsBackfillKey)
+    }
+
+    override class func tearDown() {
+        let defaults = UserDefaults.standard
+        if let previousUsageStatsBackfillValue {
+            defaults.set(previousUsageStatsBackfillValue, forKey: usageStatsBackfillKey)
+        } else {
+            defaults.removeObject(forKey: usageStatsBackfillKey)
+        }
+        super.tearDown()
+    }
 
     private func makeDebugLogStore() -> DebugLogStore {
         let fileURL = FileManager.default.temporaryDirectory
