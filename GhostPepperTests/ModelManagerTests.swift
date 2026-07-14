@@ -113,4 +113,100 @@ final class ModelManagerTests: XCTestCase {
 
         XCTAssertEqual(rescuedSpans, originalSpans)
     }
+
+    func testSpeechAnalyzerLoadAndTranscriptionUseInjectedBackend() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let backend = StubSpeechAnalyzerBackend(result: "Ghost Pepper transcription")
+        var requestedLanguages: [String?] = []
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { language in
+                requestedLanguages.append(language)
+                return backend
+            }
+        )
+
+        await manager.loadModel(language: "es")
+        let result = await manager.transcribe(audioBuffer: [0.25, -0.25])
+
+        XCTAssertEqual(manager.state, .ready)
+        XCTAssertEqual(requestedLanguages.count, 1)
+        XCTAssertEqual(requestedLanguages[0], "es")
+        XCTAssertEqual(result, "Ghost Pepper transcription")
+        XCTAssertEqual(backend.receivedAudioBuffers, [[0.25, -0.25]])
+    }
+
+    func testSpeechAnalyzerReloadsOnlyWhenPreparedLanguageChanges() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        var requestedLanguages: [String?] = []
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { language in
+                requestedLanguages.append(language)
+                return StubSpeechAnalyzerBackend(result: nil)
+            }
+        )
+
+        await manager.loadModel(language: "en")
+        await manager.loadModel(language: "en")
+        await manager.loadModel(language: "es")
+
+        XCTAssertEqual(requestedLanguages.count, 2)
+        XCTAssertEqual(requestedLanguages[0], "en")
+        XCTAssertEqual(requestedLanguages[1], "es")
+        XCTAssertEqual(manager.state, .ready)
+    }
+
+    func testSpeechAnalyzerLoadFailureUsesExistingErrorState() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        struct AssetFailure: Error {}
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in throw AssetFailure() }
+        )
+
+        await manager.loadModel(language: "es")
+
+        XCTAssertEqual(manager.state, .error)
+        XCTAssertNotNil(manager.error)
+    }
+
+    func testDeletingSystemManagedSpeechAnalyzerDoesNothing() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in
+                StubSpeechAnalyzerBackend(result: nil)
+            }
+        )
+        await manager.loadModel()
+
+        manager.deleteCachedModel(SpeechModelCatalog.speechAnalyzer)
+
+        XCTAssertEqual(manager.state, .ready)
+        XCTAssertEqual(manager.modelName, SpeechModelCatalog.speechAnalyzer.id)
+    }
+}
+
+@MainActor
+private final class StubSpeechAnalyzerBackend: SpeechAnalyzerTranscribing {
+    let result: String?
+    private(set) var receivedAudioBuffers: [[Float]] = []
+
+    init(result: String?) {
+        self.result = result
+    }
+
+    func transcribe(audioBuffer: [Float]) async throws -> String? {
+        receivedAudioBuffers.append(audioBuffer)
+        return result
+    }
 }
