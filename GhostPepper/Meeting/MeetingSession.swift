@@ -17,7 +17,7 @@ final class MeetingSession: ObservableObject {
 
     var onAutoStopRequested: ((MeetingSession) -> Void)?
 
-    private let capture = DualStreamCapture()
+    private let capture: any MeetingAudioCapturing
     private var pipeline: ChunkedTranscriptionPipeline?
     private let transcriber: SpeechTranscriber
     private let saveDirectory: URL
@@ -45,7 +45,8 @@ final class MeetingSession: ObservableObject {
         transcriber: SpeechTranscriber,
         saveDirectory: URL,
         ocrService: FrontmostWindowOCRService = FrontmostWindowOCRService(),
-        captureStartOverride: CaptureStartOverride? = nil
+        captureStartOverride: CaptureStartOverride? = nil,
+        capture: any MeetingAudioCapturing = DualStreamCapture()
     ) {
         self.transcript = MeetingTranscript(meetingName: meetingName)
         self.transcriber = transcriber
@@ -55,6 +56,7 @@ final class MeetingSession: ObservableObject {
         self.detectedMeetingAppName = detectedMeeting?.appName
         self.detectedMeetingBundleIdentifier = detectedMeeting?.bundleIdentifier
         self.captureStartOverride = captureStartOverride
+        self.capture = capture
     }
 
     /// Start dual-stream capture and chunked transcription.
@@ -180,8 +182,8 @@ final class MeetingSession: ObservableObject {
             waiters.forEach { $0.resume() }
         }
 
-        await pipeline?.stop()
         _ = await capture.stop()
+        await pipeline?.stop()
 
         transcript.endDate = Date()
 

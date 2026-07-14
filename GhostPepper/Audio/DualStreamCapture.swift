@@ -13,9 +13,16 @@ struct TaggedAudioChunk {
     let timestamp: TimeInterval // seconds since capture start
 }
 
+protocol MeetingAudioCapturing: AnyObject {
+    var onAudioChunk: ((TaggedAudioChunk) -> Void)? { get set }
+    func start() async throws
+    func stop() async -> (micBuffer: [Float], systemBuffer: [Float])
+    var elapsed: TimeInterval { get }
+}
+
 /// Coordinates simultaneous mic + system audio capture for meeting transcription.
 /// Mic audio = "Me", system audio = "Others" — provides free basic diarization.
-final class DualStreamCapture {
+final class DualStreamCapture: MeetingAudioCapturing {
     var onAudioChunk: ((TaggedAudioChunk) -> Void)?
 
     private let micRecorder = AudioRecorder()

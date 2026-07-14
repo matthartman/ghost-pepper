@@ -82,6 +82,27 @@ private final class AppStateSpeechAnalyzerStub: SpeechAnalyzerTranscribing {
 }
 
 @MainActor
+private final class MeetingSpeechAnalyzerStub: SpeechAnalyzerTranscribing {
+    func transcribe(audioBuffer: [Float]) async throws -> String? {
+        "late audio"
+    }
+}
+
+private final class FakeMeetingAudioCapture: MeetingAudioCapturing {
+    var onAudioChunk: ((TaggedAudioChunk) -> Void)?
+    var onStop: (() -> Void)?
+
+    func start() async throws {}
+
+    func stop() async -> (micBuffer: [Float], systemBuffer: [Float]) {
+        onStop?()
+        return ([], [])
+    }
+
+    var elapsed: TimeInterval { 0 }
+}
+
+@MainActor
 private final class AsyncTestGate {
     private var isReleased = false
 
@@ -381,6 +402,36 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(appState.status, .ready)
 
         await initialLoad.value
+    }
+
+    func testMeetingStopDrainsAudioDeliveredWhileCaptureStops() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in MeetingSpeechAnalyzerStub() }
+        )
+        await manager.loadModel(name: SpeechModelCatalog.speechAnalyzer.id)
+        let capture = FakeMeetingAudioCapture()
+        let session = MeetingSession(
+            meetingName: "Late audio",
+            transcriber: SpeechTranscriber(modelManager: manager),
+            saveDirectory: FileManager.default.temporaryDirectory,
+            capture: capture
+        )
+        capture.onStop = { [weak capture] in
+            capture?.onAudioChunk?(
+                TaggedAudioChunk(source: .mic, samples: [0.25], timestamp: 0)
+            )
+        }
+
+        try await session.start()
+        await session.stop()
+
+        await waitForCondition { session.transcript.segments.count == 1 }
+        XCTAssertEqual(session.transcript.segments.first?.text, "late audio")
     }
 
     func testAppStateGatesRecordingWhileSpeechAnalyzerReloads() async throws {
