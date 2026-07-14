@@ -5,7 +5,10 @@ import Foundation
 /// Owns DualStreamCapture + ChunkedTranscriptionPipeline + MeetingTranscript.
 @MainActor
 final class MeetingSession: ObservableObject {
+    typealias CaptureStartOverride = @MainActor () async throws -> Void
+
     @Published var isActive = false
+    @Published private(set) var isStarting = false
     @Published private(set) var isDraining = false
     @Published var fileURL: URL?
     @Published var noAudioDetected = false
@@ -30,14 +33,18 @@ final class MeetingSession: ObservableObject {
     private var skipCalendarAutoMatch = false
     private let originalName: String
     private let ocrService: FrontmostWindowOCRService
+    private let captureStartOverride: CaptureStartOverride?
     private var inactiveMeetingPollCount = 0
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var stopWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         meetingName: String,
         detectedMeeting: DetectedMeeting? = nil,
         transcriber: SpeechTranscriber,
         saveDirectory: URL,
-        ocrService: FrontmostWindowOCRService = FrontmostWindowOCRService()
+        ocrService: FrontmostWindowOCRService = FrontmostWindowOCRService(),
+        captureStartOverride: CaptureStartOverride? = nil
     ) {
         self.transcript = MeetingTranscript(meetingName: meetingName)
         self.transcriber = transcriber
@@ -46,11 +53,19 @@ final class MeetingSession: ObservableObject {
         self.ocrService = ocrService
         self.detectedMeetingAppName = detectedMeeting?.appName
         self.detectedMeetingBundleIdentifier = detectedMeeting?.bundleIdentifier
+        self.captureStartOverride = captureStartOverride
     }
 
     /// Start dual-stream capture and chunked transcription.
     func start() async throws {
-        guard !isActive, !isDraining else { return }
+        guard !isActive, !isDraining, !isStarting else { return }
+        isStarting = true
+        defer {
+            isStarting = false
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
 
         let chunkDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("GhostPepper")
@@ -93,7 +108,11 @@ final class MeetingSession: ObservableObject {
 
         pipeline = newPipeline
 
-        try await capture.start()
+        if let captureStartOverride {
+            try await captureStartOverride()
+        } else {
+            try await capture.start()
+        }
         newPipeline.start()
         isActive = true
 
@@ -133,10 +152,29 @@ final class MeetingSession: ObservableObject {
 
     /// Stop capture, process remaining audio, finalize transcript.
     func stop() async {
-        guard isActive else { return }
+        if isDraining {
+            await withCheckedContinuation { continuation in
+                stopWaiters.append(continuation)
+            }
+            return
+        }
+
+        guard isActive || isStarting || pipeline != nil else { return }
+        if isStarting {
+            await withCheckedContinuation { continuation in
+                startWaiters.append(continuation)
+            }
+            guard !isDraining, isActive || pipeline != nil else { return }
+        }
+
         isDraining = true
         isActive = false
-        defer { isDraining = false }
+        defer {
+            isDraining = false
+            let waiters = stopWaiters
+            stopWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
 
         await pipeline?.stop()
         _ = await capture.stop()

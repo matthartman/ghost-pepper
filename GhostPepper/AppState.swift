@@ -2157,6 +2157,7 @@ class AppState: ObservableObject {
             || status == .recording
             || status == .transcribing
             || pipelineOwner != nil
+            || activeMeetingSession != nil
             || activeMeetingSession?.isActive == true
             || activeMeetingSession?.isDraining == true
             || pepperChatSession.isRecording

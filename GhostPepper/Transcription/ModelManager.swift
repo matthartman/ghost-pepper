@@ -48,6 +48,7 @@ final class ModelManager: ObservableObject {
     private let loadRetryDelayOverride: RetryDelayOverride?
     private let speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory?
     private var queuedLoadRequest: (name: String, language: String?)?
+    private var queuedLoadWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         modelName: String = SpeechModelCatalog.defaultModelID,
@@ -76,6 +77,9 @@ final class ModelManager: ObservableObject {
 
         if state == .loading {
             queuedLoadRequest = (requestedName, language)
+            await withCheckedContinuation { continuation in
+                queuedLoadWaiters.append(continuation)
+            }
             return
         }
 
@@ -119,6 +123,10 @@ final class ModelManager: ObservableObject {
         guard let queuedLoadRequest else { return }
         self.queuedLoadRequest = nil
         await loadModel(name: queuedLoadRequest.name, language: queuedLoadRequest.language)
+
+        let waiters = queuedLoadWaiters
+        queuedLoadWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 
     private func loadRequestedModel(
