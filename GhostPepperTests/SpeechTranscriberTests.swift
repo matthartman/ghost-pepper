@@ -266,6 +266,44 @@ final class AppleSpeechAnalyzerBackendTests: XCTestCase {
         XCTAssertEqual(Array(UnsafeBufferPointer(start: channel, count: 5)), [-1, -0.5, 0, 0.5, 1])
     }
 
+    func testAnalyzerBufferSanitizesNonFiniteFloatSamples() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+
+        let buffer = try AppleSpeechAnalyzerBackend.makeAnalyzerBuffer(
+            audioBuffer: [.nan, .infinity, -.infinity],
+            format: format
+        )
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+
+        XCTAssertEqual(
+            Array(UnsafeBufferPointer(start: channel, count: 3)),
+            [0, 0, 0]
+        )
+    }
+
+    func testAnalyzerResultTextConcatenatesFragmentsWithoutInsertingSpaces() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        XCTAssertEqual(
+            AppleSpeechAnalyzerBackend.transcriptText(
+                from: ["Hello", ",", " world", "."]
+            ),
+            "Hello, world."
+        )
+    }
+
     func testAnalyzerBufferConvertsToRequestedIntegerFormat() throws {
         guard #available(macOS 26, *) else {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
@@ -288,7 +326,11 @@ final class AppleSpeechAnalyzerBackendTests: XCTestCase {
         XCTAssertEqual(buffer.format.sampleRate, 16_000)
         XCTAssertEqual(buffer.format.channelCount, 1)
         XCTAssertEqual(buffer.frameLength, 3)
-        XCTAssertNotNil(buffer.int16ChannelData)
+        let channel = try XCTUnwrap(buffer.int16ChannelData?[0])
+        let samples = Array(UnsafeBufferPointer(start: channel, count: 3))
+        XCTAssertLessThanOrEqual(abs(Int(samples[0]) - Int(Int16.min)), 1)
+        XCTAssertEqual(samples[1], 0)
+        XCTAssertLessThanOrEqual(abs(Int(samples[2]) - Int(Int16.max)), 1)
     }
 
     func testPrepareRejectsUnsupportedLocaleWithoutFallback() async throws {
