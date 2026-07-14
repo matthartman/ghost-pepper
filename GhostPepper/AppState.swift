@@ -162,6 +162,7 @@ class AppState: ObservableObject {
     private var activePerformanceTrace: PerformanceTrace?
     private var activeCleanupAttempted = false
     private var pipelineOwner: PipelineOwner?
+    private var speechAnalyzerReloadsInFlight = 0
     private let cleanupSettingsDefaults: UserDefaults
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
@@ -720,8 +721,8 @@ class AppState: ObservableObject {
 
     private func startRecording() async {
         // If the selected speech model isn't ready, show loading message
-        guard status == .ready else {
-            if status == .loading {
+        guard status == .ready, modelManager.isReady, speechAnalyzerReloadsInFlight == 0 else {
+            if status == .loading || speechAnalyzerReloadsInFlight > 0 {
                 overlay.show(message: .modelLoading)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     self?.overlay.dismiss()
@@ -2109,20 +2110,45 @@ class AppState: ObservableObject {
         guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
             return
         }
-        let shouldGateRecording = status == .ready
-        if shouldGateRecording {
-            // A language change replaces the backend before the next recording starts.
-            status = .loading
-        }
+
+        speechAnalyzerReloadsInFlight += 1
         defer {
-            if shouldGateRecording, status == .loading, modelManager.isReady {
+            speechAnalyzerReloadsInFlight -= 1
+            if speechAnalyzerReloadsInFlight == 0,
+               !isSpeechAnalyzerSessionActive,
+               status == .loading,
+               modelManager.isReady {
+                // A language change replaces the backend before the next recording starts.
                 status = .ready
             }
         }
+
+        await waitForSpeechAnalyzerSessionToBecomeIdle()
+        guard !Task.isCancelled else { return }
+
+        if !isSpeechAnalyzerSessionActive {
+            // A language change replaces the backend before the next recording starts.
+            status = .loading
+        }
+
         while modelManager.state == .loading {
+            guard !Task.isCancelled else { return }
             await Task.yield()
         }
+
+        guard !Task.isCancelled else { return }
         await loadSpeechModel(name: speechModel)
+    }
+
+    private var isSpeechAnalyzerSessionActive: Bool {
+        isRecording || isTranscribing || status == .recording || status == .transcribing
+    }
+
+    private func waitForSpeechAnalyzerSessionToBecomeIdle() async {
+        while isSpeechAnalyzerSessionActive {
+            guard !Task.isCancelled else { return }
+            await Task.yield()
+        }
     }
 
     static func nextSpeechModelPresentation(
