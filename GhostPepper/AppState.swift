@@ -2109,6 +2109,16 @@ class AppState: ObservableObject {
         guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
             return
         }
+        let shouldGateRecording = status == .ready
+        if shouldGateRecording {
+            // A language change replaces the backend before the next recording starts.
+            status = .loading
+        }
+        defer {
+            if shouldGateRecording, status == .loading, modelManager.isReady {
+                status = .ready
+            }
+        }
         while modelManager.state == .loading {
             await Task.yield()
         }

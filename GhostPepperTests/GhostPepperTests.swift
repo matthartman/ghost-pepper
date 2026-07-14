@@ -302,6 +302,50 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(requestedLanguages, ["en", "fr"])
     }
 
+    func testAppStateGatesRecordingWhileSpeechAnalyzerReloads() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        var factoryCallCount = 0
+        var releaseReload: (() -> Void)?
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in
+                factoryCallCount += 1
+                if factoryCallCount == 2 {
+                    await withCheckedContinuation { continuation in
+                        releaseReload = { continuation.resume() }
+                    }
+                }
+                return AppStateSpeechAnalyzerStub()
+            }
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            modelManager: manager
+        )
+        appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
+        appState.preferredLanguage = "en"
+        await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id)
+        appState.status = .ready
+
+        appState.preferredLanguage = "fr"
+        let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
+        while factoryCallCount < 2 {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(appState.status, .loading)
+
+        releaseReload?()
+        await reload.value
+        XCTAssertEqual(appState.status, .ready)
+    }
+
     func testEmptyTranscriptionDispositionCancelsSubThresholdRecordings() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 7_999),
