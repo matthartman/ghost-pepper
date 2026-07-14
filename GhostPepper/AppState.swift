@@ -2164,9 +2164,9 @@ class AppState: ObservableObject {
         isRecording
             || isTranscribing
             || status == .recording
-            || status == .transcribing
-            || pipelineOwner != nil
-            || activeMeetingSession != nil
+        || status == .transcribing
+        || pipelineOwner != nil
+            || activeMeetingSession?.isStarting == true
             || activeMeetingSession?.isActive == true
             || activeMeetingSession?.isDraining == true
             || pepperChatSession.isRecording
@@ -2200,9 +2200,14 @@ class AppState: ObservableObject {
             )
         case .ready:
             let shouldClearSpeechModelError = currentErrorMessage?.hasPrefix(speechModelErrorPrefix) == true
-            let nextStatus: AppStatus = shouldClearSpeechModelError && currentStatus == .error
-                ? .ready
-                : currentStatus
+            let nextStatus: AppStatus
+            if currentStatus == .loading {
+                nextStatus = .ready
+            } else if shouldClearSpeechModelError && currentStatus == .error {
+                nextStatus = .ready
+            } else {
+                nextStatus = currentStatus
+            }
             return (
                 nextStatus,
                 shouldClearSpeechModelError ? nil : currentErrorMessage
