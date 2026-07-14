@@ -2146,7 +2146,14 @@ class AppState: ObservableObject {
     }
 
     private var isSpeechAnalyzerSessionActive: Bool {
-        isRecording || isTranscribing || status == .recording || status == .transcribing
+        isRecording
+            || isTranscribing
+            || status == .recording
+            || status == .transcribing
+            || pipelineOwner != nil
+            || activeMeetingSession?.isActive == true
+            || pepperChatSession.isRecording
+            || pepperChatSession.isTranscribing
     }
 
     private func waitForSpeechAnalyzerSessionToBecomeIdle() async {

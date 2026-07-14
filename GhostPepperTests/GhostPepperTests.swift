@@ -587,6 +587,156 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(appState.status, .ready)
     }
 
+    func testAppStateWaitsForActiveMeetingSessionBeforeReloadingSpeechAnalyzer() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        var factoryCallCount = 0
+        let reloadGate = AsyncTestGate()
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in
+                factoryCallCount += 1
+                if factoryCallCount == 2 {
+                    await reloadGate.wait()
+                }
+                return AppStateSpeechAnalyzerStub()
+            }
+        )
+        defer { reloadGate.release() }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            modelManager: manager
+        )
+        appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
+        appState.preferredLanguage = "en"
+        await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id)
+        appState.status = .ready
+
+        let meetingSession = MeetingSession(
+            meetingName: "Test meeting",
+            transcriber: appState.transcriber,
+            saveDirectory: FileManager.default.temporaryDirectory
+        )
+        meetingSession.isActive = true
+        appState.activeMeetingSession = meetingSession
+        appState.preferredLanguage = "fr"
+
+        let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(factoryCallCount, 1)
+        XCTAssertEqual(appState.status, .ready)
+
+        meetingSession.isActive = false
+        await waitForCondition { factoryCallCount >= 2 }
+        XCTAssertEqual(appState.status, .loading)
+
+        reloadGate.release()
+        await reload.value
+        XCTAssertEqual(appState.status, .ready)
+    }
+
+    func testAppStateWaitsForPepperChatTranscriptionBeforeReloadingSpeechAnalyzer() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        var factoryCallCount = 0
+        let reloadGate = AsyncTestGate()
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in
+                factoryCallCount += 1
+                if factoryCallCount == 2 {
+                    await reloadGate.wait()
+                }
+                return AppStateSpeechAnalyzerStub()
+            }
+        )
+        defer { reloadGate.release() }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            modelManager: manager
+        )
+        appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
+        appState.preferredLanguage = "en"
+        await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id)
+        appState.status = .ready
+
+        appState.pepperChatSession.isTranscribing = true
+        appState.preferredLanguage = "fr"
+
+        let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(factoryCallCount, 1)
+        XCTAssertEqual(appState.status, .ready)
+
+        appState.pepperChatSession.isTranscribing = false
+        await waitForCondition { factoryCallCount >= 2 }
+        XCTAssertEqual(appState.status, .loading)
+
+        reloadGate.release()
+        await reload.value
+        XCTAssertEqual(appState.status, .ready)
+    }
+
+    func testAppStateWaitsForTranscriptionLabPipelineBeforeReloadingSpeechAnalyzer() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        var factoryCallCount = 0
+        let reloadGate = AsyncTestGate()
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in
+                factoryCallCount += 1
+                if factoryCallCount == 2 {
+                    await reloadGate.wait()
+                }
+                return AppStateSpeechAnalyzerStub()
+            }
+        )
+        defer { reloadGate.release() }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            modelManager: manager
+        )
+        appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
+        appState.preferredLanguage = "en"
+        await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id)
+        appState.status = .ready
+        XCTAssertTrue(appState.acquirePipeline(for: .transcriptionLab))
+        defer { appState.releasePipeline(owner: .transcriptionLab) }
+
+        appState.preferredLanguage = "fr"
+        let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(factoryCallCount, 1)
+        XCTAssertEqual(appState.status, .ready)
+
+        appState.releasePipeline(owner: .transcriptionLab)
+        await waitForCondition { factoryCallCount >= 2 }
+        XCTAssertEqual(appState.status, .loading)
+
+        reloadGate.release()
+        await reload.value
+        XCTAssertEqual(appState.status, .ready)
+    }
+
     func testAppStateCancellingSpeechAnalyzerReloadWhileRecordingDoesNotLoadOrChangeStatus() async throws {
         guard #available(macOS 26, *) else {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
