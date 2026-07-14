@@ -82,6 +82,26 @@ private final class AppStateSpeechAnalyzerStub: SpeechAnalyzerTranscribing {
 }
 
 @MainActor
+private final class AsyncTestGate {
+    private var isReleased = false
+
+    func wait() async {
+        for _ in 0..<200 {
+            guard !isReleased else { return }
+            do {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            } catch {
+                return
+            }
+        }
+    }
+
+    func release() {
+        isReleased = true
+    }
+}
+
+@MainActor
 final class GhostPepperTests: XCTestCase {
     private let pepperChatAppStorageKeys = [
         "pepperChatEnabled",
@@ -93,6 +113,26 @@ final class GhostPepperTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("debug-log.json")
         return DebugLogStore(storageURL: fileURL)
+    }
+
+    private func waitForCondition(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        condition: () -> Bool
+    ) async {
+        let pollIntervalNanoseconds: UInt64 = 10_000_000
+        var elapsedNanoseconds: UInt64 = 0
+        while !condition() && elapsedNanoseconds < timeoutNanoseconds {
+            do {
+                try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
+            } catch {
+                return
+            }
+            elapsedNanoseconds += pollIntervalNanoseconds
+        }
+
+        if !condition() {
+            XCTFail("Timed out waiting for test condition")
+        }
     }
 
     private func withClearedPepperChatAppStorage<T>(
@@ -248,19 +288,18 @@ final class GhostPepperTests: XCTestCase {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
         }
         var requestedLanguages: [String?] = []
-        var releaseInitialLoad: (() -> Void)?
+        let initialLoadGate = AsyncTestGate()
         let manager = ModelManager(
             modelName: SpeechModelCatalog.speechAnalyzer.id,
             speechAnalyzerBackendFactory: { language in
                 requestedLanguages.append(language)
                 if requestedLanguages.count == 1 {
-                    await withCheckedContinuation { continuation in
-                        releaseInitialLoad = { continuation.resume() }
-                    }
+                    await initialLoadGate.wait()
                 }
                 return AppStateSpeechAnalyzerStub()
             }
         )
+        defer { initialLoadGate.release() }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let previousLanguage = UserDefaults.standard.object(forKey: "preferredLanguage")
@@ -287,14 +326,12 @@ final class GhostPepperTests: XCTestCase {
         appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
 
         let initialLoad = Task { await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id) }
-        while requestedLanguages.isEmpty {
-            await Task.yield()
-        }
+        await waitForCondition { !requestedLanguages.isEmpty }
 
         appState.preferredLanguage = "fr"
         let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
         await Task.yield()
-        releaseInitialLoad?()
+        initialLoadGate.release()
 
         await initialLoad.value
         await reload.value
@@ -307,19 +344,18 @@ final class GhostPepperTests: XCTestCase {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
         }
         var factoryCallCount = 0
-        var releaseReload: (() -> Void)?
+        let reloadGate = AsyncTestGate()
         let manager = ModelManager(
             modelName: SpeechModelCatalog.speechAnalyzer.id,
             speechAnalyzerBackendFactory: { _ in
                 factoryCallCount += 1
                 if factoryCallCount == 2 {
-                    await withCheckedContinuation { continuation in
-                        releaseReload = { continuation.resume() }
-                    }
+                    await reloadGate.wait()
                 }
                 return AppStateSpeechAnalyzerStub()
             }
         )
+        defer { reloadGate.release() }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let appState = AppState(
@@ -335,15 +371,42 @@ final class GhostPepperTests: XCTestCase {
 
         appState.preferredLanguage = "fr"
         let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
-        while factoryCallCount < 2 {
-            await Task.yield()
-        }
+        await waitForCondition { factoryCallCount >= 2 }
 
         XCTAssertEqual(appState.status, .loading)
 
-        releaseReload?()
+        reloadGate.release()
         await reload.value
         XCTAssertEqual(appState.status, .ready)
+    }
+
+    func testAppStatePreservesUnrelatedErrorWhileReloadingSpeechAnalyzer() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { _ in AppStateSpeechAnalyzerStub() }
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            modelManager: manager
+        )
+        appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
+        appState.preferredLanguage = "en"
+        await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id)
+        appState.status = .error
+        appState.errorMessage = "Accessibility access required"
+        appState.preferredLanguage = "fr"
+
+        await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded()
+
+        XCTAssertEqual(appState.status, .error)
+        XCTAssertEqual(appState.errorMessage, "Accessibility access required")
     }
 
     func testAppStateDoesNotStartRecordingWhenModelManagerIsNotReady() async throws {
@@ -373,27 +436,27 @@ final class GhostPepperTests: XCTestCase {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
         }
         var requestedLanguages: [String?] = []
-        var releaseFirstReload: (() -> Void)?
-        var releaseSecondReload: (() -> Void)?
+        let firstGate = AsyncTestGate()
+        let secondGate = AsyncTestGate()
         let manager = ModelManager(
             modelName: SpeechModelCatalog.speechAnalyzer.id,
             speechAnalyzerBackendFactory: { language in
                 requestedLanguages.append(language)
                 switch requestedLanguages.count {
                 case 2:
-                    await withCheckedContinuation { continuation in
-                        releaseFirstReload = { continuation.resume() }
-                    }
+                    await firstGate.wait()
                 case 3:
-                    await withCheckedContinuation { continuation in
-                        releaseSecondReload = { continuation.resume() }
-                    }
+                    await secondGate.wait()
                 default:
                     break
                 }
                 return AppStateSpeechAnalyzerStub()
             }
         )
+        defer {
+            firstGate.release()
+            secondGate.release()
+        }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let monitor = FakeHotkeyMonitor()
@@ -410,20 +473,13 @@ final class GhostPepperTests: XCTestCase {
 
         appState.preferredLanguage = "fr"
         let firstReload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
-        while requestedLanguages.count < 2 {
-            await Task.yield()
-        }
+        await waitForCondition { requestedLanguages.count >= 2 }
 
         appState.preferredLanguage = "de"
         let secondReload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
-        for _ in 0..<100 where requestedLanguages.count < 2 {
-            await Task.yield()
-        }
 
-        releaseFirstReload?()
-        for _ in 0..<1_000 where requestedLanguages.count < 3 {
-            await Task.yield()
-        }
+        firstGate.release()
+        await waitForCondition { requestedLanguages.count >= 3 }
 
         XCTAssertEqual(requestedLanguages, ["en", "fr", "de"])
         XCTAssertEqual(appState.status, .loading)
@@ -435,7 +491,7 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(appState.status, .loading)
         XCTAssertFalse(appState.isRecording)
 
-        releaseSecondReload?()
+        secondGate.release()
         await firstReload.value
         await secondReload.value
         XCTAssertEqual(appState.status, .ready)
@@ -446,19 +502,18 @@ final class GhostPepperTests: XCTestCase {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
         }
         var requestedLanguages: [String?] = []
-        var releaseFirstReload: (() -> Void)?
+        let firstGate = AsyncTestGate()
         let manager = ModelManager(
             modelName: SpeechModelCatalog.speechAnalyzer.id,
             speechAnalyzerBackendFactory: { language in
                 requestedLanguages.append(language)
                 if requestedLanguages.count == 2 {
-                    await withCheckedContinuation { continuation in
-                        releaseFirstReload = { continuation.resume() }
-                    }
+                    await firstGate.wait()
                 }
                 return AppStateSpeechAnalyzerStub()
             }
         )
+        defer { firstGate.release() }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
         defaults.removePersistentDomain(forName: #function)
         let appState = AppState(
@@ -474,18 +529,14 @@ final class GhostPepperTests: XCTestCase {
 
         appState.preferredLanguage = "fr"
         let firstReload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
-        while requestedLanguages.count < 2 {
-            await Task.yield()
-        }
+        await waitForCondition { requestedLanguages.count >= 2 }
 
         appState.preferredLanguage = "de"
         let newestReload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
-        for _ in 0..<100 {
-            await Task.yield()
-        }
+        await waitForCondition { appState.status == .loading }
         newestReload.cancel()
 
-        releaseFirstReload?()
+        firstGate.release()
         await firstReload.value
         await newestReload.value
 

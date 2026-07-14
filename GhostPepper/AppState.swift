@@ -177,6 +177,7 @@ class AppState: ObservableObject {
     private static let playSoundsDefaultsKey = "playSounds"
     private static let pepperChatEnabledDefaultsKey = "pepperChatEnabled"
     private static let archivedRecordingSampleRate = 16_000.0
+    private static let speechAnalyzerReloadPollIntervalNanoseconds: UInt64 = 10_000_000
     // History shows one decimal place, so shorter recordings render as 0.0s noise.
     private static let minimumArchivedRecordingSampleCount = 800
     private static let emptyTranscriptionCancelThresholdSampleCount = 8_000 // ~0.5 seconds — show "no sound" hint for almost all failed recordings
@@ -2126,14 +2127,18 @@ class AppState: ObservableObject {
         await waitForSpeechAnalyzerSessionToBecomeIdle()
         guard !Task.isCancelled else { return }
 
-        if !isSpeechAnalyzerSessionActive {
+        if status == .ready, !isSpeechAnalyzerSessionActive {
             // A language change replaces the backend before the next recording starts.
             status = .loading
         }
 
         while modelManager.state == .loading {
             guard !Task.isCancelled else { return }
-            await Task.yield()
+            do {
+                try await Task.sleep(nanoseconds: Self.speechAnalyzerReloadPollIntervalNanoseconds)
+            } catch {
+                return
+            }
         }
 
         guard !Task.isCancelled else { return }
@@ -2147,7 +2152,11 @@ class AppState: ObservableObject {
     private func waitForSpeechAnalyzerSessionToBecomeIdle() async {
         while isSpeechAnalyzerSessionActive {
             guard !Task.isCancelled else { return }
-            await Task.yield()
+            do {
+                try await Task.sleep(nanoseconds: Self.speechAnalyzerReloadPollIntervalNanoseconds)
+            } catch {
+                return
+            }
         }
     }
 
