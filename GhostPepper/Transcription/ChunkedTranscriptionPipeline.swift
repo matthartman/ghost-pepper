@@ -136,10 +136,10 @@ final class ChunkedTranscriptionPipeline {
                 return
             }
             transcriptionSemaphore.wait()
-            let task = Task { [weak self] in
+            let task = Task { [weak self, transcriptionGroup] in
                 defer {
                     transcriptionSemaphore.signal()
-                    self?.transcriptionGroup.leave()
+                    transcriptionGroup.leave()
                 }
                 guard let self = self else { return }
 
