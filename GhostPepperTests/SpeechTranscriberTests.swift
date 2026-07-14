@@ -1,3 +1,4 @@
+import AVFAudio
 import XCTest
 @testable import GhostPepper
 
@@ -216,5 +217,97 @@ final class SpeechTranscriberTests: XCTestCase {
             "openai_whisper-small.en",
             "fluid_qwen3-asr-0.6b-int8",
         ])
+    }
+}
+
+@MainActor
+final class AppleSpeechAnalyzerBackendTests: XCTestCase {
+    func testRequestedLocaleUsesExplicitLanguageOrCurrentLocale() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        XCTAssertEqual(
+            AppleSpeechAnalyzerBackend.requestedLocale(
+                languageCode: "es",
+                currentLocale: Locale(identifier: "fr_CA")
+            ).identifier,
+            "es"
+        )
+        XCTAssertEqual(
+            AppleSpeechAnalyzerBackend.requestedLocale(
+                languageCode: nil,
+                currentLocale: Locale(identifier: "fr_CA")
+            ).identifier,
+            "fr_CA"
+        )
+    }
+
+    func testAnalyzerBufferClipsFloatSamplesToValidPCMRange() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+
+        let buffer = try AppleSpeechAnalyzerBackend.makeAnalyzerBuffer(
+            audioBuffer: [-2, -0.5, 0, 0.5, 2],
+            format: format
+        )
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+
+        XCTAssertEqual(buffer.frameLength, 5)
+        XCTAssertEqual(Array(UnsafeBufferPointer(start: channel, count: 5)), [-1, -0.5, 0, 0.5, 1])
+    }
+
+    func testAnalyzerBufferConvertsToRequestedIntegerFormat() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatInt16,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+
+        let buffer = try AppleSpeechAnalyzerBackend.makeAnalyzerBuffer(
+            audioBuffer: [-1, 0, 1],
+            format: format
+        )
+
+        XCTAssertEqual(buffer.format.commonFormat, .pcmFormatInt16)
+        XCTAssertEqual(buffer.format.sampleRate, 16_000)
+        XCTAssertEqual(buffer.format.channelCount, 1)
+        XCTAssertEqual(buffer.frameLength, 3)
+        XCTAssertNotNil(buffer.int16ChannelData)
+    }
+
+    func testPrepareRejectsUnsupportedLocaleWithoutFallback() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        do {
+            _ = try await AppleSpeechAnalyzerBackend.prepare(
+                languageCode: "zz_ZZ",
+                currentLocale: Locale(identifier: "en_US"),
+                supportedLocaleResolver: { _ in nil },
+                progressHandler: { _ in }
+            )
+            XCTFail("Expected an unsupported-locale error")
+        } catch let error as AppleSpeechAnalyzerError {
+            guard case .unsupportedLocale("zz_ZZ") = error else {
+                return XCTFail("Unexpected error: \(error.localizedDescription)")
+            }
+        }
     }
 }

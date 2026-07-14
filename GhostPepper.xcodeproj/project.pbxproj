@@ -25,6 +25,7 @@
 		17AF31EA19761CA8B7DF5F9A /* CleanupSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0065F99395EEC3EB77997C2C /* CleanupSettings.swift */; };
 		190EA523BC8AAF93599DD038 /* MeetingQASystemPromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A699887678B31BAF27498A /* MeetingQASystemPromptTests.swift */; };
 		194F5FBCC55E0EA3E0351C15 /* SpeechModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD317A8D8E749E5596734DB7 /* SpeechModelCatalog.swift */; };
+		26A000000000000000000002 /* AppleSpeechAnalyzerBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26A000000000000000000001 /* AppleSpeechAnalyzerBackend.swift */; };
 		1A9C394F69A8A0E9DCA48219 /* ModelManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A098A2516C7563B1E4FDD3 /* ModelManagerTests.swift */; };
 		1AB34878C4E7E375F34A1339 /* CleanupModelProbeRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7201BD31C20BC2B1D0E51DB6 /* CleanupModelProbeRunner.swift */; };
 		1AECB19E0AD630641AE8649B /* TranscriptionLabRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F0BBC9BB83FDC0739EF319 /* TranscriptionLabRunner.swift */; };
@@ -375,6 +376,7 @@
 		CFECDC789B0C81589A3D6B69 /* CorrectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionStore.swift; sourceTree = "<group>"; };
 		D2703FAF4A3B8D55B84100BA /* MarkdownArchivePathsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownArchivePathsTests.swift; sourceTree = "<group>"; };
 		D2CC027B53AAE03079D78761 /* SpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriber.swift; sourceTree = "<group>"; };
+		26A000000000000000000001 /* AppleSpeechAnalyzerBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechAnalyzerBackend.swift; sourceTree = "<group>"; };
 		D6A098A2516C7563B1E4FDD3 /* ModelManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelManagerTests.swift; sourceTree = "<group>"; };
 		D7E1E5A0F12FE2B2FB5CD874 /* TranscriptionLabController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabController.swift; sourceTree = "<group>"; };
 		D7EC6EEC8F041DE99399C3E3 /* TranscriptionLabStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabStoreTests.swift; sourceTree = "<group>"; };
@@ -729,6 +731,7 @@
 		B242BF76D6E42784C2A05EB5 /* Transcription */ = {
 			isa = PBXGroup;
 			children = (
+				26A000000000000000000001 /* AppleSpeechAnalyzerBackend.swift */,
 				6CAEC58BA358D8ED4206D550 /* ChunkedTranscriptionPipeline.swift */,
 				5DCEBF68EFD590E3779D72D5 /* DiarizationSummary.swift */,
 				2771A24BE8CE83A8BDE8DB0B /* FluidAudioSpeechSession.swift */,
@@ -1082,6 +1085,7 @@
 				5651037151CFDA0813775EFF /* SoundEffects.swift in Sources */,
 				E6D90B88DFC16CA9EFD343B4 /* SpeakerIdentityResolver.swift in Sources */,
 				194F5FBCC55E0EA3E0351C15 /* SpeechModelCatalog.swift in Sources */,
+				26A000000000000000000002 /* AppleSpeechAnalyzerBackend.swift in Sources */,
 				C54F09E5E2BAA930626E855C /* SpeechTranscriber.swift in Sources */,
 				8BCB1AE8A984462B0635BA09 /* SystemAudioRecorder.swift in Sources */,
 				361E7532F651C1BF7F0D0724 /* TextCleaner.swift in Sources */,
