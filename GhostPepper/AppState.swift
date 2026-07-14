@@ -720,6 +720,17 @@ class AppState: ObservableObject {
         SpeechModelCatalog.model(named: speechModel)?.supportsSpeakerFiltering == true
     }
 
+    private var canStartSpeechAnalyzerConsumer: Bool {
+        guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
+            return true
+        }
+
+        return status == .ready
+            && modelManager.isReady
+            && modelManager.modelName == speechModel
+            && speechAnalyzerReloadsInFlight == 0
+    }
+
     private func startRecording() async {
         // If the selected speech model isn't ready, show loading message
         guard status == .ready,
@@ -1207,6 +1218,10 @@ class AppState: ObservableObject {
 
     func beginPepperChatRecording() {
         guard pepperChatEnabled, !pepperChatApiKey.isEmpty else { return }
+        guard canStartSpeechAnalyzerConsumer else {
+            debugLogStore.record(category: .hotkey, message: "Context Bundler start skipped because the SpeechAnalyzer model is loading.")
+            return
+        }
         // Clear previous state so new recording takes over
         pepperChatSession.isReviewingContext = false
         pepperChatSession.capturedCommand = nil
@@ -1315,6 +1330,10 @@ class AppState: ObservableObject {
     /// Creates a new MeetingSession, starts recording, and returns it.
     /// Called by the window state when the user clicks "+" or auto-detection triggers.
     func createMeetingSession(name: String, detectedMeeting: DetectedMeeting? = nil) -> MeetingSession? {
+        guard canStartSpeechAnalyzerConsumer else {
+            debugLogStore.record(category: .model, message: "Meeting transcription start skipped because the SpeechAnalyzer model is loading.")
+            return nil
+        }
         guard PermissionChecker.hasScreenRecordingPermission() else {
             PermissionChecker.requestScreenRecordingPermission()
             return nil
