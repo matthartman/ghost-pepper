@@ -3,6 +3,7 @@ import Foundation
 enum SpeechBackendKind: Equatable {
     case whisperKit
     case fluidAudio
+    case speechAnalyzer
 }
 
 enum FluidAudioModelVariant: Equatable {
@@ -31,6 +32,8 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
             "Whisper \(variantName) (\(pickerTitle.lowercased()))"
         case .fluidAudio:
             "\(pickerTitle) (\(variantName.lowercased()))"
+        case .speechAnalyzer:
+            pickerTitle
         }
     }
 
@@ -38,6 +41,14 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
         // Speaker filtering uses a separate diarization pipeline, so any
         // FluidAudio-backed ASR model can participate in filtering.
         backend == .fluidAudio
+    }
+
+    var isSystemManaged: Bool {
+        backend == .speechAnalyzer
+    }
+
+    var automaticLanguageLabel: String {
+        isSystemManaged ? "System language" : "Auto-detect"
     }
 }
 
@@ -92,6 +103,16 @@ enum SpeechModelCatalog {
         fluidAudioVariant: .qwen3AsrInt8
     )
 
+    static let speechAnalyzer = SpeechModelDescriptor(
+        name: "apple_speech-analyzer",
+        pickerTitle: "Apple SpeechAnalyzer",
+        variantName: "System model",
+        sizeDescription: "Managed by macOS",
+        backend: .speechAnalyzer,
+        cachePathComponents: [],
+        fluidAudioVariant: nil
+    )
+
     /// Models that are always selectable on the current OS.
     private static let baseModels: [SpeechModelDescriptor] = [
         whisperTiny,
@@ -101,10 +122,14 @@ enum SpeechModelCatalog {
     ]
 
     static var availableModels: [SpeechModelDescriptor] {
+        var models = baseModels
         if #available(macOS 15, iOS 18, *) {
-            return baseModels + [qwen3AsrInt8]
+            models.append(qwen3AsrInt8)
         }
-        return baseModels
+        if #available(macOS 26, *) {
+            models.append(speechAnalyzer)
+        }
+        return models
     }
 
     static let defaultModelID = whisperSmallEnglish.id

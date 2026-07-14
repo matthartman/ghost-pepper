@@ -4,17 +4,17 @@ import XCTest
 @MainActor
 final class SpeechTranscriberTests: XCTestCase {
 
-    func testSpeechModelCatalogIncludesWhisperAndParakeetModels() {
+    func testSpeechModelCatalogIncludesModelsSupportedByTheCurrentOS() {
         let ids = SpeechModelCatalog.availableModels.map(\.id)
         let backends = SpeechModelCatalog.availableModels.map(\.backend)
 
-        let baseIDs = [
+        var expectedIDs = [
             "openai_whisper-tiny.en",
             "openai_whisper-small.en",
             "openai_whisper-small",
             "fluid_parakeet-v3",
         ]
-        let baseBackends: [SpeechBackendKind] = [
+        var expectedBackends: [SpeechBackendKind] = [
             .whisperKit,
             .whisperKit,
             .whisperKit,
@@ -22,14 +22,46 @@ final class SpeechTranscriberTests: XCTestCase {
         ]
 
         if #available(macOS 15, iOS 18, *) {
-            XCTAssertEqual(ids, baseIDs + ["fluid_qwen3-asr-0.6b-int8"])
-            XCTAssertEqual(backends, baseBackends + [.fluidAudio])
-        } else {
-            XCTAssertEqual(ids, baseIDs)
-            XCTAssertEqual(backends, baseBackends)
+            expectedIDs.append("fluid_qwen3-asr-0.6b-int8")
+            expectedBackends.append(.fluidAudio)
+        }
+        if #available(macOS 26, *) {
+            expectedIDs.append("apple_speech-analyzer")
+            expectedBackends.append(.speechAnalyzer)
         }
 
+        XCTAssertEqual(ids, expectedIDs)
+        XCTAssertEqual(backends, expectedBackends)
         XCTAssertEqual(SpeechModelCatalog.defaultModelID, "openai_whisper-small.en")
+    }
+
+    func testSpeechAnalyzerDescriptorIsSystemManagedAndDoesNotFilterSpeakers() {
+        let model = SpeechModelCatalog.speechAnalyzer
+
+        XCTAssertEqual(model.name, "apple_speech-analyzer")
+        XCTAssertEqual(model.backend, .speechAnalyzer)
+        XCTAssertEqual(model.pickerTitle, "Apple SpeechAnalyzer")
+        XCTAssertEqual(model.variantName, "System model")
+        XCTAssertEqual(model.sizeDescription, "Managed by macOS")
+        XCTAssertEqual(model.cachePathComponents, [])
+        XCTAssertNil(model.fluidAudioVariant)
+        XCTAssertTrue(model.isSystemManaged)
+        XCTAssertFalse(model.supportsSpeakerFiltering)
+        XCTAssertEqual(model.automaticLanguageLabel, "System language")
+
+        if #available(macOS 26, *) {
+            XCTAssertEqual(
+                SpeechModelCatalog.model(named: "apple_speech-analyzer"),
+                model
+            )
+        } else {
+            XCTAssertNil(SpeechModelCatalog.model(named: "apple_speech-analyzer"))
+        }
+
+        XCTAssertEqual(
+            SpeechModelCatalog.whisperSmallEnglish.automaticLanguageLabel,
+            "Auto-detect"
+        )
     }
 
     func testFluidAudioSpeechModelsSupportSpeakerFiltering() {
