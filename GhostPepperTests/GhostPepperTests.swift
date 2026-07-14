@@ -243,6 +243,65 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(requestedLanguages[0], "fr")
     }
 
+    func testAppStateRepreparesSpeechAnalyzerAfterAnInFlightLoadFinishes() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        var requestedLanguages: [String?] = []
+        var releaseInitialLoad: (() -> Void)?
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.speechAnalyzer.id,
+            speechAnalyzerBackendFactory: { language in
+                requestedLanguages.append(language)
+                if requestedLanguages.count == 1 {
+                    await withCheckedContinuation { continuation in
+                        releaseInitialLoad = { continuation.resume() }
+                    }
+                }
+                return AppStateSpeechAnalyzerStub()
+            }
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let previousLanguage = UserDefaults.standard.object(forKey: "preferredLanguage")
+        let previousModel = UserDefaults.standard.object(forKey: "speechModel")
+        defer {
+            if let previousLanguage {
+                UserDefaults.standard.set(previousLanguage, forKey: "preferredLanguage")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "preferredLanguage")
+            }
+            if let previousModel {
+                UserDefaults.standard.set(previousModel, forKey: "speechModel")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "speechModel")
+            }
+        }
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            modelManager: manager
+        )
+        appState.preferredLanguage = "en"
+        appState.speechModel = SpeechModelCatalog.speechAnalyzer.id
+
+        let initialLoad = Task { await appState.loadSpeechModel(name: SpeechModelCatalog.speechAnalyzer.id) }
+        while requestedLanguages.isEmpty {
+            await Task.yield()
+        }
+
+        appState.preferredLanguage = "fr"
+        let reload = Task { await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded() }
+        await Task.yield()
+        releaseInitialLoad?()
+
+        await initialLoad.value
+        await reload.value
+
+        XCTAssertEqual(requestedLanguages, ["en", "fr"])
+    }
+
     func testEmptyTranscriptionDispositionCancelsSubThresholdRecordings() {
         XCTAssertEqual(
             AppState.emptyTranscriptionDisposition(forAudioSampleCount: 7_999),

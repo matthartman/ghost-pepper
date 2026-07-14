@@ -2109,6 +2109,9 @@ class AppState: ObservableObject {
         guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
             return
         }
+        while modelManager.state == .loading {
+            await Task.yield()
+        }
         await loadSpeechModel(name: speechModel)
     }
 
