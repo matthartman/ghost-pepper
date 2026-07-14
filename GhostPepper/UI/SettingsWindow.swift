@@ -866,7 +866,10 @@ struct SettingsView: View {
 
                 SettingsField("Language") {
                     Picker("Language", selection: $appState.preferredLanguage) {
-                        Text("Auto-detect").tag("auto")
+                        Text(
+                            SpeechModelCatalog.model(named: appState.speechModel)?.automaticLanguageLabel
+                                ?? "Auto-detect"
+                        ).tag("auto")
                         Text("English").tag("en")
                         Text("Spanish").tag("es")
                         Text("French").tag("fr")
@@ -883,6 +886,11 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                     .frame(maxWidth: 320, alignment: .leading)
+                    .onChange(of: appState.preferredLanguage) { _, _ in
+                        Task {
+                            await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded()
+                        }
+                    }
                 }
 
                 if appState.preferredLanguage != "auto" && appState.preferredLanguage != "en" && appState.speechModel.hasSuffix(".en") {

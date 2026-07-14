@@ -108,7 +108,7 @@ class AppState: ObservableObject {
         }
     }
 
-    let modelManager = ModelManager()
+    let modelManager: ModelManager
     let audioRecorder: AudioRecorder
     let transcriber: SpeechTranscriber
     let textPaster: TextPaster
@@ -208,6 +208,7 @@ class AppState: ObservableObject {
         hotkeyMonitor: HotkeyMonitoring = HotkeyMonitor(bindings: AppState.defaultShortcutBindings),
         chordBindingStore: ChordBindingStore = ChordBindingStore(),
         cleanupSettingsDefaults: UserDefaults = .standard,
+        modelManager: ModelManager? = nil,
         textCleanupManager: TextCleanupManager? = nil,
         frontmostWindowOCRService: FrontmostWindowOCRService = FrontmostWindowOCRService(),
         cleanupPromptBuilder: CleanupPromptBuilder = CleanupPromptBuilder(),
@@ -227,6 +228,7 @@ class AppState: ObservableObject {
         self.hotkeyMonitor = hotkeyMonitor
         self.chordBindingStore = chordBindingStore
         self.cleanupSettingsDefaults = cleanupSettingsDefaults
+        self.modelManager = modelManager ?? ModelManager()
         self.audioRecorder = audioRecorder
         self.textPaster = textPaster
         self.debugLogStore = debugLogStore
@@ -296,7 +298,7 @@ class AppState: ObservableObject {
            UserDefaults.standard.object(forKey: "selectedCleanupModelKind") != nil {
             showWhatsNew = true
         }
-        self.transcriber = SpeechTranscriber(modelManager: modelManager)
+        self.transcriber = SpeechTranscriber(modelManager: self.modelManager)
         self.textCleaner = TextCleaner(
             cleanupManager: self.textCleanupManager,
             correctionStore: self.correctionStore
@@ -2091,7 +2093,8 @@ class AppState: ObservableObject {
     }
 
     func loadSpeechModel(name: String) async {
-        await modelManager.loadModel(name: name)
+        let language = preferredLanguage == "auto" ? nil : preferredLanguage
+        await modelManager.loadModel(name: name, language: language)
         let nextPresentation = Self.nextSpeechModelPresentation(
             managerState: modelManager.state,
             managerError: modelManager.error,
@@ -2100,6 +2103,13 @@ class AppState: ObservableObject {
         )
         status = nextPresentation.status
         errorMessage = nextPresentation.errorMessage
+    }
+
+    func reloadSpeechAnalyzerForPreferredLanguageIfNeeded() async {
+        guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
+            return
+        }
+        await loadSpeechModel(name: speechModel)
     }
 
     static func nextSpeechModelPresentation(
