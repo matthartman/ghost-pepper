@@ -722,8 +722,14 @@ class AppState: ObservableObject {
 
     private func startRecording() async {
         // If the selected speech model isn't ready, show loading message
-        guard status == .ready, modelManager.isReady, speechAnalyzerReloadsInFlight == 0 else {
-            if status == .loading || speechAnalyzerReloadsInFlight > 0 {
+        guard status == .ready,
+              modelManager.isReady,
+              modelManager.modelName == speechModel,
+              speechAnalyzerReloadsInFlight == 0 else {
+            if status == .loading
+                || !modelManager.isReady
+                || modelManager.modelName != speechModel
+                || speechAnalyzerReloadsInFlight > 0 {
                 overlay.show(message: .modelLoading)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     self?.overlay.dismiss()
@@ -2152,6 +2158,7 @@ class AppState: ObservableObject {
             || status == .transcribing
             || pipelineOwner != nil
             || activeMeetingSession?.isActive == true
+            || activeMeetingSession?.isDraining == true
             || pepperChatSession.isRecording
             || pepperChatSession.isTranscribing
     }

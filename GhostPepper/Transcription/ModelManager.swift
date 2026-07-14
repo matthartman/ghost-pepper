@@ -47,6 +47,7 @@ final class ModelManager: ObservableObject {
     private let modelLoadOverride: ModelLoadOverride?
     private let loadRetryDelayOverride: RetryDelayOverride?
     private let speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory?
+    private var queuedLoadRequest: (name: String, language: String?)?
 
     init(
         modelName: String = SpeechModelCatalog.defaultModelID,
@@ -70,6 +71,11 @@ final class ModelManager: ObservableObject {
             )
             error = missingModelError
             state = .error
+            return
+        }
+
+        if state == .loading {
+            queuedLoadRequest = (requestedName, language)
             return
         }
 
@@ -109,6 +115,10 @@ final class ModelManager: ObservableObject {
             self.state = .error
             debugLogger?(.model, "Speech model \(modelName) failed to load: \(error.localizedDescription)")
         }
+
+        guard let queuedLoadRequest else { return }
+        self.queuedLoadRequest = nil
+        await loadModel(name: queuedLoadRequest.name, language: queuedLoadRequest.language)
     }
 
     private func loadRequestedModel(

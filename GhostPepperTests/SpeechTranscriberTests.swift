@@ -125,6 +125,46 @@ final class SpeechTranscriberTests: XCTestCase {
         }
     }
 
+    func testModelManagerQueuesLatestModelSelectionWhileAnotherModelLoads() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let firstLoadGate = PipelineTestGate()
+        var loadedNames: [String] = []
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.whisperSmallEnglish.id,
+            modelLoadOverride: { descriptor in
+                loadedNames.append(descriptor.name)
+                if loadedNames.count == 1 {
+                    await firstLoadGate.wait()
+                }
+            }
+        )
+
+        let initialLoad = Task { await manager.loadModel() }
+        for _ in 0..<100 where loadedNames.isEmpty {
+            await Task.yield()
+        }
+
+        let requestedModel = SpeechModelCatalog.speechAnalyzer.id
+        let queuedLoad = Task {
+            await manager.loadModel(name: requestedModel)
+        }
+        await Task.yield()
+        XCTAssertEqual(manager.modelName, SpeechModelCatalog.whisperSmallEnglish.id)
+
+        await firstLoadGate.release()
+        await initialLoad.value
+        await queuedLoad.value
+
+        XCTAssertEqual(loadedNames, [
+            SpeechModelCatalog.whisperSmallEnglish.id,
+            requestedModel,
+        ])
+        XCTAssertEqual(manager.modelName, requestedModel)
+        XCTAssertEqual(manager.state, .ready)
+    }
+
     // MARK: - SpeechTranscriber Tests
 
     func testTranscriberReportsNotReadyBeforeModelLoad() {
