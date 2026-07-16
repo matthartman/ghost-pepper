@@ -157,6 +157,8 @@ struct MeetingMarkdownWriter {
         var article = ""
         var importedFrom: String?
         var sourceURL: String?
+        var parsedStartDate: Date?
+        var attendees: [MeetingAttendee] = []
         var inFrontmatter = false
         var frontmatterSeen = false
         var inNotes = false
@@ -185,11 +187,22 @@ struct MeetingMarkdownWriter {
                 if line.hasPrefix("source:") {
                     sourceURL = line.replacingOccurrences(of: "source:", with: "").trimmingCharacters(in: .whitespaces)
                 }
+                if line.hasPrefix("date:") {
+                    let rawDate = line.replacingOccurrences(of: "date:", with: "").trimmingCharacters(in: .whitespaces)
+                    parsedStartDate = parseFrontmatterDate(rawDate)
+                }
+                if line.hasPrefix("attendees:") {
+                    attendees = parseFrontmatterAttendees(line)
+                }
                 continue
             }
 
             if line.hasPrefix("# ") && title == fileURL.deletingPathExtension().lastPathComponent {
                 title = String(line.dropFirst(2))
+                continue
+            }
+            if line.hasPrefix("**Attendees:**") {
+                attendees = parseInlineAttendees(line)
                 continue
             }
 
@@ -237,8 +250,9 @@ struct MeetingMarkdownWriter {
             }
         }
 
-        let transcript = MeetingTranscript(meetingName: title)
+        let transcript = MeetingTranscript(meetingName: title, startDate: parsedStartDate ?? Date())
         transcript.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        transcript.attendees = attendees
         let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         transcript.summary = trimmedSummary.isEmpty ? nil : trimmedSummary
         let trimmedArticle = article.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -246,9 +260,148 @@ struct MeetingMarkdownWriter {
         transcript.importedFrom = importedFrom
         transcript.sourceURL = sourceURL
 
-        transcript.segments = parseTranscriptSegments(from: transcriptLines)
+        var parsedSegments = parseTranscriptSegments(from: transcriptLines)
+        if parsedSegments.isEmpty,
+           let granolaTranscript = extractGranolaTranscriptFallback(from: content) {
+            parsedSegments = parseTranscriptSegments(from: granolaTranscript.components(separatedBy: .newlines))
+        }
+        transcript.segments = parsedSegments
 
         return transcript
+    }
+
+    private static func extractGranolaTranscriptFallback(from markdown: String) -> String? {
+        guard let sectionRange = markdown.range(of: "## Granola Import Data"),
+              let fenceStart = markdown.range(of: "```json", range: sectionRange.upperBound..<markdown.endIndex),
+              let fenceEnd = markdown.range(of: "```", range: fenceStart.upperBound..<markdown.endIndex) else {
+            return nil
+        }
+
+        let jsonText = String(markdown[fenceStart.upperBound..<fenceEnd.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = jsonText.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        for keyPath in [
+            ["detail_note", "transcript"],
+            ["transcript"],
+            ["document", "transcript"],
+            ["metadata", "transcript"]
+        ] {
+            if let value = value(in: object, at: keyPath) {
+                let transcript = GranolaImporter.extractTranscript(from: value)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !transcript.isEmpty {
+                    return transcript
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func value(in object: [String: Any], at keyPath: [String]) -> Any? {
+        var current: Any = object
+        for key in keyPath {
+            guard let dict = current as? [String: Any],
+                  let next = dict[key] else {
+                return nil
+            }
+            current = next
+        }
+        return current
+    }
+
+    private static func parseFrontmatterDate(_ value: String) -> Date? {
+        let trimmed = stripWrappingQuotes(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: trimmed) {
+            return date
+        }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: trimmed)
+    }
+
+    private static func parseFrontmatterAttendees(_ line: String) -> [MeetingAttendee] {
+        let raw = line.replacingOccurrences(of: "attendees:", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let unwrapped: String
+        if raw.hasPrefix("["), raw.hasSuffix("]") {
+            unwrapped = String(raw.dropFirst().dropLast())
+        } else {
+            unwrapped = raw
+        }
+
+        return parseDelimitedAttendees(unwrapped)
+    }
+
+    private static func parseInlineAttendees(_ line: String) -> [MeetingAttendee] {
+        let raw = line.replacingOccurrences(of: "**Attendees:**", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return parseDelimitedAttendees(raw)
+    }
+
+    private static func parseDelimitedAttendees(_ value: String) -> [MeetingAttendee] {
+        var attendees: [MeetingAttendee] = []
+        for rawName in splitCSVLike(value) {
+            let name = stripWrappingQuotes(rawName)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty,
+                  attendees.contains(where: { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }) == false else {
+                continue
+            }
+            attendees.append(MeetingAttendee(name: name))
+        }
+        return attendees
+    }
+
+    private static func splitCSVLike(_ value: String) -> [String] {
+        var fields: [String] = []
+        var field = ""
+        var inQuotes = false
+        var escaped = false
+
+        for character in value {
+            if escaped {
+                field.append(character)
+                escaped = false
+                continue
+            }
+            if character == "\\" {
+                escaped = true
+                continue
+            }
+            if character == "\"" {
+                inQuotes.toggle()
+                field.append(character)
+                continue
+            }
+            if character == ",", !inQuotes {
+                fields.append(field)
+                field = ""
+                continue
+            }
+            field.append(character)
+        }
+
+        if !field.isEmpty {
+            fields.append(field)
+        }
+        return fields
+    }
+
+    private static func stripWrappingQuotes(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2,
+              trimmed.first == "\"",
+              trimmed.last == "\"" else {
+            return trimmed
+        }
+        return String(trimmed.dropFirst().dropLast())
+            .replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\\\", with: "\\")
     }
 
     private struct ParsedSpeakerLine {

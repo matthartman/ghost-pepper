@@ -9,19 +9,7 @@ enum MeetingTranscriptSettings {
 
     /// Returns the default save directory: Documents/Ghost Pepper Meetings.
     static func defaultSaveDirectory() -> URL {
-        let documentsArchive = documentsArchiveURL()
-        if isRunningInAppSandbox {
-            return documentsArchive
-        }
-
-        // Unsigned local builds resolve `.documentDirectory` to the user's
-        // normal Documents folder. Prefer the app-container archive only in
-        // that unsandboxed case so debug builds can see local app data without
-        // making the sandboxed app request access to `~/Library/Containers`.
-        if let containerArchive = appContainerArchiveIfPresent() {
-            return containerArchive
-        }
-        return documentsArchive
+        documentsArchiveURL()
     }
 
     /// Load the user-chosen save directory, or nil to use the default.
@@ -34,6 +22,10 @@ enum MeetingTranscriptSettings {
             if isOwnSandboxArchiveURL(url) {
                 return defaultSaveDirectory()
             }
+            if isLegacyAppContainerArchiveURL(url) {
+                UserDefaults.standard.removeObject(forKey: saveDirectoryPathKey)
+                return nil
+            }
             return url
         }
         var isStale = false
@@ -45,6 +37,10 @@ enum MeetingTranscriptSettings {
                 UserDefaults.standard.removeObject(forKey: saveDirectoryKey)
             }
             return defaultSaveDirectory()
+        }
+        if isLegacyAppContainerArchiveURL(url) {
+            UserDefaults.standard.removeObject(forKey: saveDirectoryKey)
+            return nil
         }
         startAccessingIfNeeded(url)
         if isStale {
@@ -109,5 +105,12 @@ enum MeetingTranscriptSettings {
     private static func isOwnSandboxArchiveURL(_ url: URL) -> Bool {
         guard isRunningInAppSandbox else { return false }
         return url.standardizedFileURL.path == documentsArchiveURL().standardizedFileURL.path
+    }
+
+    private static func isLegacyAppContainerArchiveURL(_ url: URL) -> Bool {
+        guard !isRunningInAppSandbox else { return false }
+        let path = url.standardizedFileURL.path
+        return path.contains("/Library/Containers/") &&
+            path.hasSuffix("/Data/Documents/Ghost Pepper Meetings")
     }
 }

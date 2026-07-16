@@ -22,8 +22,8 @@ struct GranolaImportView: View {
                 idleView
             case .importingLocal:
                 ProgressView("Importing meetings from local cache...")
-            case .localDone(let count):
-                localDoneView(count: count)
+            case .localDone(let count, let enriched):
+                localDoneView(count: count, enriched: enriched)
             case .needsApiKey:
                 apiKeyView
             case .fetchingNotes(let current, let total):
@@ -37,8 +37,8 @@ struct GranolaImportView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            case .done(let imported, let transcripts):
-                doneView(imported: imported, transcripts: transcripts)
+            case .done(let imported, let transcripts, let enriched):
+                doneView(imported: imported, transcripts: transcripts, enriched: enriched)
             case .error(let message):
                 errorView(message: message)
             }
@@ -64,10 +64,11 @@ struct GranolaImportView: View {
     /// Import" or "Try Again".
     private func runAutoImport() async {
         let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-        let localCount = await importer.importFromLocalCache(to: dir)
+        let localSummary = await importer.importFromLocalCache(to: dir)
         state.loadHistory()
-        if localCount > 0 {
-            NotificationCenter.default.post(name: .granolaImported, object: localCount)
+        let localChanged = localSummary.imported + localSummary.enriched
+        if localChanged > 0 {
+            NotificationCenter.default.post(name: .granolaImported, object: localChanged)
         }
 
         let hasApiKey = !importer.granolaApiKey.isEmpty
@@ -76,10 +77,11 @@ struct GranolaImportView: View {
             // regardless. Errors from the API path itself are surfaced by
             // `fetchTranscripts` and end up in `.error`.
             importer.state = .fetchingNotes(current: 0, total: 0)
-            let transcripts = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
+            let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
             state.loadHistory()
-            if transcripts > 0 {
-                NotificationCenter.default.post(name: .granolaImported, object: transcripts)
+            let apiChanged = apiSummary.imported + apiSummary.enriched
+            if apiChanged > 0 {
+                NotificationCenter.default.post(name: .granolaImported, object: apiChanged)
             }
             // If `fetchTranscripts` already routed to `.error` (e.g. HTTP
             // failure), leave that in place so the user sees what went
@@ -87,7 +89,11 @@ struct GranolaImportView: View {
             if case .error = importer.state {
                 // keep the API error state
             } else {
-                importer.state = .done(imported: localCount, transcripts: transcripts)
+                importer.state = .done(
+                    imported: localSummary.imported + apiSummary.imported,
+                    transcripts: apiSummary.transcripts,
+                    enriched: localSummary.enriched + apiSummary.enriched
+                )
             }
             return
         }
@@ -95,8 +101,8 @@ struct GranolaImportView: View {
         // No API key. If local succeeded, show its summary; otherwise prompt
         // for a key so the user can pivot in one click instead of bouncing
         // off "Try Again."
-        if localCount > 0 {
-            importer.state = .localDone(count: localCount)
+        if localChanged > 0 {
+            importer.state = .localDone(count: localSummary.imported, enriched: localSummary.enriched)
         } else {
             importer.state = .needsApiKey
         }
@@ -114,11 +120,12 @@ struct GranolaImportView: View {
             Button("Start Import") {
                 Task {
                     let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-                    let count = await importer.importFromLocalCache(to: dir)
+                    let summary = await importer.importFromLocalCache(to: dir)
                     state.loadHistory()
-                    if count > 0 {
-                        NotificationCenter.default.post(name: .granolaImported, object: count)
-                        importer.state = .localDone(count: count)
+                    let changed = summary.imported + summary.enriched
+                    if changed > 0 {
+                        NotificationCenter.default.post(name: .granolaImported, object: changed)
+                        importer.state = .localDone(count: summary.imported, enriched: summary.enriched)
                     }
                 }
             }
@@ -131,13 +138,13 @@ struct GranolaImportView: View {
         }
     }
 
-    private func localDoneView(count: Int) -> some View {
+    private func localDoneView(count: Int, enriched: Int) -> some View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 28))
                 .foregroundColor(.green)
 
-            Text("Imported \(count) meetings!")
+            importSummaryText(imported: count, transcripts: 0, enriched: enriched)
                 .font(.callout.weight(.medium))
 
             Divider()
@@ -163,12 +170,17 @@ struct GranolaImportView: View {
                 Button("Fetch Notes & Transcripts") {
                     Task {
                         let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-                        let transcripts = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
+                        let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
                         state.loadHistory()
-                        if transcripts > 0 {
-                            NotificationCenter.default.post(name: .granolaImported, object: transcripts)
+                        let changed = apiSummary.imported + apiSummary.enriched
+                        if changed > 0 {
+                            NotificationCenter.default.post(name: .granolaImported, object: changed)
                         }
-                        importer.state = .done(imported: count, transcripts: transcripts)
+                        importer.state = .done(
+                            imported: count + apiSummary.imported,
+                            transcripts: apiSummary.transcripts,
+                            enriched: enriched + apiSummary.enriched
+                        )
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -201,12 +213,13 @@ struct GranolaImportView: View {
             Button("Fetch Transcripts") {
                 Task {
                     let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-                    let transcripts = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
+                    let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
                     state.loadHistory()
-                    if transcripts > 0 {
-                        NotificationCenter.default.post(name: .granolaImported, object: transcripts)
+                    let changed = apiSummary.imported + apiSummary.enriched
+                    if changed > 0 {
+                        NotificationCenter.default.post(name: .granolaImported, object: changed)
                     }
-                    importer.state = .done(imported: 0, transcripts: transcripts)
+                    importer.state = .done(imported: apiSummary.imported, transcripts: apiSummary.transcripts, enriched: apiSummary.enriched)
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -215,19 +228,14 @@ struct GranolaImportView: View {
         }
     }
 
-    private func doneView(imported: Int, transcripts: Int) -> some View {
+    private func doneView(imported: Int, transcripts: Int, enriched: Int) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 28))
                 .foregroundColor(.green)
 
-            if imported > 0 {
-                Text("\(imported) meetings imported, \(transcripts) notes enriched from API!")
-                    .font(.callout.weight(.medium))
-            } else {
-                Text("\(transcripts) notes enriched from API!")
-                    .font(.callout.weight(.medium))
-            }
+            importSummaryText(imported: imported, transcripts: transcripts, enriched: enriched)
+                .font(.callout.weight(.medium))
 
             Text("Your Granola meetings are now in the sidebar.")
                 .font(.caption)
@@ -240,6 +248,23 @@ struct GranolaImportView: View {
             .buttonStyle(.borderedProminent)
             .tint(.orange)
         }
+    }
+
+    private func importSummaryText(imported: Int, transcripts: Int, enriched: Int) -> Text {
+        var parts: [String] = []
+        if imported > 0 {
+            parts.append("\(imported) new \(imported == 1 ? "meeting" : "meetings") imported")
+        }
+        if enriched > 0 {
+            parts.append("\(enriched) existing \(enriched == 1 ? "record was" : "records were") re-imported with enriched info")
+        }
+        if transcripts > 0 {
+            parts.append("\(transcripts) \(transcripts == 1 ? "transcript" : "transcripts") fetched")
+        }
+        if parts.isEmpty {
+            parts.append("Granola is up to date")
+        }
+        return Text(parts.joined(separator: ", ") + "!")
     }
 
     private func errorView(message: String) -> some View {

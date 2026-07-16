@@ -39,10 +39,19 @@ final class LocalStructuredLLM {
     func completeWithTrace(
         system: String,
         user: String,
-        onToken: ((String) -> Void)? = nil
+        phase: String = "primary prompt context",
+        onToken: ((String) -> Void)? = nil,
+        onStatus: ((String) -> Void)? = nil
     ) async throws -> CompletionTrace {
         let prompt = Self.buildPrompt(system: system, user: user)
+        let inputTokens = Self.estimatedTokenCount(prompt)
+        if cleanupManager.activeLoadedModelKind == modelKind && cleanupManager.activeLLM != nil {
+            onStatus?("Local model is already in memory")
+        } else {
+            onStatus?("Loading local model into memory")
+        }
         let stream = try await cleanupManager.streamCompletion(prompt: prompt, modelKind: modelKind)
+        onStatus?("Pre-loading \(phase): reading ~\(inputTokens) input tokens before first output")
         var out = ""
         for await token in stream {
             if Task.isCancelled { break }
@@ -52,7 +61,7 @@ final class LocalStructuredLLM {
         let stripped = Self.stripThinking(out).trimmingCharacters(in: .whitespacesAndNewlines)
         return CompletionTrace(
             text: stripped,
-            estimatedInputTokens: Self.estimatedTokenCount(prompt),
+            estimatedInputTokens: inputTokens,
             estimatedOutputTokens: Self.estimatedTokenCount(stripped)
         )
     }
@@ -79,6 +88,48 @@ final class LocalStructuredLLM {
         throw LLMError.notJSON(second.isEmpty ? first : second)
     }
 
+    func completeJSONObjectWithTrace(
+        system: String,
+        user: String,
+        onToken: ((String) -> Void)? = nil,
+        onStatus: ((String) -> Void)? = nil
+    ) async throws -> (object: [String: Any], trace: CompletionTrace) {
+        let first = try await completeWithTrace(system: system, user: user, phase: "primary prompt context", onToken: onToken, onStatus: onStatus)
+        if let object = Self.extractJSONObject(from: first.text) {
+            return (object, first)
+        }
+        if let repaired = try? await repairJSONObject(raw: first.text, shapeHint: user, onToken: onToken, onStatus: onStatus) {
+            return (repaired.object, CompletionTrace(
+                text: repaired.trace.text,
+                estimatedInputTokens: first.estimatedInputTokens + repaired.trace.estimatedInputTokens,
+                estimatedOutputTokens: first.estimatedOutputTokens + repaired.trace.estimatedOutputTokens
+            ))
+        }
+        let retryUser = user + """
+
+
+        IMPORTANT: your previous reply was not valid JSON. Reply again with \
+        ONLY a single JSON object — no prose, no markdown fences, no \
+        explanation before or after it.
+        """
+        let second = try await completeWithTrace(system: system, user: retryUser, phase: "JSON retry prompt context", onToken: onToken, onStatus: onStatus)
+        if let object = Self.extractJSONObject(from: second.text) {
+            return (object, CompletionTrace(
+                text: second.text,
+                estimatedInputTokens: first.estimatedInputTokens + second.estimatedInputTokens,
+                estimatedOutputTokens: first.estimatedOutputTokens + second.estimatedOutputTokens
+            ))
+        }
+        if let repaired = try? await repairJSONObject(raw: second.text.isEmpty ? first.text : second.text, shapeHint: user, onToken: onToken, onStatus: onStatus) {
+            return (repaired.object, CompletionTrace(
+                text: repaired.trace.text,
+                estimatedInputTokens: first.estimatedInputTokens + second.estimatedInputTokens + repaired.trace.estimatedInputTokens,
+                estimatedOutputTokens: first.estimatedOutputTokens + second.estimatedOutputTokens + repaired.trace.estimatedOutputTokens
+            ))
+        }
+        throw LLMError.notJSON(second.text.isEmpty ? first.text : second.text)
+    }
+
     /// JSON-array completion. Used by the generated wiki pipeline for simple
     /// function-style extractors where the natural output is a list.
     func completeJSONArray(system: String, user: String) async throws -> [[String: Any]] {
@@ -103,13 +154,14 @@ final class LocalStructuredLLM {
     func completeJSONArrayWithTrace(
         system: String,
         user: String,
-        onToken: ((String) -> Void)? = nil
+        onToken: ((String) -> Void)? = nil,
+        onStatus: ((String) -> Void)? = nil
     ) async throws -> (array: [[String: Any]], trace: CompletionTrace) {
-        let first = try await completeWithTrace(system: system, user: user, onToken: onToken)
+        let first = try await completeWithTrace(system: system, user: user, phase: "primary prompt context", onToken: onToken, onStatus: onStatus)
         if let array = Self.extractJSONArray(from: first.text) {
             return (array, first)
         }
-        if let repaired = try? await repairJSONArray(raw: first.text, shapeHint: user, onToken: onToken) {
+        if let repaired = try? await repairJSONArray(raw: first.text, shapeHint: user, onToken: onToken, onStatus: onStatus) {
             return (repaired.array, CompletionTrace(
                 text: repaired.trace.text,
                 estimatedInputTokens: first.estimatedInputTokens + repaired.trace.estimatedInputTokens,
@@ -123,7 +175,7 @@ final class LocalStructuredLLM {
         ONLY a single JSON array — no prose, no markdown fences, no \
         explanation before or after it.
         """
-        let second = try await completeWithTrace(system: system, user: retryUser, onToken: onToken)
+        let second = try await completeWithTrace(system: system, user: retryUser, phase: "JSON retry prompt context", onToken: onToken, onStatus: onStatus)
         if let array = Self.extractJSONArray(from: second.text) {
             return (array, CompletionTrace(
                 text: second.text,
@@ -131,7 +183,7 @@ final class LocalStructuredLLM {
                 estimatedOutputTokens: first.estimatedOutputTokens + second.estimatedOutputTokens
             ))
         }
-        if let repaired = try? await repairJSONArray(raw: second.text.isEmpty ? first.text : second.text, shapeHint: user, onToken: onToken) {
+        if let repaired = try? await repairJSONArray(raw: second.text.isEmpty ? first.text : second.text, shapeHint: user, onToken: onToken, onStatus: onStatus) {
             return (repaired.array, CompletionTrace(
                 text: repaired.trace.text,
                 estimatedInputTokens: first.estimatedInputTokens + second.estimatedInputTokens + repaired.trace.estimatedInputTokens,
@@ -144,7 +196,8 @@ final class LocalStructuredLLM {
     private func repairJSONArray(
         raw: String,
         shapeHint: String,
-        onToken: ((String) -> Void)?
+        onToken: ((String) -> Void)?,
+        onStatus: ((String) -> Void)?
     ) async throws -> (array: [[String: Any]], trace: CompletionTrace) {
         let system = """
         /no_think
@@ -162,9 +215,38 @@ final class LocalStructuredLLM {
         Malformed output:
         \(raw)
         """
-        let trace = try await completeWithTrace(system: system, user: user, onToken: onToken)
+        let trace = try await completeWithTrace(system: system, user: user, phase: "JSON repair prompt context", onToken: onToken, onStatus: onStatus)
         if let array = Self.extractJSONArray(from: trace.text) {
             return (array, trace)
+        }
+        throw LLMError.notJSON(trace.text)
+    }
+
+    private func repairJSONObject(
+        raw: String,
+        shapeHint: String,
+        onToken: ((String) -> Void)?,
+        onStatus: ((String) -> Void)?
+    ) async throws -> (object: [String: Any], trace: CompletionTrace) {
+        let system = """
+        /no_think
+        You repair malformed model output into valid JSON. Output ONLY one JSON object.
+        Do not add facts. Do not explain. Do not use markdown fences.
+        """
+        let user = """
+        Convert the malformed output below into the JSON object requested by the original task.
+        If an item is incomplete, keep supported fields and use empty strings or empty arrays for missing values.
+        Output ONLY valid JSON.
+
+        Original task and shape:
+        \(shapeHint.prefix(4000))
+
+        Malformed output:
+        \(raw)
+        """
+        let trace = try await completeWithTrace(system: system, user: user, phase: "JSON repair prompt context", onToken: onToken, onStatus: onStatus)
+        if let object = Self.extractJSONObject(from: trace.text) {
+            return (object, trace)
         }
         throw LLMError.notJSON(trace.text)
     }

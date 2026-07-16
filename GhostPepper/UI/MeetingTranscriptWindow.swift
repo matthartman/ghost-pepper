@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import WebKit
 import os.log
 
 /// A single turn in the bottom-bar Q&A thread. Created when the user hits
@@ -32,9 +33,428 @@ private struct WikiGenerationFunctionRun: Identifiable, Equatable {
     var system: String
     var user: String
     var output: String = ""
+    var modelStatus: String = "Preparing local model"
+    var modelStatusInputTokens: Int? = nil
+    var modelStatusStartedAt: Date? = nil
     var inputTokens: Int = 0
     var outputTokens: Int = 0
+    var startedAt: Date = Date()
+    var firstTokenAt: Date? = nil
+    var finishedAt: Date? = nil
     var isFinished: Bool = false
+}
+
+private struct SecondBrainLintProposal: Identifiable, Equatable {
+    enum Kind: String, Equatable {
+        case merge = "Merge"
+    }
+
+    let id = UUID()
+    var kind: Kind
+    var category: String
+    var sourceTitle: String
+    var sourceURL: URL
+    var targetTitle: String
+    var targetURL: URL
+    var reason: String
+    var confidence: String
+    var accepted: Bool = true
+
+    var categoryLabel: String {
+        switch category {
+        case "people": return "People"
+        case "companies": return "Companies"
+        case "concepts": return "Concepts"
+        case "topics": return "Topics"
+        case "claims": return "Claims"
+        case "meetings": return "Meeting Overviews"
+        default: return category.capitalized
+        }
+    }
+}
+
+@MainActor
+private final class SecondBrainLintRun: ObservableObject, Identifiable {
+    let id = UUID()
+    let archiveRoot: URL
+
+    @Published var status: String = "Preparing lint pass"
+    @Published var trace: String = ""
+    @Published var proposals: [SecondBrainLintProposal] = []
+    @Published var scannedPages: Int = 0
+    @Published var totalPages: Int = 0
+    @Published var appliedChanges: Int = 0
+    @Published var isRunning: Bool = true
+    @Published var errorMessage: String? = nil
+    @Published var resultMessage: String? = nil
+
+    init(archiveRoot: URL) {
+        self.archiveRoot = archiveRoot
+    }
+
+    var progressFraction: Double {
+        if !isRunning { return errorMessage == nil ? 1 : 0 }
+        guard totalPages > 0 else { return 0.05 }
+        return min(0.98, Double(scannedPages) / Double(totalPages))
+    }
+
+    var acceptedCount: Int {
+        proposals.filter(\.accepted).count
+    }
+
+    func appendTrace(_ line: String) {
+        trace += trace.isEmpty ? line : "\n\(line)"
+    }
+
+    func setProposalAccepted(_ proposal: SecondBrainLintProposal, accepted: Bool) {
+        guard let index = proposals.firstIndex(where: { $0.id == proposal.id }) else { return }
+        proposals[index].accepted = accepted
+    }
+
+    func finish(result: String) {
+        resultMessage = result
+        status = result
+        isRunning = false
+    }
+
+    func fail(_ message: String) {
+        errorMessage = message
+        status = message
+        isRunning = false
+    }
+}
+
+private enum SecondBrainLintEngine {
+    private struct LintPage {
+        var url: URL
+        var relativePath: String
+        var category: String
+        var title: String
+        var body: String
+        var userEdited: Bool
+        var updatedAt: Date?
+    }
+
+    static func collectProposals(
+        archiveRoot: URL,
+        onProgress: @MainActor @escaping (_ status: String, _ scanned: Int, _ total: Int, _ traceLine: String?) -> Void
+    ) async -> [SecondBrainLintProposal] {
+        let pages = generatedPages(in: archiveRoot)
+        await onProgress("Scanning generated 2nd Brain pages", 0, pages.count, "[scope] generated pages only; source meetings excluded")
+
+        var proposals: [SecondBrainLintProposal] = []
+        let grouped = Dictionary(grouping: pages, by: \.category)
+        var scanned = 0
+        for category in ["people", "companies", "concepts", "topics", "claims", "meetings"] {
+            let categoryPages = grouped[category] ?? []
+            for page in categoryPages {
+                scanned += 1
+                await onProgress(
+                    "Checking \(displayCategory(category))",
+                    scanned,
+                    pages.count,
+                    "[scan] \(page.relativePath)"
+                )
+            }
+
+            for proposal in mergeProposals(for: categoryPages, category: category) {
+                if !proposals.contains(where: { existing in
+                    existing.sourceURL == proposal.sourceURL && existing.targetURL == proposal.targetURL
+                }) {
+                    proposals.append(proposal)
+                    await onProgress(
+                        "Found possible \(displayCategory(category).lowercased()) merge",
+                        scanned,
+                        pages.count,
+                        "[proposal] \(proposal.sourceTitle) -> \(proposal.targetTitle): \(proposal.reason)"
+                    )
+                }
+            }
+        }
+
+        await onProgress(
+            proposals.isEmpty ? "No merge proposals found" : "Review \(proposals.count) proposed change\(proposals.count == 1 ? "" : "s")",
+            pages.count,
+            pages.count,
+            "[result] \(proposals.count) proposed lint change\(proposals.count == 1 ? "" : "s")"
+        )
+        return proposals
+    }
+
+    static func applyAcceptedProposals(_ proposals: [SecondBrainLintProposal], archiveRoot: URL) throws -> Int {
+        var applied = 0
+        for proposal in proposals where proposal.accepted {
+            guard FileManager.default.fileExists(atPath: proposal.sourceURL.path),
+                  FileManager.default.fileExists(atPath: proposal.targetURL.path) else {
+                continue
+            }
+            try merge(proposal, archiveRoot: archiveRoot)
+            applied += 1
+        }
+        return applied
+    }
+
+    private static func generatedPages(in archiveRoot: URL) -> [LintPage] {
+        let root = GeneratedWikiPaths.root(in: archiveRoot)
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var pages: [LintPage] = []
+        for case let url as URL in enumerator where url.pathExtension.lowercased() == "md" {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true,
+                  let page = try? GeneratedWikiPaths.readPage(from: url),
+                  let relativePath = relativePath(of: url, in: archiveRoot) else {
+                continue
+            }
+            let category = url.deletingLastPathComponent().lastPathComponent
+            pages.append(LintPage(
+                url: url,
+                relativePath: relativePath,
+                category: category,
+                title: page.title,
+                body: page.body,
+                userEdited: page.userEdited,
+                updatedAt: page.updatedAt
+            ))
+        }
+        return pages.sorted {
+            if $0.category == $1.category { return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return $0.category < $1.category
+        }
+    }
+
+    private static func mergeProposals(for pages: [LintPage], category: String) -> [SecondBrainLintProposal] {
+        guard pages.count > 1 else { return [] }
+        var proposals: [SecondBrainLintProposal] = []
+        for i in pages.indices {
+            for j in pages.indices where j > i {
+                guard let match = matchReason(lhs: pages[i], rhs: pages[j], category: category) else { continue }
+                let target = preferredTarget(pages[i], pages[j])
+                let source = target.url == pages[i].url ? pages[j] : pages[i]
+                proposals.append(SecondBrainLintProposal(
+                    kind: .merge,
+                    category: category,
+                    sourceTitle: source.title,
+                    sourceURL: source.url,
+                    targetTitle: target.title,
+                    targetURL: target.url,
+                    reason: match.reason,
+                    confidence: match.confidence,
+                    accepted: match.confidence != "low"
+                ))
+            }
+        }
+        return proposals
+            .sorted {
+                if confidenceRank($0.confidence) == confidenceRank($1.confidence) {
+                    return $0.sourceTitle.localizedCaseInsensitiveCompare($1.sourceTitle) == .orderedAscending
+                }
+                return confidenceRank($0.confidence) > confidenceRank($1.confidence)
+            }
+    }
+
+    private static func matchReason(lhs: LintPage, rhs: LintPage, category: String) -> (reason: String, confidence: String)? {
+        let left = WikiEntityResolver.normalize(lhs.title)
+        let right = WikiEntityResolver.normalize(rhs.title)
+        guard !left.isEmpty, !right.isEmpty, left != right || lhs.url != rhs.url else { return nil }
+
+        let leftTokens = Set(tokens(left))
+        let rightTokens = Set(tokens(right))
+        let overlap = leftTokens.intersection(rightTokens)
+        let shorterCount = max(1, min(leftTokens.count, rightTokens.count))
+        let overlapRatio = Double(overlap.count) / Double(shorterCount)
+
+        if left == right {
+            return ("Exact normalized title match.", "high")
+        }
+
+        if category == "meetings", overlap.count >= 3, overlapRatio >= 0.75 {
+            return ("Meeting titles share \(overlap.count) meaningful tokens.", overlapRatio >= 0.9 ? "high" : "medium")
+        }
+
+        if leftTokens.count == 1 || rightTokens.count == 1 {
+            let longer = left.count >= right.count ? left : right
+            let shorter = left.count < right.count ? left : right
+            if shorter.count >= 6, longer.contains(shorter) {
+                return ("One title contains the other title.", "medium")
+            }
+            if shorter.count >= 6, abs(left.count - right.count) <= 2, WikiEntityResolver.editDistance(left, right) <= 2 {
+                return ("Close spelling match: edit distance \(WikiEntityResolver.editDistance(left, right)).", "medium")
+            }
+            return nil
+        }
+
+        if overlap.count >= 2, overlapRatio >= 0.75 {
+            return ("Shares \(overlap.count) meaningful title tokens: \(overlap.sorted().joined(separator: ", ")).", overlapRatio >= 0.95 ? "high" : "medium")
+        }
+
+        let distance = WikiEntityResolver.editDistance(left, right)
+        if min(left.count, right.count) >= 8, abs(left.count - right.count) <= 3, distance <= 2 {
+            return ("Close spelling match: edit distance \(distance).", "medium")
+        }
+
+        return nil
+    }
+
+    private static func preferredTarget(_ lhs: LintPage, _ rhs: LintPage) -> LintPage {
+        if lhs.userEdited != rhs.userEdited { return lhs.userEdited ? lhs : rhs }
+        let lhsTokens = tokens(WikiEntityResolver.normalize(lhs.title)).count
+        let rhsTokens = tokens(WikiEntityResolver.normalize(rhs.title)).count
+        if lhsTokens != rhsTokens { return lhsTokens > rhsTokens ? lhs : rhs }
+        if lhs.body.count != rhs.body.count { return lhs.body.count > rhs.body.count ? lhs : rhs }
+        return (lhs.updatedAt ?? .distantPast) >= (rhs.updatedAt ?? .distantPast) ? lhs : rhs
+    }
+
+    private static func merge(_ proposal: SecondBrainLintProposal, archiveRoot: URL) throws {
+        let sourceBefore = try String(contentsOf: proposal.sourceURL, encoding: .utf8)
+        let targetBefore = try String(contentsOf: proposal.targetURL, encoding: .utf8)
+        let sourcePage = try GeneratedWikiPaths.readPage(from: proposal.sourceURL)
+        let targetPage = try GeneratedWikiPaths.readPage(from: proposal.targetURL)
+        let mergedBody = mergedBody(target: targetPage.body, source: sourcePage.body, sourceTitle: sourcePage.title)
+        let targetAfter = replaceBody(in: targetBefore, with: mergedBody)
+        try targetAfter.write(to: proposal.targetURL, atomically: true, encoding: .utf8)
+        GhostPepperHistoryStore.recordFileChange(
+            archiveRoot: archiveRoot,
+            fileURL: proposal.targetURL,
+            actor: .user,
+            operation: "lint_merge_target_update",
+            summary: "Merged \(proposal.sourceTitle) into \(proposal.targetTitle).",
+            before: targetBefore,
+            after: targetAfter,
+            metadata: metadata(for: proposal)
+        )
+
+        let wikiURLs = generatedPages(in: archiveRoot).map(\.url)
+        for url in wikiURLs where url != proposal.sourceURL {
+            guard let before = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let after = rewriteLinks(in: before, from: proposal.sourceTitle, to: proposal.targetTitle)
+            guard before != after else { continue }
+            try after.write(to: url, atomically: true, encoding: .utf8)
+            GhostPepperHistoryStore.recordFileChange(
+                archiveRoot: archiveRoot,
+                fileURL: url,
+                actor: .user,
+                operation: "lint_rewrite_wikilinks",
+                summary: "Rewrote links from \(proposal.sourceTitle) to \(proposal.targetTitle).",
+                before: before,
+                after: after,
+                metadata: metadata(for: proposal)
+            )
+        }
+
+        try FileManager.default.removeItem(at: proposal.sourceURL)
+        GhostPepperHistoryStore.recordFileChange(
+            archiveRoot: archiveRoot,
+            fileURL: proposal.sourceURL,
+            actor: .user,
+            operation: "lint_remove_merged_page",
+            summary: "Removed merged duplicate page \(proposal.sourceTitle).",
+            before: sourceBefore,
+            after: nil,
+            metadata: metadata(for: proposal)
+        )
+        GhostPepperHistoryStore.recordEvent(
+            archiveRoot: archiveRoot,
+            actor: .user,
+            operation: "lint_merge_decision",
+            summary: "Accepted lint merge: \(proposal.sourceTitle) -> \(proposal.targetTitle).",
+            relativePath: relativePath(of: proposal.targetURL, in: archiveRoot) ?? "wikis",
+            metadata: metadata(for: proposal)
+        )
+    }
+
+    private static func mergedBody(target: String, source: String, sourceTitle: String) -> String {
+        var body = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceBody = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sourceBody.isEmpty, !body.contains("Merged from \(sourceTitle)") else {
+            return body + "\n"
+        }
+        body += "\n\n## Merged From\n\n"
+        body += "- \(sourceTitle)\n\n"
+        body += sourceBody
+            .components(separatedBy: "\n")
+            .filter { !$0.hasPrefix("# ") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        body += "\n"
+        return body
+    }
+
+    private static func replaceBody(in frontmatterText: String, with body: String) -> String {
+        guard frontmatterText.hasPrefix("---\n"),
+              let close = frontmatterText.dropFirst(4).range(of: "\n---\n") else {
+            return body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        }
+        let frontmatter = String(frontmatterText[..<close.upperBound])
+        return frontmatter + "\n" + body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+    }
+
+    private static func rewriteLinks(in text: String, from sourceTitle: String, to targetTitle: String) -> String {
+        let sourceSlug = MarkdownArchivePaths.slugForIndexEntry(sourceTitle)
+        let targetSlug = MarkdownArchivePaths.slugForIndexEntry(targetTitle)
+        return text
+            .replacingOccurrences(of: "[[\(sourceTitle)]]", with: "[[\(targetTitle)]]")
+            .replacingOccurrences(of: "(\(sourceSlug).md)", with: "(\(targetSlug).md)")
+            .replacingOccurrences(of: "](\(sourceSlug).md)", with: "](\(targetSlug).md)")
+    }
+
+    private static func tokens(_ normalized: String) -> [String] {
+        let stopwords: Set<String> = [
+            "the", "and", "for", "with", "from", "into", "call", "meeting", "overview",
+            "brain", "note", "notes", "matt", "hartman"
+        ]
+        return normalized
+            .split(separator: " ")
+            .map(String.init)
+            .filter { $0.count >= 3 && !stopwords.contains($0) }
+    }
+
+    private static func displayCategory(_ category: String) -> String {
+        switch category {
+        case "people": return "people"
+        case "companies": return "companies"
+        case "concepts": return "concepts"
+        case "topics": return "topics"
+        case "claims": return "claims"
+        case "meetings": return "meeting overviews"
+        default: return category
+        }
+    }
+
+    private static func confidenceRank(_ confidence: String) -> Int {
+        switch confidence {
+        case "high": return 3
+        case "medium": return 2
+        default: return 1
+        }
+    }
+
+    private static func metadata(for proposal: SecondBrainLintProposal) -> [String: String] {
+        [
+            "category": proposal.category,
+            "source_title": proposal.sourceTitle,
+            "target_title": proposal.targetTitle,
+            "reason": proposal.reason,
+            "confidence": proposal.confidence,
+            "proposed_action": "merge",
+            "final_action": "merge"
+        ]
+    }
+
+    private static func relativePath(of url: URL, in root: URL) -> String? {
+        let base = root.standardizedFileURL.path
+        let full = url.standardizedFileURL.path
+        guard full.hasPrefix(base) else { return nil }
+        var rel = String(full.dropFirst(base.count))
+        if rel.hasPrefix("/") { rel.removeFirst() }
+        return rel
+    }
 }
 
 @MainActor
@@ -60,13 +480,28 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
     @Published var completedSourceCount: Int = 0
     @Published var currentSourceIndex: Int = 0
     @Published var currentSourceTitle: String = ""
+    @Published var nextSourceTitle: String? = nil
+    @Published var nextSourceStatus: String? = nil
+    @Published var nextSourceInputTokens: Int? = nil
+    @Published var nextSourceTerminalText: String = ""
+    @Published var nextSourceReviewDraft: GeneratedWikiReviewDraft? = nil
+    @Published var nextSourceFailed: Bool = false
+    @Published var isWaitingForPreparedSource: Bool = false
     @Published var failedSourceSummaries: [String] = []
+    @Published var reviewDraft: GeneratedWikiReviewDraft? = nil
+    @Published var reviewEntityDecisions: [UUID: GeneratedWikiEntityReviewDecision] = [:]
+    @Published var reviewTopicDecisions: [UUID: GeneratedWikiTopicReviewDecision] = [:]
+    @Published var reviewClaimDecisions: [UUID: GeneratedWikiClaimReviewDecision] = [:]
 
     private var completedInputTokens: Int = 0
     private var completedOutputTokens: Int = 0
     private var currentInputTokenEstimate: Int = 0
+    private var reviewContinuation: CheckedContinuation<GeneratedWikiReviewDecision, Never>?
+    private var nextSourcePreloadTask: Task<Void, Never>? = nil
+    private var nextSourcePreloadURL: URL? = nil
+    private var nextSourceReviewContinuation: CheckedContinuation<GeneratedWikiReviewDecision, Never>?
 
-    init(meetingURL: URL, archiveRoot: URL, modelCallTotal: Int = 2) {
+    init(meetingURL: URL, archiveRoot: URL, modelCallTotal: Int = 1) {
         self.meetingURL = meetingURL
         self.archiveRoot = archiveRoot
         self.meetingTitle = meetingURL.deletingPathExtension().lastPathComponent
@@ -112,9 +547,10 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
     var activeOutputTokenEstimate: Int {
         guard let selectedFunction else { return 0 }
         if selectedFunction.isFinished { return selectedFunction.outputTokens }
-        return selectedFunction.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let output = selectedFunction.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return output.isEmpty
             ? 0
-            : max(1, selectedFunction.output.count / 4)
+            : LocalStructuredLLM.estimatedTokenCount(output)
     }
 
     var currentCallProgressFraction: Double {
@@ -133,6 +569,10 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
     }
 
     var terminalText: String {
+        if isWaitingForPreparedSource,
+           !nextSourceTerminalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nextSourceTerminalText
+        }
         guard let selectedFunction else {
             return """
             [status] Preparing 2nd Brain run
@@ -142,13 +582,17 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
         }
         let output = selectedFunction.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if output.isEmpty {
+            let modelLine = selectedFunction.modelStatus.isEmpty
+                ? "Prompt sent; waiting for the first output token..."
+                : selectedFunction.modelStatus
+            let activeInputTokens = max(selectedFunction.inputTokens, selectedFunction.modelStatusInputTokens ?? 0)
             return """
             [status] \(status)
             [source] \(currentSourceTitle)
             [sources] \(completedSourceCount)/\(totalSourceCount) complete
             [step] \(selectedFunction.name)
-            [input] ~\(selectedFunction.inputTokens) input tokens prepared
-            [model] Prompt sent; waiting for the first output token...
+            [input] ~\(activeInputTokens) input tokens prepared
+            [model] \(modelLine)
             """
         }
         return output
@@ -165,6 +609,150 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
         completedSourceCount += 1
     }
 
+    func prepareNextSource(_ url: URL?) {
+        nextSourcePreloadTask?.cancel()
+        nextSourcePreloadTask = nil
+        nextSourcePreloadURL = url
+        guard let url else {
+            nextSourceTitle = nil
+            nextSourceStatus = nil
+            nextSourceInputTokens = nil
+            nextSourceTerminalText = ""
+            nextSourceReviewDraft = nil
+            nextSourceFailed = false
+            isWaitingForPreparedSource = false
+            nextSourceReviewContinuation = nil
+            return
+        }
+
+        nextSourceTitle = url.deletingPathExtension().lastPathComponent
+        nextSourceStatus = "Queued for background model run"
+        nextSourceInputTokens = nil
+        nextSourceTerminalText = "[queue] waiting for model slot"
+        nextSourceReviewDraft = nil
+        nextSourceFailed = false
+        isWaitingForPreparedSource = false
+
+        let expectedURL = url
+        nextSourcePreloadTask = Task.detached(priority: .utility) { [weak self] in
+            await MainActor.run {
+                guard self?.nextSourcePreloadURL == expectedURL else { return }
+                self?.nextSourceStatus = "Reading source file"
+            }
+            guard !Task.isCancelled else { return }
+            let text = (try? String(contentsOf: expectedURL, encoding: .utf8)) ?? ""
+            let tokens = max(1, text.count / 4)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard self?.nextSourcePreloadURL == expectedURL else { return }
+                self?.nextSourceInputTokens = tokens
+                self?.nextSourceStatus = "Source loaded: ~\(tokens.formatted()) input tokens"
+                self?.nextSourceTerminalText = """
+                [load] source file read
+                [input] ~\(tokens.formatted()) tokens prepared
+                [model] queued for extraction
+                """
+            }
+        }
+    }
+
+    func handleNextProgress(_ progress: GeneratedWikiProgress, for url: URL) {
+        guard nextSourcePreloadURL == url else { return }
+        switch progress {
+        case .status(let message):
+            nextSourceStatus = message
+            appendNextTerminal("[status] \(message)")
+        case .modelStatus(let message):
+            nextSourceStatus = message
+            if let tokens = Self.inputTokenCount(fromModelStatus: message) {
+                nextSourceInputTokens = max(nextSourceInputTokens ?? 0, tokens)
+            }
+            appendNextTerminal("[model] \(message)")
+        case .functionStarted(let name, let system, let user):
+            let tokens = max(1, (system.count + user.count) / 4)
+            nextSourceInputTokens = max(nextSourceInputTokens ?? 0, tokens)
+            nextSourceStatus = "Running \(name)"
+            nextSourceTerminalText = """
+            [next] \(url.deletingPathExtension().lastPathComponent)
+            [step] \(name)
+            [input] ~\(tokens.formatted()) tokens prepared
+            [model] loading prompt context
+            """
+        case .token(let token):
+            nextSourceStatus = "Streaming extraction"
+            appendNextTerminal(token, trimTo: 900)
+        case .functionFinished(let name, let output, let inputTokens, let outputTokens):
+            nextSourceInputTokens = max(nextSourceInputTokens ?? 0, inputTokens)
+            nextSourceStatus = "\(name) complete"
+            nextSourceTerminalText = """
+            [done] \(name)
+            [usage] \(inputTokens.formatted()) in / \(outputTokens.formatted()) out
+
+            \(String(output.suffix(650)))
+            """
+        case .saved(let url):
+            nextSourceStatus = "Saved \(url.lastPathComponent)"
+            appendNextTerminal("[saved] \(url.lastPathComponent)")
+        }
+    }
+
+    func requestNextReview(_ draft: GeneratedWikiReviewDraft, for url: URL) async -> GeneratedWikiReviewDecision {
+        await withCheckedContinuation { continuation in
+            guard nextSourcePreloadURL == url else {
+                continuation.resume(returning: .discardAll(for: draft))
+                return
+            }
+            nextSourceReviewDraft = draft
+            nextSourceStatus = "Ready for entity approval"
+            appendNextTerminal("[ready] \(draft.entities.count) entities, \(draft.topics.count) topics, \(draft.claimCount) claims")
+            nextSourceReviewContinuation = continuation
+        }
+    }
+
+    func failNextSource(_ url: URL, error: Error) {
+        guard nextSourcePreloadURL == url else { return }
+        nextSourceFailed = true
+        nextSourceStatus = "Failed: \(error.localizedDescription)"
+        appendNextTerminal("[failed] \(error.localizedDescription)")
+    }
+
+    func promoteNextReviewToCurrent(url: URL, index: Int, total: Int) -> Bool {
+        guard nextSourcePreloadURL == url,
+              let draft = nextSourceReviewDraft,
+              let continuation = nextSourceReviewContinuation else {
+            return false
+        }
+        beginSource(url, index: index, total: total)
+        installReviewDraft(draft, continuation: continuation)
+        nextSourceTitle = nil
+        nextSourceStatus = nil
+        nextSourceInputTokens = nil
+        nextSourceTerminalText = ""
+        nextSourceReviewDraft = nil
+        nextSourceFailed = false
+        isWaitingForPreparedSource = false
+        nextSourceReviewContinuation = nil
+        nextSourcePreloadURL = nil
+        nextSourcePreloadTask?.cancel()
+        nextSourcePreloadTask = nil
+        return true
+    }
+
+    func waitForPreparedSourceReview(_ isWaiting: Bool) {
+        isWaitingForPreparedSource = isWaiting
+    }
+
+    private func appendNextTerminal(_ text: String, trimTo limit: Int = 1200) {
+        if nextSourceTerminalText.isEmpty {
+            nextSourceTerminalText = text
+        } else {
+            nextSourceTerminalText += text.hasPrefix("[") ? "\n\(text)" : text
+        }
+        if nextSourceTerminalText.count > limit {
+            nextSourceTerminalText = "...\n" + String(nextSourceTerminalText.suffix(limit))
+        }
+    }
+
     func sourceFailed(_ url: URL, error: Error) {
         completedSourceCount += 1
         failedSourceSummaries.append("\(url.lastPathComponent): \(error.localizedDescription)")
@@ -175,6 +763,17 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
         switch progress {
         case .status(let message):
             status = message
+        case .modelStatus(let message):
+            status = message
+            if let idx = functions.indices.last, !functions[idx].isFinished {
+                functions[idx].modelStatus = message
+                if functions[idx].modelStatusStartedAt == nil {
+                    functions[idx].modelStatusStartedAt = Date()
+                }
+                if let statusInputTokens = Self.inputTokenCount(fromModelStatus: message) {
+                    functions[idx].modelStatusInputTokens = max(functions[idx].modelStatusInputTokens ?? 0, statusInputTokens)
+                }
+            }
         case .functionStarted(let name, let system, let user):
             status = name
             currentInputTokenEstimate = max(1, (system.count + user.count) / 4)
@@ -184,16 +783,23 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
                 name: name,
                 system: system,
                 user: user,
+                modelStatus: "Preparing local model",
+                modelStatusStartedAt: Date(),
                 inputTokens: currentInputTokenEstimate,
                 outputTokens: 0,
+                startedAt: Date(),
                 isFinished: false
             )
             functions.append(run)
             selectedFunctionID = run.id
         case .token(let token):
             guard let idx = functions.indices.last else { return }
+            if functions[idx].firstTokenAt == nil {
+                functions[idx].firstTokenAt = Date()
+                functions[idx].modelStatus = "Streaming local model output"
+            }
             functions[idx].output += token
-            estimatedOutputTokens = completedOutputTokens + max(1, functions[idx].output.count / 4)
+            estimatedOutputTokens = completedOutputTokens + LocalStructuredLLM.estimatedTokenCount(functions[idx].output)
         case .functionFinished(let name, let output, let inputTokens, let outputTokens):
             status = "\(name) complete"
             if let idx = functions.lastIndex(where: { $0.name == name && !$0.isFinished }) ?? functions.indices.last {
@@ -201,6 +807,7 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
                 functions[idx].inputTokens = inputTokens
                 functions[idx].outputTokens = outputTokens
                 functions[idx].isFinished = true
+                functions[idx].finishedAt = Date()
                 selectedFunctionID = functions[idx].id
             }
             completedInputTokens += inputTokens
@@ -216,6 +823,172 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
             }
             status = "Saved \(relative)"
         }
+    }
+
+    func requestReview(_ draft: GeneratedWikiReviewDraft) async -> GeneratedWikiReviewDecision {
+        await withCheckedContinuation { continuation in
+            installReviewDraft(draft, continuation: continuation)
+        }
+    }
+
+    private func installReviewDraft(
+        _ draft: GeneratedWikiReviewDraft,
+        continuation: CheckedContinuation<GeneratedWikiReviewDecision, Never>
+    ) {
+        reviewDraft = draft
+        reviewEntityDecisions = Dictionary(
+            uniqueKeysWithValues: draft.entities.map {
+                ($0.id, GeneratedWikiEntityReviewDecision(keep: true, canonicalName: $0.defaultCanonicalName, proposedName: $0.name, type: $0.type))
+            }
+        )
+        reviewClaimDecisions = Dictionary(
+            uniqueKeysWithValues: draft.claims.map {
+                ($0.id, GeneratedWikiClaimReviewDecision(
+                    keep: true,
+                    canonicalClaim: $0.indexCandidate ? ($0.suggestedCanonicalClaim ?? $0.suggestedMatches.first ?? $0.text) : nil,
+                    text: $0.text
+                ))
+            }
+        )
+        reviewTopicDecisions = Self.defaultTopicDecisions(for: draft)
+        reviewContinuation = continuation
+        status = "Reviewing extracted entities, topics, and claims"
+    }
+
+    func setEntityDecision(_ entity: GeneratedWikiReviewEntityDraft, keep: Bool, canonicalName: String?) {
+        let current = reviewEntityDecisions[entity.id]
+        reviewEntityDecisions[entity.id] = GeneratedWikiEntityReviewDecision(
+            keep: keep,
+            canonicalName: canonicalName,
+            proposedName: current?.proposedName ?? entity.name,
+            type: current?.type ?? entity.type
+        )
+    }
+
+    func setEntityProposedName(_ entity: GeneratedWikiReviewEntityDraft, proposedName: String) {
+        let current = reviewEntityDecisions[entity.id]
+        reviewEntityDecisions[entity.id] = GeneratedWikiEntityReviewDecision(
+            keep: current?.keep ?? true,
+            canonicalName: current?.canonicalName,
+            proposedName: proposedName,
+            type: current?.type ?? entity.type
+        )
+    }
+
+    func setEntityType(_ entity: GeneratedWikiReviewEntityDraft, type: String) {
+        let current = reviewEntityDecisions[entity.id]
+        let oldType = current?.type ?? entity.type
+        reviewEntityDecisions[entity.id] = GeneratedWikiEntityReviewDecision(
+            keep: current?.keep ?? true,
+            canonicalName: oldType == type ? (current?.canonicalName ?? entity.defaultCanonicalName) : nil,
+            proposedName: current?.proposedName ?? entity.name,
+            type: type
+        )
+    }
+
+    func setTopicDecision(_ topic: GeneratedWikiReviewTopicDraft, keep: Bool, canonicalTopic: String?) {
+        let current = reviewTopicDecisions[topic.id]
+        reviewTopicDecisions[topic.id] = GeneratedWikiTopicReviewDecision(
+            keep: keep,
+            canonicalTopic: canonicalTopic,
+            topic: current?.topic ?? topic.topic
+        )
+    }
+
+    func setTopicTitle(_ topic: GeneratedWikiReviewTopicDraft, title: String) {
+        let current = reviewTopicDecisions[topic.id]
+        reviewTopicDecisions[topic.id] = GeneratedWikiTopicReviewDecision(
+            keep: current?.keep ?? true,
+            canonicalTopic: current?.canonicalTopic,
+            topic: title
+        )
+    }
+
+    func setClaimDecision(_ claim: GeneratedWikiReviewClaimDraft, keep: Bool, canonicalClaim: String?) {
+        let current = reviewClaimDecisions[claim.id]
+        reviewClaimDecisions[claim.id] = GeneratedWikiClaimReviewDecision(
+            keep: keep,
+            canonicalClaim: canonicalClaim,
+            text: current?.text ?? claim.text
+        )
+    }
+
+    func setClaimText(_ claim: GeneratedWikiReviewClaimDraft, text: String) {
+        let current = reviewClaimDecisions[claim.id]
+        reviewClaimDecisions[claim.id] = GeneratedWikiClaimReviewDecision(
+            keep: current?.keep ?? true,
+            canonicalClaim: current?.canonicalClaim,
+            text: text
+        )
+    }
+
+    func keepAllReviewItems() {
+        guard let draft = reviewDraft else { return }
+        reviewEntityDecisions = Dictionary(
+            uniqueKeysWithValues: draft.entities.map {
+                ($0.id, GeneratedWikiEntityReviewDecision(keep: true, canonicalName: $0.defaultCanonicalName, proposedName: $0.name, type: $0.type))
+            }
+        )
+        reviewClaimDecisions = Dictionary(
+            uniqueKeysWithValues: draft.claims.map {
+                ($0.id, GeneratedWikiClaimReviewDecision(
+                    keep: true,
+                    canonicalClaim: $0.indexCandidate ? ($0.suggestedCanonicalClaim ?? $0.suggestedMatches.first ?? $0.text) : nil,
+                    text: $0.text
+                ))
+            }
+        )
+        reviewTopicDecisions = Self.defaultTopicDecisions(for: draft)
+    }
+
+    func completeReview() {
+        guard let draft = reviewDraft else { return }
+        let decision = GeneratedWikiReviewDecision(
+            entityDecisions: reviewEntityDecisions,
+            topicDecisions: reviewTopicDecisions,
+            claimDecisions: reviewClaimDecisions
+        )
+        reviewDraft = nil
+        reviewEntityDecisions = [:]
+        reviewTopicDecisions = [:]
+        reviewClaimDecisions = [:]
+        status = "Writing approved 2nd Brain pages"
+        let continuation = reviewContinuation
+        reviewContinuation = nil
+        continuation?.resume(returning: decision)
+        _ = draft
+    }
+
+    func cancelReviewIfNeeded() {
+        guard let draft = reviewDraft else { return }
+        reviewDraft = nil
+        reviewEntityDecisions = [:]
+        reviewTopicDecisions = [:]
+        reviewClaimDecisions = [:]
+        let continuation = reviewContinuation
+        reviewContinuation = nil
+        continuation?.resume(returning: .discardAll(for: draft))
+    }
+
+    private static func defaultTopicDecisions(for draft: GeneratedWikiReviewDraft) -> [UUID: GeneratedWikiTopicReviewDecision] {
+        Dictionary(
+            uniqueKeysWithValues: draft.topics.map {
+                ($0.id, GeneratedWikiTopicReviewDecision(
+                    keep: true,
+                    canonicalTopic: $0.indexCandidate ? ($0.suggestedCanonicalTopic ?? $0.suggestedMatches.first ?? $0.topic) : nil,
+                    topic: $0.topic
+                ))
+            }
+        )
+    }
+
+    private static func inputTokenCount(fromModelStatus message: String) -> Int? {
+        guard let range = message.range(of: #"~([0-9,]+) input tokens"#, options: .regularExpression) else {
+            return nil
+        }
+        let matched = String(message[range])
+        let digits = matched.filter(\.isNumber)
+        return Int(digits)
     }
 
     func finish(_ result: GeneratedWikiResult) {
@@ -235,6 +1008,8 @@ private final class WikiGenerationRun: ObservableObject, Identifiable {
         self.errorMessage = message
         self.status = "Add to 2nd Brain failed"
         self.isRunning = false
+        self.nextSourcePreloadTask?.cancel()
+        self.nextSourcePreloadTask = nil
     }
 
     func fullDebugText() -> String {
@@ -306,7 +1081,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     var onMakeIndexBuilder: ((IndexKind) -> (any IndexBuilding)?)?
     var onGenerateWikiProposals: (() async throws -> [WikiKindProposal])?
     var onApproveWikiKind: ((WikiKindSpec) -> Void)?
-    var onGenerateMeetingWiki: ((_ meetingURL: URL, _ onProgress: @MainActor @escaping (GeneratedWikiProgress) -> Void) async throws -> GeneratedWikiResult)?
+    var onGenerateMeetingWiki: ((_ meetingURL: URL, _ onProgress: @MainActor @escaping (GeneratedWikiProgress) -> Void, _ review: @MainActor @escaping (GeneratedWikiReviewDraft) async -> GeneratedWikiReviewDecision) async throws -> GeneratedWikiResult)?
     var shouldFloatWhileRecording: () -> Bool = { false }
     var pushToTalkDisplayProvider: () -> String = { "" }
 
@@ -606,7 +1381,7 @@ final class MeetingWindowState: ObservableObject {
     var onMakeIndexBuilder: ((IndexKind) -> (any IndexBuilding)?)?
     var onGenerateWikiProposals: (() async throws -> [WikiKindProposal])?
     var onApproveWikiKind: ((WikiKindSpec) -> Void)?
-    var onGenerateMeetingWiki: ((_ meetingURL: URL, _ onProgress: @MainActor @escaping (GeneratedWikiProgress) -> Void) async throws -> GeneratedWikiResult)?
+    var onGenerateMeetingWiki: ((_ meetingURL: URL, _ onProgress: @MainActor @escaping (GeneratedWikiProgress) -> Void, _ review: @MainActor @escaping (GeneratedWikiReviewDraft) async -> GeneratedWikiReviewDecision) async throws -> GeneratedWikiResult)?
 
     @Published var indexItems: [IndexKind: [IndexHistoryItem]] = [:]
     @Published var indexTabs: [OpenIndexTab] = []
@@ -618,6 +1393,7 @@ final class MeetingWindowState: ObservableObject {
     @Published var showNewWikiSheet: Bool = false
     @Published var pendingGenerateWikiURL: URL? = nil
     @Published var pendingGenerateWikiBatch: Bool = false
+    @Published var pendingSecondBrainLint: Bool = false
     @Published var isGeneratingMeetingWiki: Bool = false
 
     /// Right-side Models panel toggle.
@@ -744,13 +1520,458 @@ final class MeetingWindowState: ObservableObject {
         }
     }
 
+    func saveGeneratedWikiPage(_ page: GeneratedWikiPage, body: String) throws -> GeneratedWikiPage {
+        let existing = try String(contentsOf: page.url, encoding: .utf8)
+        let bodyForSave = Self.bodyPreservingOldTitleAlias(body, oldTitle: page.title)
+        let updated = Self.replaceBodyAndMarkUserEdited(in: existing, body: bodyForSave)
+        GhostPepperHistoryStore.recordFileChange(
+            archiveRoot: saveDirectory,
+            fileURL: page.url,
+            actor: .user,
+            operation: "edit_2nd_brain_page",
+            summary: "Saved user edits for 2nd Brain page \(page.title).",
+            before: existing,
+            after: updated,
+            metadata: [
+                "page_title": page.title,
+                "page_type": page.type,
+                "source": "2nd_brain_editor",
+                "diff_summary": Self.diffSummary(before: page.body, after: bodyForSave)
+            ]
+        )
+        try updated.write(to: page.url, atomically: true, encoding: .utf8)
+        loadGeneratedWikiFolders()
+        return try GeneratedWikiPaths.readPage(from: page.url)
+    }
+
+    private static func bodyPreservingOldTitleAlias(_ body: String, oldTitle: String) -> String {
+        guard let newTitle = firstMarkdownHeading(in: body),
+              !oldTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              MarkdownArchivePaths.slugForIndexEntry(newTitle) != MarkdownArchivePaths.slugForIndexEntry(oldTitle) else {
+            return body
+        }
+        return addAlias(oldTitle, to: body)
+    }
+
+    private static func firstMarkdownHeading(in body: String) -> String? {
+        body.components(separatedBy: "\n")
+            .first(where: { $0.hasPrefix("# ") })
+            .map { String($0.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    func renameGeneratedWikiPage(_ page: GeneratedWikiPage, to rawName: String) throws -> GeneratedWikiPage {
+        let newName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newName.isEmpty else {
+            throw NSError(domain: "MeetingWindowState", code: 20, userInfo: [NSLocalizedDescriptionKey: "Name cannot be empty."])
+        }
+        guard Self.canRenameGeneratedWikiPage(page) else {
+            throw NSError(domain: "MeetingWindowState", code: 21, userInfo: [NSLocalizedDescriptionKey: "Meeting overviews are derived from source meetings and cannot be renamed here."])
+        }
+        guard newName != page.title else {
+            return page
+        }
+
+        let existing = try String(contentsOf: page.url, encoding: .utf8)
+        let updated = Self.renameGeneratedWikiText(existing, page: page, newName: newName)
+        let newSlug = MarkdownArchivePaths.slugForIndexEntry(newName)
+        let targetURL = page.url.deletingLastPathComponent().appendingPathComponent("\(newSlug).md")
+        let sameFile = targetURL.standardizedFileURL == page.url.standardizedFileURL
+        if !sameFile && FileManager.default.fileExists(atPath: targetURL.path) {
+            throw NSError(domain: "MeetingWindowState", code: 22, userInfo: [NSLocalizedDescriptionKey: "A 2nd Brain page named \(newName) already exists."])
+        }
+
+        GhostPepperHistoryStore.recordFileChange(
+            archiveRoot: saveDirectory,
+            fileURL: sameFile ? page.url : targetURL,
+            actor: .user,
+            operation: "rename_2nd_brain_page",
+            summary: "Renamed 2nd Brain page from \(page.title) to \(newName).",
+            before: sameFile ? existing : nil,
+            after: updated,
+            metadata: [
+                "old_name": page.title,
+                "new_name": newName,
+                "old_path": Self.relativePath(of: page.url, in: saveDirectory) ?? page.url.path,
+                "new_path": Self.relativePath(of: targetURL, in: saveDirectory) ?? targetURL.path,
+                "page_type": page.type,
+                "page_id": page.pageID ?? "",
+                "entity_id": page.entityID ?? ""
+            ]
+        )
+        if !sameFile {
+            GhostPepperHistoryStore.recordFileChange(
+                archiveRoot: saveDirectory,
+                fileURL: page.url,
+                actor: .user,
+                operation: "rename_2nd_brain_page_old_path",
+                summary: "Moved old 2nd Brain page path for \(page.title).",
+                before: existing,
+                after: nil,
+                metadata: [
+                    "old_name": page.title,
+                    "new_name": newName,
+                    "new_path": Self.relativePath(of: targetURL, in: saveDirectory) ?? targetURL.path,
+                    "page_type": page.type,
+                    "page_id": page.pageID ?? "",
+                    "entity_id": page.entityID ?? ""
+                ]
+            )
+        }
+
+        try updated.write(to: targetURL, atomically: true, encoding: .utf8)
+        if !sameFile {
+            try FileManager.default.removeItem(at: page.url)
+        }
+        loadGeneratedWikiFolders()
+        return try GeneratedWikiPaths.readPage(from: targetURL)
+    }
+
+    func changeGeneratedWikiPageType(_ page: GeneratedWikiPage, to rawType: String) throws -> GeneratedWikiPage {
+        let newType = Self.normalizedGeneratedWikiEntityType(rawType)
+        guard Self.canChangeGeneratedWikiPageType(page), Self.isEntityPageType(newType) else {
+            throw NSError(domain: "MeetingWindowState", code: 24, userInfo: [NSLocalizedDescriptionKey: "Only Person, Company, and Concept pages can change type here."])
+        }
+        guard newType != page.type else { return page }
+
+        let existing = try String(contentsOf: page.url, encoding: .utf8)
+        let updated = Self.changeGeneratedWikiTypeText(existing, page: page, newType: newType)
+        let targetFolder = saveDirectory
+            .appendingPathComponent("wikis", isDirectory: true)
+            .appendingPathComponent(Self.generatedWikiCategory(forPageType: newType), isDirectory: true)
+        let targetURL = targetFolder.appendingPathComponent(page.url.lastPathComponent)
+        let sameFile = targetURL.standardizedFileURL == page.url.standardizedFileURL
+        if !sameFile && FileManager.default.fileExists(atPath: targetURL.path) {
+            throw NSError(domain: "MeetingWindowState", code: 25, userInfo: [NSLocalizedDescriptionKey: "A \(Self.displayName(forPageType: newType)) page named \(page.title) already exists."])
+        }
+
+        GhostPepperHistoryStore.recordFileChange(
+            archiveRoot: saveDirectory,
+            fileURL: sameFile ? page.url : targetURL,
+            actor: .user,
+            operation: "change_2nd_brain_page_type",
+            summary: "Changed 2nd Brain page \(page.title) from \(Self.displayName(forPageType: page.type)) to \(Self.displayName(forPageType: newType)).",
+            before: sameFile ? existing : nil,
+            after: updated,
+            metadata: [
+                "page_title": page.title,
+                "old_type": page.type,
+                "new_type": newType,
+                "old_path": Self.relativePath(of: page.url, in: saveDirectory) ?? page.url.path,
+                "new_path": Self.relativePath(of: targetURL, in: saveDirectory) ?? targetURL.path,
+                "page_id": page.pageID ?? "",
+                "entity_id": page.entityID ?? ""
+            ]
+        )
+        if !sameFile {
+            GhostPepperHistoryStore.recordFileChange(
+                archiveRoot: saveDirectory,
+                fileURL: page.url,
+                actor: .user,
+                operation: "change_2nd_brain_page_type_old_path",
+                summary: "Moved old 2nd Brain page path for \(page.title).",
+                before: existing,
+                after: nil,
+                metadata: [
+                    "page_title": page.title,
+                    "old_type": page.type,
+                    "new_type": newType,
+                    "new_path": Self.relativePath(of: targetURL, in: saveDirectory) ?? targetURL.path,
+                    "page_id": page.pageID ?? "",
+                    "entity_id": page.entityID ?? ""
+                ]
+            )
+        }
+
+        try FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
+        try updated.write(to: targetURL, atomically: true, encoding: .utf8)
+        if !sameFile {
+            try FileManager.default.removeItem(at: page.url)
+        }
+        loadGeneratedWikiFolders()
+        return try GeneratedWikiPaths.readPage(from: targetURL)
+    }
+
+    private static func replaceBodyAndMarkUserEdited(in text: String, body: String) -> String {
+        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        guard text.hasPrefix("---\n"),
+              let close = text.dropFirst(4).range(of: "\n---\n") else {
+            return normalizedBody
+        }
+        var frontmatter = String(text.dropFirst(4)[..<close.lowerBound])
+        frontmatter = setFrontmatterValue("updated_at", value: ISO8601DateFormatter().string(from: Date()), in: frontmatter)
+        frontmatter = setFrontmatterValue("user_edited", value: "true", in: frontmatter)
+        return "---\n\(frontmatter)\n---\n\n\(normalizedBody)"
+    }
+
+    private static func canRenameGeneratedWikiPage(_ page: GeneratedWikiPage) -> Bool {
+        ["person", "company", "concept", "topic", "claim"].contains(page.type)
+    }
+
+    private static func canChangeGeneratedWikiPageType(_ page: GeneratedWikiPage) -> Bool {
+        isEntityPageType(page.type)
+    }
+
+    private static func normalizedGeneratedWikiEntityType(_ rawType: String) -> String {
+        switch rawType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "person", "people":
+            return "person"
+        case "company", "companies", "organization", "organisation", "fund", "firm", "institution", "product":
+            return "company"
+        case "concept", "topic", "idea":
+            return "concept"
+        default:
+            return rawType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+    }
+
+    private static func generatedWikiCategory(forPageType type: String) -> String {
+        switch normalizedGeneratedWikiEntityType(type) {
+        case "person": return "people"
+        case "company": return "companies"
+        default: return "concepts"
+        }
+    }
+
+    private static func displayName(forPageType type: String) -> String {
+        switch normalizedGeneratedWikiEntityType(type) {
+        case "person": return "Person"
+        case "company": return "Company"
+        case "concept": return "Concept"
+        default: return type.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private static func changeGeneratedWikiTypeText(_ text: String, page: GeneratedWikiPage, newType: String) -> String {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let fallbackPageID = page.pageID ?? "gpw_\(GhostPepperHistoryStore.stableHash("\(page.type)|\(page.url.path)"))"
+        let fallbackEntityID = page.entityID ?? fallbackPageID
+        if text.hasPrefix("---\n"),
+           let close = text.dropFirst(4).range(of: "\n---\n") {
+            var fm = String(text.dropFirst(4)[..<close.lowerBound])
+            let body = String(text[close.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+            fm = setFrontmatterValue("type", value: newType, in: fm)
+            fm = setFrontmatterValue("updated_at", value: now, in: fm)
+            fm = setFrontmatterValue("user_edited", value: "true", in: fm)
+            if !frontmatterContains("page_id", in: fm) {
+                fm = setFrontmatterValue("page_id", value: yamlScalar(fallbackPageID), in: fm)
+            }
+            if !frontmatterContains("entity_id", in: fm) {
+                fm = setFrontmatterValue("entity_id", value: yamlScalar(fallbackEntityID), in: fm)
+            }
+            return "---\n\(fm.trimmingCharacters(in: .whitespacesAndNewlines))\n---\n\n\(body)"
+        }
+
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        let frontmatter = [
+            "type: \(newType)",
+            "page_id: \(yamlScalar(fallbackPageID))",
+            "entity_id: \(yamlScalar(fallbackEntityID))",
+            "name: \(yamlScalar(page.title))",
+            "updated_at: \(now)",
+            "user_edited: true"
+        ].joined(separator: "\n")
+        return "---\n\(frontmatter)\n---\n\n\(body)"
+    }
+
+    private static func renameGeneratedWikiText(_ text: String, page: GeneratedWikiPage, newName: String) -> String {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let fallbackPageID = page.pageID ?? "gpw_\(GhostPepperHistoryStore.stableHash("\(page.type)|\(page.url.path)"))"
+        let fallbackEntityID = page.entityID ?? fallbackPageID
+        let newBody: String
+        let frontmatter: String
+
+        if text.hasPrefix("---\n"),
+           let close = text.dropFirst(4).range(of: "\n---\n") {
+            var fm = String(text.dropFirst(4)[..<close.lowerBound])
+            var body = String(text[close.upperBound...])
+            fm = setFrontmatterValue("name", value: yamlScalar(newName), in: fm)
+            fm = setFrontmatterValue("updated_at", value: now, in: fm)
+            fm = setFrontmatterValue("user_edited", value: "true", in: fm)
+            if !frontmatterContains("page_id", in: fm) {
+                fm = setFrontmatterValue("page_id", value: yamlScalar(fallbackPageID), in: fm)
+            }
+            if isEntityPageType(page.type), !frontmatterContains("entity_id", in: fm) {
+                fm = setFrontmatterValue("entity_id", value: yamlScalar(fallbackEntityID), in: fm)
+            }
+            body = replaceFirstMarkdownHeading(in: body, with: newName)
+            body = addAlias(page.title, to: body)
+            frontmatter = fm
+            newBody = body.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        } else {
+            frontmatter = [
+                "type: \(page.type)",
+                "page_id: \(yamlScalar(fallbackPageID))",
+                isEntityPageType(page.type) ? "entity_id: \(yamlScalar(fallbackEntityID))" : nil,
+                "name: \(yamlScalar(newName))",
+                "updated_at: \(now)",
+                "user_edited: true"
+            ]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+            newBody = addAlias(page.title, to: replaceFirstMarkdownHeading(in: text, with: newName))
+                .trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
+        }
+
+        return "---\n\(frontmatter.trimmingCharacters(in: .whitespacesAndNewlines))\n---\n\n\(newBody)"
+    }
+
+    private static func setFrontmatterValue(_ key: String, value: String, in frontmatter: String) -> String {
+        var lines = frontmatter.components(separatedBy: "\n")
+        if let idx = lines.firstIndex(where: { line in
+            line.split(separator: ":", maxSplits: 1).first.map(String.init) == key
+        }) {
+            lines[idx] = "\(key): \(value)"
+        } else {
+            lines.append("\(key): \(value)")
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func frontmatterContains(_ key: String, in frontmatter: String) -> Bool {
+        frontmatter.components(separatedBy: "\n").contains { line in
+            line.split(separator: ":", maxSplits: 1).first.map(String.init) == key
+        }
+    }
+
+    private static func yamlScalar(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+
+    private static func isEntityPageType(_ type: String) -> Bool {
+        ["person", "company", "concept"].contains(type)
+    }
+
+    private static func replaceFirstMarkdownHeading(in body: String, with title: String) -> String {
+        var lines = body.components(separatedBy: "\n")
+        if let index = lines.firstIndex(where: { $0.hasPrefix("# ") }) {
+            lines[index] = "# \(title)"
+        } else {
+            lines.insert("# \(title)", at: 0)
+            lines.insert("", at: min(1, lines.count))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func addAlias(_ alias: String, to body: String) -> String {
+        let trimmedAlias = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAlias.isEmpty else { return body }
+        let aliasBullet = "- \(trimmedAlias)"
+        var lines = body.components(separatedBy: "\n")
+        guard let headingIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "## Aliases" }) else {
+            var insertAt = lines.count
+            if let nextHeading = lines.dropFirst().firstIndex(where: { $0.hasPrefix("## ") }) {
+                insertAt = nextHeading
+            }
+            lines.insert(contentsOf: ["", "## Aliases", "", aliasBullet], at: insertAt)
+            return lines.joined(separator: "\n")
+        }
+        var sectionEnd = lines.count
+        if let nextHeading = lines[(headingIndex + 1)...].firstIndex(where: { $0.hasPrefix("## ") }) {
+            sectionEnd = nextHeading
+        }
+        let existing = Set(lines[(headingIndex + 1)..<sectionEnd].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        if !existing.contains(aliasBullet) {
+            lines.insert(aliasBullet, at: sectionEnd)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func diffSummary(before: String, after: String) -> String {
+        let beforeLines = before.components(separatedBy: "\n")
+        let afterLines = after.components(separatedBy: "\n")
+        let beforeSet = Set(beforeLines)
+        let afterSet = Set(afterLines)
+        let added = afterSet.subtracting(beforeSet).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+        let removed = beforeSet.subtracting(afterSet).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+        return "+\(added) lines, -\(removed) lines"
+    }
+
+    private static func relativePath(of url: URL, in root: URL) -> String? {
+        let base = root.standardizedFileURL.path
+        let full = url.standardizedFileURL.path
+        guard full.hasPrefix(base) else { return nil }
+        var rel = String(full.dropFirst(base.count))
+        if rel.hasPrefix("/") { rel.removeFirst() }
+        return rel.isEmpty ? nil : rel
+    }
+
     func resolveGeneratedWikilink(slug: String) -> URL? {
         for archiveRoot in generatedWikiArchiveCandidates() {
             if let url = GeneratedWikiPaths.findPage(in: archiveRoot, slug: slug) {
                 return url
             }
+            if let url = Self.findGeneratedWikiPageByMetadata(in: archiveRoot, slug: slug) {
+                return url
+            }
         }
         return nil
+    }
+
+    private static func findGeneratedWikiPageByMetadata(in archiveRoot: URL, slug: String) -> URL? {
+        let root = GeneratedWikiPaths.root(in: archiveRoot)
+        let normalizedNeedle = MarkdownArchivePaths.slugForIndexEntry(slug)
+        let categories = ["meetings", "people", "companies", "concepts", "topics", "claims"]
+        for category in categories {
+            let folder = root.appendingPathComponent(category, isDirectory: true)
+            guard let urls = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else {
+                continue
+            }
+            for url in urls where url.pathExtension == "md" && !url.lastPathComponent.hasPrefix("_") {
+                guard let page = try? GeneratedWikiPaths.readPage(from: url) else { continue }
+                var candidates = [
+                    url.deletingPathExtension().lastPathComponent,
+                    page.title
+                ]
+                if let sourceMeetingPath = page.sourceMeetingPath {
+                    candidates.append(contentsOf: sourcePathCandidates(sourceMeetingPath))
+                }
+                candidates.append(contentsOf: aliases(in: page.body))
+                candidates.append(contentsOf: sourceMeetingPaths(in: page.body).flatMap(sourcePathCandidates))
+                if candidates.contains(where: { MarkdownArchivePaths.slugForIndexEntry($0) == normalizedNeedle }) {
+                    return url
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func sourcePathCandidates(_ path: String) -> [String] {
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "` ").union(.whitespacesAndNewlines))
+        guard !trimmed.isEmpty else { return [] }
+        let filename = (trimmed as NSString).lastPathComponent
+        let stem = (filename as NSString).deletingPathExtension
+        return [trimmed, filename, stem]
+    }
+
+    private static func aliases(in body: String) -> [String] {
+        let lines = body.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "## Aliases" }) else {
+            return []
+        }
+        var aliases: [String] = []
+        for line in lines.dropFirst(start + 1) {
+            if line.hasPrefix("## ") { break }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("- ") else { continue }
+            aliases.append(String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return aliases
+    }
+
+    private static func sourceMeetingPaths(in body: String) -> [String] {
+        let lines = body.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "## Source Meetings" }) else {
+            return []
+        }
+        var paths: [String] = []
+        for line in lines.dropFirst(start + 1) {
+            if line.hasPrefix("## ") { break }
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("- ") else { continue }
+            paths.append(String(trimmed.dropFirst(2)).trimmingCharacters(in: CharacterSet(charactersIn: "` ").union(.whitespacesAndNewlines)))
+        }
+        return paths
     }
 
     func openIndexEntry(kind: IndexKind, slug: String) {
@@ -1004,13 +2225,82 @@ final class MeetingWindowState: ObservableObject {
         return GeneratedWikiPaths.root(in: saveDirectory)
     }
 
-    private func generatedWikiArchiveCandidates() -> [URL] {
-        var candidates = [saveDirectory]
-        if let containerArchive = MeetingTranscriptSettings.appContainerArchiveIfPresent(),
-           containerArchive.standardizedFileURL.path != saveDirectory.standardizedFileURL.path {
-            candidates.append(containerArchive)
+    func archiveSecondBrain(to destinationFolder: URL) throws -> URL {
+        let archiveRoot = generatedWikiArchiveRoot ?? saveDirectory
+        let timestamp = Self.archiveTimestampFormatter.string(from: Date())
+        let baseName = "Ghost Pepper 2nd Brain Archive \(timestamp)"
+        let destination = uniqueArchiveFolder(named: baseName, in: destinationFolder)
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        let artifacts: [(relativePath: String, label: String)] = [
+            ("wikis", "2nd Brain pages"),
+            ("\(GhostPepperHistoryStore.metadataFolderName)/\(GhostPepperHistoryStore.historyFolderName)", "Ghost Pepper history"),
+            ("\(MarkdownArchivePaths.indexesFolderName)/_cards", "2nd Brain meeting card cache")
+        ]
+
+        var moved: [[String: String]] = []
+        for artifact in artifacts {
+            let source = archiveRoot.appendingPathComponent(artifact.relativePath, isDirectory: true)
+            guard fileManager.fileExists(atPath: source.path) else { continue }
+            let target = destination.appendingPathComponent(artifact.relativePath, isDirectory: true)
+            try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fileManager.fileExists(atPath: target.path) {
+                try fileManager.removeItem(at: target)
+            }
+            try fileManager.moveItem(at: source, to: target)
+            moved.append([
+                "label": artifact.label,
+                "from": source.path,
+                "to": target.path
+            ])
         }
-        return candidates
+
+        guard !moved.isEmpty else {
+            try? fileManager.removeItem(at: destination)
+            throw NSError(
+                domain: "GhostPepper.SecondBrainArchive",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No 2nd Brain files were found to archive."]
+            )
+        }
+
+        let manifest: [String: Any] = [
+            "archived_at": ISO8601DateFormatter().string(from: Date()),
+            "archive_root": archiveRoot.path,
+            "source_data_preserved": true,
+            "source_data_note": "Dated meeting files, recordings, imports, and source markdown were intentionally not moved.",
+            "moved_artifacts": moved
+        ]
+        let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
+        try manifestData.write(to: destination.appendingPathComponent("archive-manifest.json"))
+
+        generatedWikiArchiveRoot = archiveRoot
+        generatedWikiFolders = Self.makeGeneratedWikiFolders(in: archiveRoot)
+        return destination
+    }
+
+    private func uniqueArchiveFolder(named baseName: String, in destinationFolder: URL) -> URL {
+        let fileManager = FileManager.default
+        var candidate = destinationFolder.appendingPathComponent(baseName, isDirectory: true)
+        var suffix = 2
+        while fileManager.fileExists(atPath: candidate.path) {
+            candidate = destinationFolder.appendingPathComponent("\(baseName) \(suffix)", isDirectory: true)
+            suffix += 1
+        }
+        return candidate
+    }
+
+    private static let archiveTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HHmmss"
+        return formatter
+    }()
+
+    private func generatedWikiArchiveCandidates() -> [URL] {
+        [saveDirectory]
     }
 
     private static func makeGeneratedWikiFolders(in archiveRoot: URL) -> [GeneratedWikiSidebarFolder] {
@@ -1019,7 +2309,9 @@ final class MeetingWindowState: ObservableObject {
             ("meetings", "Meeting Overviews", "rectangle.stack.badge.person.crop"),
             ("people", "People", "person.2"),
             ("companies", "Companies", "building.2"),
-            ("concepts", "Concepts", "lightbulb")
+            ("concepts", "Concepts", "lightbulb"),
+            ("topics", "Topics", "list.bullet.rectangle"),
+            ("claims", "Claims", "quote.bubble")
         ]
         return specs.compactMap { spec in
             let folderURL = root.appendingPathComponent(spec.slug, isDirectory: true)
@@ -1133,6 +2425,20 @@ final class MeetingWindowState: ObservableObject {
     func saveActiveTab() {
         guard let tab = activeTab, let url = tab.fileURL else { return }
         let markdown = MeetingMarkdownWriter.renderMarkdown(transcript: tab.transcript)
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        GhostPepperHistoryStore.recordFileChange(
+            archiveRoot: saveDirectory,
+            fileURL: url,
+            actor: .user,
+            operation: "edit_meeting_note",
+            summary: "Saved meeting note edits for \(tab.transcript.meetingName).",
+            before: existing,
+            after: markdown,
+            metadata: [
+                "meeting_name": tab.transcript.meetingName,
+                "source": "meeting_editor"
+            ]
+        )
         try? markdown.write(to: url, atomically: true, encoding: .utf8)
     }
 }
@@ -1157,6 +2463,8 @@ struct MeetingRootView: View {
     @State private var currentQATask: Task<Void, Never>? = nil
     @State private var wikiGenerationRun: WikiGenerationRun? = nil
     @State private var wikiGenerationTask: Task<Void, Never>? = nil
+    @State private var secondBrainLintRun: SecondBrainLintRun? = nil
+    @State private var secondBrainLintTask: Task<Void, Never>? = nil
     @State private var isApplyingDossier: Bool = false
     @AppStorage("agentBackend") private var qaAgentBackendStorage: String = "claude:\(ClaudeAPIModel.sonnet.rawValue)"
     @State private var showCommandKSearch: Bool = false
@@ -1197,22 +2505,7 @@ struct MeetingRootView: View {
                 fileTabBar
 
                 // Active tab content or new tab view
-                switch state.selectedSurface {
-                case .home:
-                    newTabView
-                case .tab:
-                    if let tab = state.activeTab {
-                        MeetingTabContentView(tab: tab, state: state)
-                    } else {
-                        newTabView
-                    }
-                case .indexTab(let id):
-                    if let tab = state.indexTabs.first(where: { $0.id == id }) {
-                        NavTabContentView(tab: tab, state: state)
-                    } else {
-                        Text("Tab not found")
-                    }
-                }
+                selectedSurfaceContent
             }
             .background(Color(nsColor: .textBackgroundColor))
 
@@ -1284,8 +2577,39 @@ struct MeetingRootView: View {
             state.pendingGenerateWikiBatch = false
             runWikiBatchGeneration()
         }
+        .onChange(of: state.pendingSecondBrainLint) { _, shouldRun in
+            guard shouldRun else { return }
+            state.pendingSecondBrainLint = false
+            runSecondBrainLint()
+        }
         .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
             if state.showSidebar { state.loadHistory() }
+        }
+        .overlay {
+            if let run = wikiGenerationRun, run.isBatch {
+                WikiGenerationConsoleSheet(
+                    run: run,
+                    onCancel: {
+                        run.cancelReviewIfNeeded()
+                        wikiGenerationTask?.cancel()
+                        run.fail("Cancelled")
+                        state.isGeneratingMeetingWiki = false
+                        wikiGenerationTask = nil
+                    },
+                    onOpenOverview: {
+                        if let url = run.result?.overviewURL {
+                            state.openGeneratedWikiPage(url)
+                            wikiGenerationRun = nil
+                        }
+                    },
+                    onClose: {
+                        guard !run.isRunning else { return }
+                        wikiGenerationRun = nil
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(10)
+            }
         }
         .sheet(isPresented: $state.showConsentDialog) {
             ConsentDialogView(state: state)
@@ -1349,26 +2673,39 @@ struct MeetingRootView: View {
         .sheet(isPresented: $state.showNewWikiSheet) {
             NewWikiSheet(state: state)
         }
-        .sheet(item: $wikiGenerationRun) { run in
-            WikiGenerationConsoleSheet(
-                run: run,
-                onCancel: {
-                    wikiGenerationTask?.cancel()
-                    run.fail("Cancelled")
-                    state.isGeneratingMeetingWiki = false
-                    wikiGenerationTask = nil
-                },
-                onOpenOverview: {
-                    if let url = run.result?.overviewURL {
-                        state.openGeneratedWikiPage(url)
-                        wikiGenerationRun = nil
-                    }
-                },
-                onClose: {
-                    guard !run.isRunning else { return }
+        .sheet(isPresented: Binding(
+            get: { wikiGenerationRun != nil && wikiGenerationRun?.isBatch != true },
+            set: { isPresented in
+                if !isPresented, wikiGenerationRun?.isBatch != true {
                     wikiGenerationRun = nil
                 }
-            )
+            }
+        )) {
+            if let run = wikiGenerationRun, !run.isBatch {
+                WikiGenerationConsoleSheet(
+                    run: run,
+                    onCancel: {
+                        run.cancelReviewIfNeeded()
+                        wikiGenerationTask?.cancel()
+                        run.fail("Cancelled")
+                        state.isGeneratingMeetingWiki = false
+                        wikiGenerationTask = nil
+                    },
+                    onOpenOverview: {
+                        if let url = run.result?.overviewURL {
+                            state.openGeneratedWikiPage(url)
+                            wikiGenerationRun = nil
+                        }
+                    },
+                    onClose: {
+                        guard !run.isRunning else { return }
+                        wikiGenerationRun = nil
+                    }
+                )
+            }
+        }
+        .sheet(item: $secondBrainLintRun) { run in
+            secondBrainLintSheet(for: run)
         }
         .onReceive(NotificationCenter.default.publisher(for: .wikiKindsChanged)) { _ in
             state.loadIndexes()
@@ -1388,6 +2725,48 @@ struct MeetingRootView: View {
     }
 
     // MARK: - App-Level Q&A
+
+    @ViewBuilder
+    private var selectedSurfaceContent: some View {
+        switch state.selectedSurface {
+        case .home:
+            newTabView
+        case .tab:
+            if let tab = state.activeTab {
+                MeetingTabContentView(tab: tab, state: state)
+            } else {
+                newTabView
+            }
+        case .indexTab(let id):
+            if let tab = indexTab(with: id) {
+                NavTabContentView(tab: tab, state: state)
+            } else {
+                Text("Tab not found")
+            }
+        }
+    }
+
+    private func indexTab(with id: UUID) -> OpenIndexTab? {
+        state.indexTabs.first { $0.id == id }
+    }
+
+    private func secondBrainLintSheet(for run: SecondBrainLintRun) -> some View {
+        SecondBrainLintSheet(
+            run: run,
+            onCancel: {
+                secondBrainLintTask?.cancel()
+                run.fail("Cancelled")
+                secondBrainLintTask = nil
+            },
+            onApply: {
+                applySecondBrainLint(run)
+            },
+            onClose: {
+                guard !run.isRunning else { return }
+                secondBrainLintRun = nil
+            }
+        )
+    }
 
     /// True when any of the response-area sections want to render.
     private var hasQAResponseContent: Bool {
@@ -1912,9 +3291,11 @@ struct MeetingRootView: View {
 
         wikiGenerationTask = Task { @MainActor in
             do {
-                let result = try await runner(fileURL) { progress in
+                let result = try await runner(fileURL, { progress in
                     run.handle(progress)
-                }
+                }, { draft in
+                    await run.requestReview(draft)
+                })
 
                 run.finish(result)
                 state.loadGeneratedWikiFolders()
@@ -1926,6 +3307,50 @@ struct MeetingRootView: View {
             }
             state.isGeneratingMeetingWiki = false
             wikiGenerationTask = nil
+        }
+    }
+
+    private func runSecondBrainLint() {
+        guard secondBrainLintRun?.isRunning != true else { return }
+        state.openSecondBrain()
+        let run = SecondBrainLintRun(archiveRoot: state.saveDirectory)
+        secondBrainLintRun = run
+
+        secondBrainLintTask = Task { @MainActor in
+            let proposals = await SecondBrainLintEngine.collectProposals(archiveRoot: state.saveDirectory) { status, scanned, total, traceLine in
+                run.status = status
+                run.scannedPages = scanned
+                run.totalPages = total
+                if let traceLine {
+                    run.appendTrace(traceLine)
+                }
+            }
+            guard !Task.isCancelled else {
+                run.fail("Cancelled")
+                secondBrainLintTask = nil
+                return
+            }
+            run.proposals = proposals
+            run.isRunning = false
+            run.status = proposals.isEmpty
+                ? "No merge proposals found"
+                : "Review \(proposals.count) proposed change\(proposals.count == 1 ? "" : "s")"
+            secondBrainLintTask = nil
+        }
+    }
+
+    private func applySecondBrainLint(_ run: SecondBrainLintRun) {
+        guard !run.isRunning else { return }
+        do {
+            run.status = "Applying accepted changes"
+            let applied = try SecondBrainLintEngine.applyAcceptedProposals(run.proposals, archiveRoot: run.archiveRoot)
+            run.appliedChanges = applied
+            state.loadGeneratedWikiFolders()
+            run.finish(result: applied == 0
+                ? "No lint changes applied."
+                : "Applied \(applied) lint change\(applied == 1 ? "" : "s").")
+        } catch {
+            run.fail(error.localizedDescription)
         }
     }
 
@@ -1944,7 +3369,7 @@ struct MeetingRootView: View {
             batchTitle: sourceURLs.isEmpty ? "2nd Brain is up to date" : "Next \(sourceURLs.count) sources",
             archiveRoot: state.saveDirectory,
             sourceCount: max(1, sourceURLs.count),
-            modelCallTotal: max(0, sourceURLs.count * 2 + 1)
+            modelCallTotal: max(0, sourceURLs.count + 1)
         )
         wikiGenerationRun = run
 
@@ -1961,14 +3386,78 @@ struct MeetingRootView: View {
             var firstOverviewURL: URL?
             var totalInputTokens = 0
             var totalOutputTokens = 0
+            struct PreparedSource {
+                let index: Int
+                let url: URL
+                let task: Task<GeneratedWikiResult, Error>
+            }
+            var preparedSource: PreparedSource?
+
+            @MainActor
+            func startPreparingSource(at index: Int) async {
+                guard index < sourceURLs.count else {
+                    run.prepareNextSource(nil)
+                    preparedSource = nil
+                    return
+                }
+                if preparedSource?.index == index { return }
+                preparedSource?.task.cancel()
+                let nextURL = sourceURLs[index]
+                run.prepareNextSource(nextURL)
+                let task = Task { @MainActor in
+                    do {
+                        return try await runner(nextURL, { progress in
+                            run.handleNextProgress(progress, for: nextURL)
+                        }, { draft in
+                            await run.requestNextReview(draft, for: nextURL)
+                        })
+                    } catch {
+                        run.failNextSource(nextURL, error: error)
+                        throw error
+                    }
+                }
+                preparedSource = PreparedSource(index: index, url: nextURL, task: task)
+            }
 
             do {
                 for (offset, sourceURL) in sourceURLs.enumerated() {
                     try Task.checkCancellation()
-                    run.beginSource(sourceURL, index: offset + 1, total: sourceURLs.count)
                     do {
-                        let result = try await runner(sourceURL) { progress in
-                            run.handle(progress)
+                        let result: GeneratedWikiResult
+                        if let prepared = preparedSource, prepared.index == offset, prepared.url == sourceURL {
+                            run.beginSource(sourceURL, index: offset + 1, total: sourceURLs.count)
+                            run.status = "Finishing background-prepared source"
+                            run.waitForPreparedSourceReview(true)
+                            defer { run.waitForPreparedSourceReview(false) }
+                            do {
+                                while run.nextSourceReviewDraft == nil && !run.nextSourceFailed {
+                                    try Task.checkCancellation()
+                                    if prepared.task.isCancelled { throw CancellationError() }
+                                    try await Task.sleep(nanoseconds: 75_000_000)
+                                }
+                                if run.nextSourceFailed {
+                                    result = try await prepared.task.value
+                                } else {
+                                    _ = run.promoteNextReviewToCurrent(url: sourceURL, index: offset + 1, total: sourceURLs.count)
+                                    preparedSource = nil
+                                    await startPreparingSource(at: offset + 1)
+                                    result = try await prepared.task.value
+                                }
+                            } catch {
+                                run.waitForPreparedSourceReview(false)
+                                throw error
+                            }
+                            if preparedSource?.index == offset {
+                                preparedSource = nil
+                            }
+                        } else {
+                            run.beginSource(sourceURL, index: offset + 1, total: sourceURLs.count)
+                            result = try await runner(sourceURL, { progress in
+                                run.handle(progress)
+                            }, { draft in
+                                await startPreparingSource(at: offset + 1)
+                                return await run.requestReview(draft)
+                            })
                         }
                         firstOverviewURL = firstOverviewURL ?? result.overviewURL
                         touchedURLs.append(contentsOf: result.touchedURLs)
@@ -1980,10 +3469,15 @@ struct MeetingRootView: View {
                         throw CancellationError()
                     } catch {
                         run.sourceFailed(sourceURL, error: error)
+                        if preparedSource?.index == offset {
+                            preparedSource = nil
+                        }
                     }
                 }
 
                 try Task.checkCancellation()
+                preparedSource?.task.cancel()
+                run.prepareNextSource(nil)
                 let lintUsage = try await runSecondBrainLintForBatch(run: run)
                 totalInputTokens += lintUsage.inputTokens
                 totalOutputTokens += lintUsage.outputTokens
@@ -2100,6 +3594,9 @@ struct MeetingRootView: View {
 
         switch progress {
         case .status(let status):
+            qaStatusLine = status
+            qaTranscript.append(.status(status))
+        case .modelStatus(let status):
             qaStatusLine = status
             qaTranscript.append(.status(status))
         case .functionStarted(let name, let system, let user):
@@ -2524,14 +4021,7 @@ struct MeetingRootView: View {
     }
 
     private nonisolated static func generatedBrainPageCount(in saveDir: URL) -> Int {
-        var archiveRoots = [saveDir]
-        if let containerArchive = MeetingTranscriptSettings.appContainerArchiveIfPresent(),
-           containerArchive.standardizedFileURL.path != saveDir.standardizedFileURL.path {
-            archiveRoots.append(containerArchive)
-        }
-        return archiveRoots
-            .map { generatedBrainPageCount(at: GeneratedWikiPaths.root(in: $0)) }
-            .max() ?? 0
+        generatedBrainPageCount(at: GeneratedWikiPaths.root(in: saveDir))
     }
 
     private nonisolated static func generatedBrainPageCount(at root: URL) -> Int {
@@ -3261,16 +4751,7 @@ struct NavTabContentView: View {
                         state.pendingGenerateWikiBatch = true
                     },
                     onLint: {
-                        let displayQuestion = """
-                        Lint my local 2nd Brain. Look for likely duplicate entities, stale or contradictory claims, missing backlinks, orphan pages, unsupported claims without evidence, missing aliases, and important entities/concepts that should have pages. Return a concise prioritized report with source page paths.
-                        """
-                        state.pendingScopedQAPrompt = ScopedQAPrompt(
-                            displayQuestion: displayQuestion,
-                            agentQuestion: """
-                            __2ND_BRAIN_LINT_ONLY__
-                            \(displayQuestion)
-                            """
-                        )
+                        state.pendingSecondBrainLint = true
                     },
                     onOpenPage: { url in
                         if let content = state.loadGeneratedWikiPageContent(url) {
@@ -3279,11 +4760,28 @@ struct NavTabContentView: View {
                     },
                     onOpenPageInNewTab: { url in
                         state.openGeneratedWikiPage(url)
+                    },
+                    onArchive: {
+                        state.loadGeneratedWikiFolders()
                     }
                 )
             case .generatedWikiPage(let page):
                 GeneratedWikiPageView(
                     page: page,
+                    onSave: { page, body in
+                        let updated = try state.saveGeneratedWikiPage(page, body: body)
+                        tab.content = .generatedWikiPage(updated)
+                    },
+                    onRename: { page, newName in
+                        let updated = try state.renameGeneratedWikiPage(page, to: newName)
+                        tab.content = .generatedWikiPage(updated)
+                        return updated
+                    },
+                    onChangeType: { page, newType in
+                        let updated = try state.changeGeneratedWikiPageType(page, to: newType)
+                        tab.content = .generatedWikiPage(updated)
+                        return updated
+                    },
                     onOpenWikilink: { slug in
                         if let url = state.resolveGeneratedWikilink(slug: slug),
                            let content = state.loadGeneratedWikiPageContent(url) {
@@ -3295,6 +4793,13 @@ struct NavTabContentView: View {
                             state.openGeneratedWikiPage(url)
                         }
                     },
+                    onResolveWikilinkTitle: { slug in
+                        guard let url = state.resolveGeneratedWikilink(slug: slug),
+                              let page = try? GeneratedWikiPaths.readPage(from: url) else {
+                            return nil
+                        }
+                        return page.title
+                    },
                     onOpenSourceMeeting: { path in
                         if let content = state.loadMeetingContent(relativePath: path) {
                             tab.navigate(to: content)
@@ -3305,6 +4810,410 @@ struct NavTabContentView: View {
                 AirtableTablePreviewView(table: table)
             }
         }
+        .background(
+            BrowserBackEventBridge(
+                canGoBack: tab.canGoBack,
+                onBack: { tab.goBack() }
+            )
+        )
+    }
+}
+
+private struct BrowserBackEventBridge: NSViewRepresentable {
+    var canGoBack: Bool
+    var onBack: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> BackEventView {
+        let view = BackEventView()
+        view.onWindowChanged = { [weak coordinator = context.coordinator] window in
+            coordinator?.window = window
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: BackEventView, context: Context) {
+        context.coordinator.canGoBack = canGoBack
+        context.coordinator.onBack = onBack
+        context.coordinator.installMonitorIfNeeded()
+    }
+
+    static func dismantleNSView(_ nsView: BackEventView, coordinator: Coordinator) {
+        coordinator.uninstallMonitor()
+    }
+
+    final class Coordinator {
+        weak var window: NSWindow?
+        var canGoBack: Bool = false
+        var onBack: (() -> Void)?
+        private var monitor: Any?
+        private var accumulatedHorizontalScroll: CGFloat = 0
+        private var accumulatedVerticalScroll: CGFloat = 0
+        private var lastBackAt: Date = .distantPast
+
+        func installMonitorIfNeeded() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.swipe, .scrollWheel]) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        func uninstallMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard canGoBack,
+                  event.window === window,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else {
+                return event
+            }
+
+            switch event.type {
+            case .swipe:
+                if event.deltaX > 0.35 {
+                    goBack()
+                    return nil
+                }
+            case .scrollWheel:
+                return handleScrollWheel(event)
+            default:
+                break
+            }
+            return event
+        }
+
+        private func handleScrollWheel(_ event: NSEvent) -> NSEvent? {
+            if event.phase.contains(.began) {
+                accumulatedHorizontalScroll = 0
+                accumulatedVerticalScroll = 0
+            }
+
+            if event.phase.contains(.changed) || event.phase.contains(.mayBegin) {
+                accumulatedHorizontalScroll += event.scrollingDeltaX
+                accumulatedVerticalScroll += event.scrollingDeltaY
+            }
+
+            guard event.phase.contains(.ended) || event.phase.contains(.cancelled) else {
+                return event
+            }
+
+            defer {
+                accumulatedHorizontalScroll = 0
+                accumulatedVerticalScroll = 0
+            }
+
+            guard abs(accumulatedHorizontalScroll) > abs(accumulatedVerticalScroll) * 1.8,
+                  accumulatedHorizontalScroll > 70 else {
+                return event
+            }
+
+            goBack()
+            return nil
+        }
+
+        private func goBack() {
+            let now = Date()
+            guard now.timeIntervalSince(lastBackAt) > 0.35 else { return }
+            lastBackAt = now
+            onBack?()
+        }
+    }
+
+    final class BackEventView: NSView {
+        var onWindowChanged: ((NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onWindowChanged?(window)
+        }
+    }
+}
+
+private struct SecondBrainLintSheet: View {
+    @ObservedObject var run: SecondBrainLintRun
+    let onCancel: () -> Void
+    let onApply: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            HStack(spacing: 0) {
+                leftRail
+                    .frame(width: 280)
+                Divider()
+                detailPane
+            }
+        }
+        .frame(width: 960, height: 680)
+        .interactiveDismissDisabled(run.isRunning)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: run.errorMessage == nil ? "checklist" : "exclamationmark.triangle")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(run.errorMessage == nil ? .orange : .red)
+                    .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Linting 2nd Brain")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text("Generated pages only")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(run.status)
+                        .font(.system(size: 12))
+                        .foregroundColor(run.errorMessage == nil ? .secondary : .red)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text("\(run.scannedPages)/\(max(run.totalPages, run.scannedPages)) pages")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("\(run.proposals.count) proposals · \(run.acceptedCount) accepted")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                if run.isRunning {
+                    Button("Stop", action: onCancel)
+                        .buttonStyle(.bordered)
+                } else if run.resultMessage == nil, run.errorMessage == nil {
+                    Button("Apply accepted", action: onApply)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(run.acceptedCount == 0)
+                } else {
+                    Button("Close", action: onClose)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+
+            ProgressView(value: run.progressFraction)
+                .tint(run.errorMessage == nil ? .orange : .red)
+        }
+        .padding(18)
+    }
+
+    private var leftRail: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Lint progress")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            lintProgressRow(title: "Pages", value: "\(run.scannedPages) of \(max(run.totalPages, run.scannedPages))", isActive: run.isRunning)
+            lintProgressRow(title: "Proposals", value: "\(run.proposals.count)", isActive: run.isRunning)
+            lintProgressRow(title: "Accepted", value: "\(run.acceptedCount)", isActive: !run.isRunning && run.resultMessage == nil)
+            lintProgressRow(title: "Applied", value: "\(run.appliedChanges)", isActive: run.resultMessage != nil)
+
+            Divider()
+
+            Text("Checks")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            checkCard(title: "Duplicate entities", status: run.isRunning ? "scanning..." : "complete")
+            checkCard(title: "Duplicate topics", status: run.isRunning ? "scanning..." : "complete")
+            checkCard(title: "Duplicate claims", status: run.isRunning ? "scanning..." : "complete")
+
+            Spacer()
+
+            CopyButton(text: { run.trace }, label: "Copy trace")
+                .help("Copy lint scan trace and proposals")
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+    }
+
+    private var detailPane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if run.isRunning || run.proposals.isEmpty {
+                Text(run.isRunning ? "Scanning pages" : "Result")
+                    .font(.system(size: 15, weight: .semibold))
+                terminalView
+            }
+
+            if !run.proposals.isEmpty {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Review proposed changes")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("\(run.proposals.count) merge proposal\(run.proposals.count == 1 ? "" : "s") · \(run.acceptedCount) accepted")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Accept all") {
+                        for proposal in run.proposals {
+                            run.setProposalAccepted(proposal, accepted: true)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Skip all") {
+                        for proposal in run.proposals {
+                            run.setProposalAccepted(proposal, accepted: false)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(run.proposals) { proposal in
+                            proposalRow(proposal)
+                        }
+                    }
+                }
+            }
+
+            if let error = run.errorMessage {
+                resultCard(title: "Error", systemImage: "exclamationmark.triangle", tint: .red) {
+                    Text(error)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            } else if let result = run.resultMessage {
+                resultCard(title: "Result", systemImage: "checkmark.circle", tint: .green) {
+                    Text(result)
+                        .font(.system(size: 12))
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(18)
+    }
+
+    private var terminalView: some View {
+        ScrollView {
+            Text(run.trace.isEmpty ? "[status] Preparing lint scan..." : run.trace)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(14)
+        }
+        .background(Color.black.opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func proposalRow(_ proposal: SecondBrainLintProposal) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(proposal.kind.rawValue): \(proposal.sourceTitle)")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("\(proposal.categoryLabel) · \(proposal.confidence) confidence")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(confidenceColor(proposal.confidence))
+                }
+                Spacer()
+                Button {
+                    run.setProposalAccepted(proposal, accepted: true)
+                } label: {
+                    Label("Accept", systemImage: proposal.accepted ? "checkmark.circle.fill" : "checkmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(proposal.accepted ? .green : nil)
+
+                Button {
+                    run.setProposalAccepted(proposal, accepted: false)
+                } label: {
+                    Label("Skip", systemImage: proposal.accepted ? "circle" : "xmark.circle.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(proposal.accepted ? nil : .red)
+            }
+
+            Text("Merge into: \(proposal.targetTitle)")
+                .font(.system(size: 12, weight: .medium))
+            Text(proposal.reason)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text("\(relativePath(proposal.sourceURL)) -> \(relativePath(proposal.targetURL))")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func lintProgressRow(title: String, value: String, isActive: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: isActive ? "circle.dotted" : "checkmark.circle")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isActive ? .orange : .secondary)
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+            Spacer()
+            Text(value)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func checkCard(title: String, status: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+            Text(status)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func resultCard<Content: View>(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func confidenceColor(_ confidence: String) -> Color {
+        switch confidence {
+        case "high": return .green
+        case "medium": return .orange
+        default: return .red
+        }
+    }
+
+    private func relativePath(_ url: URL) -> String {
+        let base = run.archiveRoot.standardizedFileURL.path
+        let full = url.standardizedFileURL.path
+        guard full.hasPrefix(base + "/") else { return url.lastPathComponent }
+        return String(full.dropFirst(base.count + 1))
     }
 }
 
@@ -3314,20 +5223,38 @@ private struct WikiGenerationConsoleSheet: View {
     let onOpenOverview: () -> Void
     let onClose: () -> Void
     @State private var showPrompt: Bool = false
+    @State private var pepperPulse: Bool = false
+    @State private var displayNow: Date = Date()
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            HStack(spacing: 0) {
-                leftRail
-                    .frame(width: 300)
+        Group {
+            if shouldShowBatchWorkbenchOverlay {
+                batchWorkbenchOverlay
+                    .transition(.opacity)
+            } else {
+            VStack(spacing: 0) {
+                header
                 Divider()
-                detailPane
+                HStack(spacing: 0) {
+                    leftRail
+                        .frame(width: 300)
+                    Divider()
+                    detailPane
+                }
+            }
             }
         }
-        .frame(width: 980, height: 720)
+        .frame(
+            width: 980,
+            height: 720
+        )
         .interactiveDismissDisabled(run.isRunning)
+        .onAppear {
+            pepperPulse = true
+        }
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now in
+            displayNow = now
+        }
     }
 
     private var header: some View {
@@ -3357,18 +5284,30 @@ private struct WikiGenerationConsoleSheet: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        if let next = nextSourceSummaryText {
+                            Text(next)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.orange.opacity(0.9))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 5) {
-                    Text(tokenCounterText)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text("\(run.modelCallsCompleted)/\(run.modelCallTotal) model calls")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+	                VStack(alignment: .trailing, spacing: 5) {
+	                    Text(tokenCounterText)
+	                        .font(.system(size: 12, design: .monospaced))
+	                        .foregroundStyle(.secondary)
+	                    if let selected = run.selectedFunction {
+	                        Text(throughputText(for: selected))
+	                            .font(.system(size: 10, design: .monospaced))
+	                            .foregroundStyle(.secondary)
+	                    }
+	                    Text("\(run.modelCallsCompleted)/\(run.modelCallTotal) model calls")
+	                        .font(.system(size: 11, weight: .medium))
+	                        .foregroundStyle(.secondary)
                     if run.isRunning, run.activeOutputTokenEstimate > 0 {
                         Text("current call ~\(run.activeOutputTokenEstimate) out")
                             .font(.system(size: 10, design: .monospaced))
@@ -3408,16 +5347,28 @@ private struct WikiGenerationConsoleSheet: View {
                     value: modelCallProgressText,
                     isActive: run.isRunning
                 )
-                progressRow(
-                    title: "Current call",
-                    value: currentCallProgressText,
-                    isActive: run.isRunning && run.selectedFunction?.isFinished == false
-                )
-                progressRow(
-                    title: "Files saved",
-                    value: "\(run.savedRelativePaths.count)",
-                    isActive: run.status.hasPrefix("Saved")
-                )
+	                progressRow(
+	                    title: "Current call",
+	                    value: currentCallProgressText,
+	                    isActive: run.isRunning && run.selectedFunction?.isFinished == false
+	                )
+	                progressRow(
+	                    title: "Throughput",
+	                    value: run.selectedFunction.map { throughputText(for: $0) } ?? "waiting",
+	                    isActive: run.isRunning && run.selectedFunction?.isFinished == false
+	                )
+                if run.isBatch, run.nextSourceTitle != nil {
+                    progressRow(
+                        title: "Next source",
+                        value: nextSourceRailText,
+                        isActive: run.reviewDraft != nil
+                    )
+                }
+	                progressRow(
+	                    title: "Files saved",
+	                    value: "\(run.savedRelativePaths.count)",
+	                    isActive: run.status.hasPrefix("Saved")
+	                )
             }
 
             Divider()
@@ -3486,12 +5437,18 @@ private struct WikiGenerationConsoleSheet: View {
                     .font(.system(size: 15, weight: .semibold))
             }
 
-            terminalView
+            if let draft = run.reviewDraft {
+                reviewDeck(draft)
+            } else {
+                terminalView
+            }
 
-            if let error = run.errorMessage {
-                resultCard(title: "Error", systemImage: "exclamationmark.triangle", tint: .red) {
-                    Text(error)
-                        .font(.system(size: 12))
+	            if run.reviewDraft != nil {
+	                EmptyView()
+	            } else if let error = run.errorMessage {
+	                resultCard(title: "Error", systemImage: "exclamationmark.triangle", tint: .red) {
+	                    Text(error)
+	                        .font(.system(size: 12))
                         .foregroundStyle(.red)
                         .textSelection(.enabled)
                 }
@@ -3518,7 +5475,673 @@ private struct WikiGenerationConsoleSheet: View {
                 }
             }
         }
-        .padding(18)
+	        .padding(18)
+	    }
+
+    private func reviewDeck(_ draft: GeneratedWikiReviewDraft) -> some View {
+        reviewPane(draft)
+    }
+
+    private func reviewPane(_ draft: GeneratedWikiReviewDraft) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Review before saving")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("\(draft.entities.count) entities · \(draft.topics.count) topics · \(draft.claimCount) claims · source \(draft.meetingPath)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Button("Keep all") {
+                    run.keepAllReviewItems()
+                }
+                .buttonStyle(.bordered)
+                Button("Save approved") {
+                    run.completeReview()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    reviewSection(title: "Entities", systemImage: "link") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(draft.entities) { entity in
+                                entityReviewRow(entity)
+                            }
+                            if draft.entities.isEmpty {
+                                Text("(none)")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    reviewSection(title: "Topics", systemImage: "list.bullet.rectangle") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(draft.topics) { topic in
+                                topicReviewRow(topic)
+                            }
+                            if draft.topics.isEmpty {
+                                Text("(none)")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    reviewSection(title: "Claims", systemImage: "quote.bubble") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(draft.claims) { claim in
+                                claimReviewRow(claim)
+                            }
+                            if draft.claimCount == 0 {
+                                Text("(none)")
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(.trailing, 4)
+            }
+        }
+        .padding(16)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.orange.opacity(0.24), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 22, x: 0, y: 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func preloadingWindowBehind(title: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                pepperCharacter(size: 18)
+                Text("Ghost Pepper Import")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text("background")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.84))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(red: 0.04, green: 0.14, blue: 0.48).opacity(0.88))
+
+            HStack(spacing: 10) {
+                pepperCharacter(size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(run.nextSourceReviewDraft == nil ? "Pre-loading next meeting" : "Ready for entity approval")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(title)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(run.nextSourceReviewDraft == nil ? 1 : 0)
+                if run.nextSourceReviewDraft != nil {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+
+            Text(run.nextSourceStatus ?? "Queued for background pre-load")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text(nextPreloadTerminalText(title: title))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.82))
+                .lineLimit(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color.black.opacity(0.78))
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .padding(0)
+        .frame(width: 820, height: 430, alignment: .topLeading)
+        .background(Color(red: 0.78, green: 0.78, blue: 0.72).opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(Color.black.opacity(0.45), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 10)
+        .opacity(0.72)
+        .scaleEffect(0.975, anchor: .center)
+    }
+
+    private func nextPreloadTerminalText(title: String) -> String {
+        if !run.nextSourceTerminalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return run.nextSourceTerminalText
+        }
+        let tokenLine: String
+        if let tokens = run.nextSourceInputTokens {
+            tokenLine = "[input] ~\(tokens.formatted()) input tokens loaded"
+        } else {
+            tokenLine = "[load] reading source file"
+        }
+        return """
+        [next] \(title)
+        \(tokenLine)
+        [queue] waiting for current approvals
+        """
+    }
+
+    private func reviewSection<Content: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func entityReviewRow(_ entity: GeneratedWikiReviewEntityDraft) -> some View {
+        let decision = run.reviewEntityDecisions[entity.id] ?? GeneratedWikiEntityReviewDecision(keep: true, canonicalName: entity.defaultCanonicalName, proposedName: entity.name, type: entity.type)
+        let isDiscarded = !decision.keep
+        let mergeTarget = decision.canonicalName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isMerged = decision.keep && !mergeTarget.isEmpty
+        let isKept = decision.keep && mergeTarget.isEmpty
+        let selectedType = decision.type ?? entity.type
+        let proposedName = Binding<String>(
+            get: {
+                run.reviewEntityDecisions[entity.id]?.proposedName ?? entity.name
+            },
+            set: { value in
+                run.setEntityProposedName(entity, proposedName: value)
+            }
+        )
+        let entityType = Binding<String>(
+            get: {
+                run.reviewEntityDecisions[entity.id]?.type ?? entity.type
+            },
+            set: { value in
+                run.setEntityType(entity, type: value)
+            }
+        )
+        let mergeOptions = orderedMergeOptions(for: entity, selectedType: selectedType, selected: mergeTarget)
+        let mergeSelection = Binding<String>(
+            get: {
+                let currentDecision = run.reviewEntityDecisions[entity.id]
+                let canonical = currentDecision == nil ? entity.defaultCanonicalName : currentDecision?.canonicalName
+                let currentCanonical = canonical ?? ""
+                if currentCanonical.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return "__none__"
+                }
+                return currentCanonical
+            },
+            set: { value in
+                let cleaned = value == "__none__" ? "" : value.trimmingCharacters(in: .whitespacesAndNewlines)
+                run.setEntityDecision(entity, keep: true, canonicalName: cleaned.isEmpty ? nil : cleaned)
+            }
+        )
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(isMerged ? "Merge Entity:" : isDiscarded ? "Discard Entity:" : "New Entity:")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isDiscarded ? .secondary : .primary)
+                        TextField("Entity name", text: proposedName)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isDiscarded ? .secondary : .primary)
+                            .disabled(isDiscarded || isMerged)
+                            .frame(minWidth: 120, maxWidth: 260, alignment: .leading)
+                    }
+                    HStack(spacing: 8) {
+                        Picker("Entity type", selection: entityType) {
+                            Text("Person").tag("Person")
+                            Text("Company").tag("Company")
+                            Text("Concept").tag("Concept")
+                        }
+                        .labelsHidden()
+                        .frame(width: 118)
+                        .disabled(isDiscarded || isMerged)
+                        Text(entity.resolutionLabel)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        confidenceBadge(entity.confidence)
+                    }
+                }
+                Spacer()
+                Button {
+                    run.setEntityDecision(entity, keep: true, canonicalName: nil)
+                } label: {
+                    Label("Add", systemImage: isKept ? "checkmark.circle.fill" : "plus.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(isKept ? .green : nil)
+                Button {
+                    let target = mergeTarget.isEmpty
+                        ? (entity.suggestedMatches.first ?? entity.mergeOptions.first ?? "")
+                        : mergeTarget
+                    run.setEntityDecision(entity, keep: true, canonicalName: target.isEmpty ? nil : target)
+                } label: {
+                    Label("Merge", systemImage: isMerged ? "checkmark.circle.fill" : "arrow.triangle.merge")
+                }
+                .buttonStyle(.bordered)
+                .tint(isMerged ? .blue : nil)
+                .disabled(entity.suggestedMatches.isEmpty && entity.mergeOptions.isEmpty && mergeTarget.isEmpty)
+                Button {
+                    run.setEntityDecision(entity, keep: false, canonicalName: nil)
+                } label: {
+                    Label("Discard", systemImage: isDiscarded ? "checkmark.circle.fill" : "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(isDiscarded ? .red : nil)
+            }
+
+            if !entity.context.isEmpty {
+                Text(entity.context)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            if !entity.sourceSnippet.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Source context")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(entity.sourceSnippet)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+                .padding(.top, 2)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Merge with")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Picker("Merge with", selection: mergeSelection) {
+                        Text("Select existing entity").tag("__none__")
+                        if !entity.suggestedMatches.isEmpty {
+                            Section("Suggested") {
+                                ForEach(entity.suggestedMatches, id: \.self) { match in
+                                    Text(match).tag(match)
+                                }
+                            }
+                        }
+                        Section("All \(selectedType)") {
+                            ForEach(mergeOptions.prefix(80), id: \.self) { match in
+                                Text(match).tag(match)
+                            }
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                    .disabled(isDiscarded || mergeOptions.isEmpty)
+                    .onChange(of: mergeSelection.wrappedValue) { _, value in
+                        let cleaned = value == "__none__" ? "" : value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        run.setEntityDecision(entity, keep: true, canonicalName: cleaned.isEmpty ? nil : cleaned)
+                    }
+                }
+
+                if isMerged {
+                    Text("Selected merge target: \(mergeTarget)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                if !entity.suggestedMatches.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Suggested matches")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(entity.suggestedMatches, id: \.self) { match in
+                            Button {
+                                run.setEntityDecision(entity, keep: true, canonicalName: match)
+                            } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Image(systemName: mergeTarget == match ? "checkmark.circle.fill" : "arrow.triangle.merge")
+                                    Text(match)
+                                        .fontWeight(.semibold)
+                                    Text(entity.suggestedMatchReasons[match] ?? "Possible existing entity.")
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                .font(.system(size: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isDiscarded)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isDiscarded ? Color.red.opacity(0.06) : Color.black.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func orderedMergeOptions(for entity: GeneratedWikiReviewEntityDraft, selectedType: String, selected: String) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        let typeOptions = entity.mergeOptionsByType[selectedType] ?? entity.mergeOptions
+        let suggested = selectedType == entity.type ? entity.suggestedMatches : []
+        for value in ([selected] + suggested + typeOptions) {
+            let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty, !seen.contains(cleaned) else { continue }
+            seen.insert(cleaned)
+            ordered.append(cleaned)
+        }
+        return ordered
+    }
+
+    private func topicReviewRow(_ topic: GeneratedWikiReviewTopicDraft) -> some View {
+        let decision = run.reviewTopicDecisions[topic.id] ?? GeneratedWikiTopicReviewDecision(keep: true, canonicalTopic: topic.indexCandidate ? (topic.suggestedCanonicalTopic ?? topic.suggestedMatches.first ?? topic.topic) : nil, topic: topic.topic)
+        let isDiscarded = !decision.keep
+        let connectTarget = decision.canonicalTopic?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isConnected = decision.keep && !connectTarget.isEmpty
+        let isKept = decision.keep && connectTarget.isEmpty
+        let topicTitle = Binding<String>(
+            get: { run.reviewTopicDecisions[topic.id]?.topic ?? topic.topic },
+            set: { run.setTopicTitle(topic, title: $0) }
+        )
+        let connectOptions = orderedTopicConnectOptions(for: topic, selected: connectTarget)
+        let connectSelection = Binding<String>(
+            get: {
+                let current = run.reviewTopicDecisions[topic.id]?.canonicalTopic ?? ""
+                return current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "__none__" : current
+            },
+            set: { value in
+                let cleaned = value == "__none__" ? "" : value.trimmingCharacters(in: .whitespacesAndNewlines)
+                run.setTopicDecision(topic, keep: true, canonicalTopic: cleaned.isEmpty ? nil : cleaned)
+            }
+        )
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(isConnected ? "Connect Topic:" : isDiscarded ? "Discard Topic:" : "Keep Topic:")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(isDiscarded ? .secondary : .primary)
+                        TextField("Topic", text: topicTitle)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .semibold))
+                            .disabled(isDiscarded || isConnected)
+                            .frame(minWidth: 140, maxWidth: 320, alignment: .leading)
+                    }
+                    if topic.indexCandidate {
+                        Text(topic.suggestedCanonicalTopic?.isEmpty == false ? "suggested reusable topic -> \(topic.suggestedCanonicalTopic!)" : "suggested reusable topic")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Button {
+                    run.setTopicDecision(topic, keep: true, canonicalTopic: nil)
+                } label: {
+                    Label("Keep", systemImage: isKept ? "checkmark.circle.fill" : "checkmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(isKept ? .green : nil)
+                Button {
+                    let target = connectTarget.isEmpty
+                        ? (topic.suggestedMatches.first ?? topic.mergeOptions.first ?? topicTitle.wrappedValue)
+                        : connectTarget
+                    run.setTopicDecision(topic, keep: true, canonicalTopic: target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : target)
+                } label: {
+                    Label("Connect", systemImage: isConnected ? "checkmark.circle.fill" : "link")
+                }
+                .buttonStyle(.bordered)
+                .tint(isConnected ? .blue : nil)
+                Button {
+                    run.setTopicDecision(topic, keep: false, canonicalTopic: nil)
+                } label: {
+                    Label("Discard", systemImage: isDiscarded ? "checkmark.circle.fill" : "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(isDiscarded ? .red : nil)
+            }
+            if !topic.description.isEmpty {
+                Text(topic.description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            HStack(spacing: 8) {
+                Text("Connect to")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Connect topic to", selection: connectSelection) {
+                    Text("Just this meeting").tag("__none__")
+                    if !topic.suggestedMatches.isEmpty {
+                        Section("Suggested") {
+                            ForEach(topic.suggestedMatches, id: \.self) { match in
+                                Text(match).tag(match)
+                            }
+                        }
+                    }
+                    Section("All topics") {
+                        ForEach(connectOptions.prefix(80), id: \.self) { match in
+                            Text(match).tag(match)
+                        }
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 280)
+                .disabled(isDiscarded)
+                if isConnected {
+                    Text(connectTarget)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            if !topic.indexReason.isEmpty || (isConnected && topic.indexReason.isEmpty) {
+                Text(topic.indexReason.isEmpty ? "Connected during review." : topic.indexReason)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isDiscarded ? Color.red.opacity(0.06) : Color.black.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func orderedTopicConnectOptions(for topic: GeneratedWikiReviewTopicDraft, selected: String) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for value in ([selected] + topic.suggestedMatches + topic.mergeOptions) {
+            let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty, !seen.contains(cleaned) else { continue }
+            seen.insert(cleaned)
+            ordered.append(cleaned)
+        }
+        return ordered
+    }
+
+    private func claimReviewRow(_ claim: GeneratedWikiReviewClaimDraft) -> some View {
+        let decision = run.reviewClaimDecisions[claim.id] ?? GeneratedWikiClaimReviewDecision(
+            keep: true,
+            canonicalClaim: claim.indexCandidate ? (claim.suggestedCanonicalClaim ?? claim.suggestedMatches.first ?? claim.text) : nil,
+            text: claim.text
+        )
+        let isDiscarded = !decision.keep
+        let mergeTarget = decision.canonicalClaim?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let isConnected = decision.keep && !mergeTarget.isEmpty
+        let isMeetingOnly = decision.keep && mergeTarget.isEmpty
+        let statusColor: Color = isDiscarded ? .secondary : isConnected ? .blue : .green
+        let mergeOptions = orderedClaimMergeOptions(for: claim, selected: mergeTarget)
+        let claimText = Binding<String>(
+            get: { run.reviewClaimDecisions[claim.id]?.text ?? claim.text },
+            set: { run.setClaimText(claim, text: $0) }
+        )
+        let mergeSelection = Binding<String>(
+            get: {
+                let current = run.reviewClaimDecisions[claim.id]?.canonicalClaim ?? ""
+                if current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return "__none__"
+                }
+                return current
+            },
+            set: { value in
+                let cleaned = value == "__none__" ? "" : value.trimmingCharacters(in: .whitespacesAndNewlines)
+                run.setClaimDecision(claim, keep: true, canonicalClaim: cleaned.isEmpty ? nil : cleaned)
+            }
+        )
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isDiscarded ? "xmark.circle" : isConnected ? "link" : "checkmark.circle.fill")
+                    .foregroundStyle(statusColor)
+                    .padding(.top, 3)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(isConnected ? "Connect Claim" : isDiscarded ? "Discard Claim" : "Keep Claim")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isDiscarded ? .secondary : .primary)
+                    confidenceBadge(claim.confidence)
+                    if claim.indexCandidate, !claim.indexReason.isEmpty {
+                        Text(claim.indexReason)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    TextField("Claim", text: claimText, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .lineLimit(2...4)
+                        .disabled(isDiscarded)
+                    if !claim.sourceContext.isEmpty {
+                        Text(claim.sourceContext)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    run.setClaimDecision(claim, keep: true, canonicalClaim: nil)
+                } label: {
+                    Label("Keep", systemImage: isMeetingOnly ? "checkmark.circle.fill" : "checkmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(isMeetingOnly ? .green : nil)
+
+                Button {
+                    let target = mergeTarget.isEmpty
+                        ? (claim.suggestedCanonicalClaim ?? claim.suggestedMatches.first ?? (run.reviewClaimDecisions[claim.id]?.text ?? claim.text))
+                        : mergeTarget
+                    run.setClaimDecision(claim, keep: true, canonicalClaim: target.isEmpty ? nil : target)
+                } label: {
+                    Label("Connect", systemImage: isConnected ? "checkmark.circle.fill" : "link")
+                }
+                .buttonStyle(.bordered)
+                .tint(isConnected ? .blue : nil)
+
+                Button {
+                    run.setClaimDecision(claim, keep: false, canonicalClaim: nil)
+                } label: {
+                    Label("Discard", systemImage: isDiscarded ? "checkmark.circle.fill" : "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(isDiscarded ? .red : nil)
+            }
+
+            HStack(spacing: 8) {
+                Text("Connect to")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Merge claim with", selection: mergeSelection) {
+                    Text("Just this meeting").tag("__none__")
+                    Text("New claim index: \(String((run.reviewClaimDecisions[claim.id]?.text ?? claim.text).prefix(64)))").tag(run.reviewClaimDecisions[claim.id]?.text ?? claim.text)
+                    if !claim.suggestedMatches.isEmpty {
+                        Section("Suggested") {
+                            ForEach(claim.suggestedMatches, id: \.self) { match in
+                                Text(match).tag(match)
+                            }
+                        }
+                    }
+                    Section("All claims") {
+                        ForEach(mergeOptions.prefix(80), id: \.self) { match in
+                            Text(match).tag(match)
+                        }
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 320)
+                .disabled(isDiscarded)
+            }
+
+            if isConnected {
+                Text("Selected claim index target: \(mergeTarget)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            if !claim.suggestedMatches.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Suggested claims")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(claim.suggestedMatches, id: \.self) { match in
+                        Button {
+                            run.setClaimDecision(claim, keep: true, canonicalClaim: match)
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: mergeTarget == match ? "checkmark.circle.fill" : "link")
+                                Text(match)
+                                    .fontWeight(.semibold)
+                                Text(claim.suggestedMatchReasons[match] ?? "Possible existing claim.")
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isDiscarded)
+                    }
+                }
+            }
+        }
+        .padding(8)
+        .background(isDiscarded ? Color.red.opacity(0.06) : Color.black.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private func orderedClaimMergeOptions(for claim: GeneratedWikiReviewClaimDraft, selected: String) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for value in ([selected, claim.suggestedCanonicalClaim ?? "", claim.text] + claim.suggestedMatches + claim.mergeOptions) {
+            let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty, !seen.contains(cleaned) else { continue }
+            seen.insert(cleaned)
+            ordered.append(cleaned)
+        }
+        return ordered
     }
 
     private var terminalView: some View {
@@ -3545,6 +6168,217 @@ private struct WikiGenerationConsoleSheet: View {
         }
     }
 
+    private var shouldShowBatchWorkbenchOverlay: Bool {
+        run.isBatch
+    }
+
+    private var batchWorkbenchOverlay: some View {
+        VStack(spacing: 0) {
+            windows95TitleBar
+
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 16) {
+                    pepperCharacter(size: run.reviewDraft == nil ? 92 : 58)
+                        .scaleEffect(pepperPulse ? 1.035 : 0.965)
+                        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pepperPulse)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(run.reviewDraft == nil ? "Pre-loading..." : "Approve imported entities")
+                            .font(.system(size: 23, weight: .semibold))
+                            .foregroundStyle(.black)
+                        Text(activeProcessingText)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.black.opacity(0.74))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(run.status)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.black.opacity(0.7))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(tokenCounterText)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.black)
+                        Text(sourceProgressText)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.black.opacity(0.68))
+                        if let selected = run.selectedFunction {
+                            Text(throughputText(for: selected))
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.black.opacity(0.68))
+                        }
+                    }
+                }
+
+                if let draft = run.reviewDraft {
+                    VStack(spacing: 10) {
+                        reviewPane(draft)
+                            .frame(height: shouldShowNextSourceInlinePanel ? 398 : 516)
+                        if shouldShowNextSourceInlinePanel {
+                            nextSourceInlinePanel
+                                .frame(height: 110)
+                        }
+                    }
+                } else if run.errorMessage != nil {
+                    windows95ErrorPanel
+                        .frame(height: 518)
+                } else {
+                    VStack(spacing: 10) {
+                        terminalView
+                            .frame(height: shouldShowNextSourceInlinePanel ? 416 : 516)
+                        if shouldShowNextSourceInlinePanel {
+                            nextSourceInlinePanel
+                                .frame(height: 90)
+                        }
+                    }
+                }
+            }
+            .padding(18)
+            .background(Color(red: 0.78, green: 0.78, blue: 0.72))
+
+            windows95StatusBar
+        }
+        .frame(width: 980, height: 720)
+        .background(Color(red: 0.78, green: 0.78, blue: 0.72))
+        .overlay(
+            Rectangle()
+                .stroke(Color.black.opacity(0.55), lineWidth: 1)
+        )
+    }
+
+    private var windows95ErrorPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.red)
+                Text("Import stopped")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.black)
+                Spacer()
+            }
+            Text(run.errorMessage ?? "Unknown error")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+            terminalView
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(red: 0.72, green: 0.72, blue: 0.67))
+        .overlay(Rectangle().stroke(Color.black.opacity(0.42), lineWidth: 1))
+    }
+
+    private var nextSourceInlinePanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: nextSourceInlineIcon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(nextSourceInlineTint)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(nextSourceInlineTitle)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.black)
+                    if let title = run.nextSourceTitle {
+                        Text(title)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.black.opacity(0.64))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer()
+                if run.nextSourceReviewDraft == nil && !run.nextSourceFailed {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                if let tokens = run.nextSourceInputTokens {
+                    Text("~\(tokens.formatted()) in")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.black.opacity(0.68))
+                }
+            }
+
+            Text(nextPreloadTerminalText(title: run.nextSourceTitle ?? "next meeting"))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.84))
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.black.opacity(0.78))
+                .overlay(Rectangle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+        }
+        .padding(10)
+        .background(Color(red: 0.72, green: 0.72, blue: 0.67))
+        .overlay(Rectangle().stroke(Color.black.opacity(0.42), lineWidth: 1))
+    }
+
+    private var windows95TitleBar: some View {
+        HStack(spacing: 8) {
+            pepperCharacter(size: 20)
+            Text("Ghost Pepper Import")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+            Spacer()
+            Text(run.isBatch ? "next 50" : "meeting")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.88))
+            Button(action: run.isRunning ? onCancel : onClose) {
+                Text(run.isRunning ? "Stop" : "Close")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 2)
+                    .background(Color(red: 0.86, green: 0.86, blue: 0.82))
+                    .overlay(Rectangle().stroke(Color.black.opacity(0.45), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color(red: 0.04, green: 0.14, blue: 0.48))
+    }
+
+    private var windows95StatusBar: some View {
+        HStack(spacing: 8) {
+            Text(run.reviewDraft == nil ? "Streaming local model output" : "Waiting for approval")
+            Spacer()
+            if let next = nextSourceSummaryText {
+                Text(next)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .font(.system(size: 11, design: .monospaced))
+        .foregroundStyle(.black.opacity(0.72))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color(red: 0.72, green: 0.72, blue: 0.67))
+        .overlay(Rectangle().stroke(Color.white.opacity(0.45), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func pepperCharacter(size: CGFloat) -> some View {
+        if let image = NSImage(named: "ghost-pepper-character") ?? Bundle.main.image(forResource: "ghost-pepper-character") {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: size * 0.62, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: size, height: size)
+        }
+    }
+
     private var openOverviewButtonTitle: String {
         run.isBatch ? "Open first overview" : "Open meeting overview"
     }
@@ -3552,9 +6386,58 @@ private struct WikiGenerationConsoleSheet: View {
     private var activeProcessingText: String {
         if run.isBatch {
             let index = max(1, run.currentSourceIndex)
+            if run.isWaitingForPreparedSource {
+                return "Finishing source \(index) of \(run.totalSourceCount): \(run.currentSourceTitle)"
+            }
             return "Processing source \(index) of \(run.totalSourceCount): \(run.currentSourceTitle)"
         }
         return "Processing \(run.currentSourceTitle)"
+    }
+
+    private var nextSourceSummaryText: String? {
+        guard run.isBatch, !run.isWaitingForPreparedSource, let title = run.nextSourceTitle else { return nil }
+        let status = run.nextSourceStatus ?? "Queued"
+        return "Next up: \(title) · \(status)"
+    }
+
+    private var shouldShowNextSourceInlinePanel: Bool {
+        run.nextSourceTitle != nil && !run.isWaitingForPreparedSource
+    }
+
+    private var nextSourceInlineTitle: String {
+        if run.nextSourceFailed {
+            return "Next meeting failed"
+        }
+        if run.nextSourceReviewDraft != nil {
+            return "Next meeting ready for entity approval"
+        }
+        if let status = run.nextSourceStatus,
+           status.localizedCaseInsensitiveContains("streaming") ||
+            status.localizedCaseInsensitiveContains("running") ||
+            status.localizedCaseInsensitiveContains("pre-loading") ||
+            status.localizedCaseInsensitiveContains("extracting") {
+            return "Next meeting running in background"
+        }
+        return "Next meeting queued"
+    }
+
+    private var nextSourceInlineIcon: String {
+        if run.nextSourceFailed { return "exclamationmark.triangle.fill" }
+        if run.nextSourceReviewDraft != nil { return "checkmark.circle.fill" }
+        return "arrow.triangle.2.circlepath"
+    }
+
+    private var nextSourceInlineTint: Color {
+        if run.nextSourceFailed { return .red }
+        if run.nextSourceReviewDraft != nil { return .green }
+        return .orange
+    }
+
+    private var nextSourceRailText: String {
+        if let tokens = run.nextSourceInputTokens {
+            return "~\(tokens.formatted()) in"
+        }
+        return "preparing"
     }
 
     private var sourceProgressText: String {
@@ -3582,14 +6465,50 @@ private struct WikiGenerationConsoleSheet: View {
         return "~\(run.activeOutputTokenEstimate) out"
     }
 
+    private func throughputText(for function: WikiGenerationFunctionRun) -> String {
+        let now = function.finishedAt ?? Date()
+        let inputEnd = function.firstTokenAt ?? function.finishedAt ?? now
+        let inputSeconds = max(1.0, inputEnd.timeIntervalSince(function.startedAt))
+        let inputTokenCount = max(function.inputTokens, function.modelStatusInputTokens ?? 0)
+        let inputRate = Double(inputTokenCount) / inputSeconds
+
+        let outputTokenCount = function.isFinished
+            ? function.outputTokens
+            : liveOutputTokenEstimate(for: function.output)
+        let outputRate: Double
+        if let firstTokenAt = function.firstTokenAt {
+            let outputSeconds = max(1.0, now.timeIntervalSince(firstTokenAt))
+            outputRate = Double(outputTokenCount) / outputSeconds
+        } else {
+            outputRate = 0
+        }
+
+        let inputPrefix = function.firstTokenAt == nil ? "~" : ""
+        let outputPrefix = function.isFinished ? "" : "~"
+        return "\(inputPrefix)\(formatTokenRate(inputRate)) in/s · \(outputPrefix)\(formatTokenRate(outputRate)) out/s"
+    }
+
+    private func liveOutputTokenEstimate(for output: String) -> Int {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? 0 : LocalStructuredLLM.estimatedTokenCount(trimmed)
+    }
+
+    private func formatTokenRate(_ rate: Double) -> String {
+        if rate < 0.05 { return "0" }
+        if rate >= 100 {
+            return "\(Int(rate.rounded()))"
+        }
+        return String(format: "%.1f", rate)
+    }
+
     private func functionStatusText(_ selected: WikiGenerationFunctionRun) -> String {
         if selected.isFinished {
-            return "\(selected.inputTokens) in / \(selected.outputTokens) out"
+            return "\(selected.inputTokens) in / \(selected.outputTokens) out · \(throughputText(for: selected))"
         }
         if selected.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Waiting for first output token"
+            return "\(selected.modelStatus) · \(throughputText(for: selected))"
         }
-        return "Streaming local model output"
+        return "Streaming local model output · \(throughputText(for: selected))"
     }
 
     private func promptTrace(_ function: WikiGenerationFunctionRun) -> some View {
@@ -3602,6 +6521,21 @@ private struct WikiGenerationConsoleSheet: View {
         }
         .background(Color.secondary.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func confidenceBadge(_ confidence: String) -> some View {
+        let cleaned = confidence.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !cleaned.isEmpty {
+            let color: Color = cleaned == "high" ? .green : cleaned == "medium" ? .orange : .red
+            Text("\(cleaned) confidence")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(color)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(color.opacity(0.12))
+                .clipShape(Capsule())
+        }
     }
 
     private func promptBlock(title: String, text: String) -> some View {
@@ -3647,7 +6581,7 @@ private struct WikiGenerationConsoleSheet: View {
                     .lineLimit(1)
                 Spacer()
             }
-            Text(function.isFinished ? "\(function.inputTokens) in / \(function.outputTokens) out" : function.output.isEmpty ? "waiting..." : "streaming...")
+            Text(function.isFinished ? "\(function.inputTokens) in / \(function.outputTokens) out" : function.output.isEmpty ? function.modelStatus : "streaming...")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
         }
@@ -3704,23 +6638,98 @@ private struct WikiGenerationConsoleSheet: View {
 
 private struct GeneratedWikiPageView: View {
     let page: GeneratedWikiPage
+    var onSave: (GeneratedWikiPage, String) throws -> Void
+    var onRename: (GeneratedWikiPage, String) throws -> GeneratedWikiPage
+    var onChangeType: (GeneratedWikiPage, String) throws -> GeneratedWikiPage
     var onOpenWikilink: (String) -> Void
     var onOpenWikilinkInNewTab: (String) -> Void
+    var onResolveWikilinkTitle: (String) -> String?
     var onOpenSourceMeeting: (String) -> Void
+    @State private var showPreview = true
+    @State private var draftBody = ""
+    @State private var lastSavedBody = ""
+    @State private var isRenaming = false
+    @State private var renameDraft = ""
+    @State private var editingBlockIndex: Int?
+    @State private var editingBlockText = ""
+    @State private var linkClickInProgress = false
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var isAutosaving = false
+    @State private var recentlySavedBlockIndex: Int?
+    @State private var savedBadgeTask: Task<Void, Never>?
+    @FocusState private var blockEditorFocused: Bool
+    @State private var errorMessage: String?
+
+    private var hasUnsavedChanges: Bool {
+        draftBody != lastSavedBody
+    }
+
+    private var canRename: Bool {
+        ["person", "company", "concept", "topic", "claim"].contains(page.type)
+    }
+
+    private var canChangeType: Bool {
+        ["person", "company", "concept"].contains(page.type)
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if let errorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                        Text(errorMessage)
+                            .textSelection(.enabled)
+                        Spacer()
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                    .padding(10)
+                    .background(Color.red.opacity(0.10))
+                    .cornerRadius(6)
+                }
+                if page.userEdited || page.pendingGeneratedUpdate {
+                    editHistoryCallout
+                }
                 if let source = page.sourceMeetingPath, !source.isEmpty {
                     sourceCallout(source)
                 }
-                bodyRendered
+                if showPreview {
+                    bodyRendered
+                } else {
+                    editor
+                }
             }
             .padding(.horizontal, 48)
             .padding(.vertical, 24)
-            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: 860, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        .onAppear {
+            if draftBody.isEmpty {
+                draftBody = page.body
+                lastSavedBody = page.body
+            }
+            if renameDraft.isEmpty {
+                renameDraft = page.title
+            }
+        }
+        .onChange(of: page.url) { _, _ in
+            autosaveTask?.cancel()
+            savedBadgeTask?.cancel()
+            autosaveTask = nil
+            savedBadgeTask = nil
+            isAutosaving = false
+            recentlySavedBlockIndex = nil
+            draftBody = page.body
+            lastSavedBody = page.body
+            renameDraft = page.title
+            isRenaming = false
+            editingBlockIndex = nil
+            editingBlockText = ""
+            errorMessage = nil
+            showPreview = true
         }
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "generated-wikilink" {
@@ -3735,21 +6744,160 @@ private struct GeneratedWikiPageView: View {
             }
             return .systemAction
         })
+        .onDisappear {
+            autosaveTask?.cancel()
+            savedBadgeTask?.cancel()
+            autosaveTask = nil
+            savedBadgeTask = nil
+        }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(page.title)
-                .font(.system(size: 24, weight: .semibold))
-            HStack(spacing: 12) {
-                Label(page.type.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: page.type == "meeting_overview" ? "rectangle.stack.badge.person.crop" : "link")
-                Text(page.url.path)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                if isRenaming {
+                    HStack(spacing: 8) {
+                        TextField("Page name", text: $renameDraft)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 24, weight: .semibold))
+                            .padding(.vertical, 3)
+                            .padding(.horizontal, 8)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+                            .cornerRadius(6)
+                        Button("Save name") {
+                            do {
+                                let updated = try onRename(page, renameDraft)
+                                draftBody = updated.body
+                                lastSavedBody = updated.body
+                                renameDraft = updated.title
+                                isRenaming = false
+                                errorMessage = nil
+                            } catch {
+                                errorMessage = "Could not rename 2nd Brain page: \(error.localizedDescription)"
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || renameDraft == page.title)
+                        Button("Cancel") {
+                            renameDraft = page.title
+                            isRenaming = false
+                            errorMessage = nil
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Text(page.title)
+                            .font(.system(size: 24, weight: .semibold))
+                        if canRename {
+                            Button {
+                                renameDraft = page.title
+                                isRenaming = true
+                            } label: {
+                                Label("Rename", systemImage: "pencil.line")
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 12, weight: .medium))
+                            .help("Rename this 2nd Brain entity and keep the old name as an alias")
+                        }
+                    }
+                }
+                HStack(spacing: 12) {
+                    if canChangeType {
+                        Picker("Entity type", selection: Binding<String>(
+                            get: { page.type },
+                            set: { newType in
+                                do {
+                                    let updated = try onChangeType(page, newType)
+                                    draftBody = updated.body
+                                    lastSavedBody = updated.body
+                                    renameDraft = updated.title
+                                    errorMessage = nil
+                                } catch {
+                                    errorMessage = "Could not change entity type: \(error.localizedDescription)"
+                                }
+                            }
+                        )) {
+                            Text("Person").tag("person")
+                            Text("Company").tag("company")
+                            Text("Concept").tag("concept")
+                        }
+                        .labelsHidden()
+                        .frame(width: 118)
+                    } else {
+                        Label(page.type.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: page.type == "meeting_overview" ? "rectangle.stack.badge.person.crop" : "link")
+                    }
+                    if let pageID = page.pageID {
+                        Text(pageID)
+                            .lineLimit(1)
+                    }
+                    Text(page.url.path)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
             }
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
+            Spacer()
+            HStack(spacing: 8) {
+                Text(isAutosaving || hasUnsavedChanges ? "Saving..." : "Saved")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isAutosaving || hasUnsavedChanges ? .orange : .secondary)
+                if hasUnsavedChanges {
+                    Button("Revert") {
+                        autosaveTask?.cancel()
+                        savedBadgeTask?.cancel()
+                        autosaveTask = nil
+                        savedBadgeTask = nil
+                        isAutosaving = false
+                        recentlySavedBlockIndex = nil
+                        draftBody = lastSavedBody
+                        errorMessage = nil
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
         }
+    }
+
+    private var editor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Page body")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            TextEditor(text: $draftBody)
+                .font(.system(size: 15))
+                .scrollContentBackground(.hidden)
+                .padding(14)
+                .frame(minHeight: 640)
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.28))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(hasUnsavedChanges ? Color.orange.opacity(0.35) : Color.secondary.opacity(0.18), lineWidth: 1)
+                )
+                .cornerRadius(6)
+                .onChange(of: draftBody) { _, newValue in
+                    scheduleAutosave(for: newValue)
+                }
+        }
+    }
+
+    private var editHistoryCallout: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(page.pendingGeneratedUpdate ? "User edits preserved" : "User-edited page")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(page.pendingGeneratedUpdate
+                    ? "Ghost Pepper saved the generated update in local history instead of overwriting this page."
+                    : "This 2nd Brain page has been edited since Ghost Pepper last generated it.")
+                    .font(.system(size: 11))
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.blue.opacity(0.10))
+        .cornerRadius(6)
     }
 
     private func sourceCallout(_ source: String) -> some View {
@@ -3774,13 +6922,160 @@ private struct GeneratedWikiPageView: View {
     }
 
     private var bodyRendered: some View {
-        let blocks = MarkdownBlockParser.parse(page.body)
+        let blocks = EditableMarkdownBlock.split(draftBody)
         return VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                renderBlock(block)
+            ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+                editableBlock(block, index: index, allBlocks: blocks)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func editableBlock(_ block: EditableMarkdownBlock, index: Int, allBlocks: [EditableMarkdownBlock]) -> some View {
+        if editingBlockIndex == index {
+            ZStack(alignment: .topLeading) {
+                BlockKeyboardTextEditor(
+                    text: $editingBlockText,
+                    onCommit: { finishEditingBlock(index) },
+                    onCancel: { cancelEditingBlock() }
+                )
+                    .font(.system(size: 14))
+                    .padding(10)
+                    .frame(minHeight: block.editHeight)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+                    .cornerRadius(6)
+                    .onChange(of: editingBlockText) { _, newValue in
+                        let currentBlocks = EditableMarkdownBlock.split(draftBody)
+                        let nextBody = Self.replacingBlock(at: index, in: currentBlocks, with: newValue)
+                        draftBody = nextBody
+                        scheduleAutosave(for: nextBody)
+                    }
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                    .foregroundStyle(Color.orange.opacity(0.85))
+                    .allowsHitTesting(false)
+                Text("Editing")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(Capsule())
+                    .padding(.leading, 10)
+                    .offset(y: -10)
+            }
+            .padding(6)
+            .background(Color.orange.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            ZStack(alignment: .topTrailing) {
+                renderBlock(block.rendered)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if recentlySavedBlockIndex == index {
+                    Text("Saved")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.green.opacity(0.12))
+                        .clipShape(Capsule())
+                        .transition(.opacity.combined(with: .scale))
+                }
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !linkClickInProgress else {
+                    linkClickInProgress = false
+                    return
+                }
+                startEditingBlock(index, raw: block.raw)
+            }
+        }
+    }
+
+    private func startEditingBlock(_ index: Int, raw: String) {
+        editingBlockIndex = index
+        editingBlockText = raw
+        recentlySavedBlockIndex = nil
+        errorMessage = nil
+        DispatchQueue.main.async {
+            blockEditorFocused = true
+        }
+    }
+
+    private func finishEditingBlock(_ index: Int) {
+        if editingBlockIndex == index {
+            let currentBlocks = EditableMarkdownBlock.split(draftBody)
+            draftBody = Self.replacingBlock(at: index, in: currentBlocks, with: editingBlockText)
+            saveImmediately(for: draftBody)
+        }
+        editingBlockIndex = nil
+        editingBlockText = ""
+        errorMessage = nil
+        recentlySavedBlockIndex = index
+        savedBadgeTask?.cancel()
+        savedBadgeTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 1_200_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            if recentlySavedBlockIndex == index {
+                recentlySavedBlockIndex = nil
+            }
+        }
+    }
+
+    private func cancelEditingBlock() {
+        editingBlockIndex = nil
+        editingBlockText = ""
+        errorMessage = nil
+    }
+
+    private func scheduleAutosave(for body: String) {
+        autosaveTask?.cancel()
+        guard body != lastSavedBody else {
+            isAutosaving = false
+            return
+        }
+        isAutosaving = true
+        autosaveTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 800_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            do {
+                try onSave(page, body)
+                lastSavedBody = body
+                errorMessage = nil
+            } catch {
+                errorMessage = "Could not autosave 2nd Brain page: \(error.localizedDescription)"
+            }
+            isAutosaving = false
+        }
+    }
+
+    private func saveImmediately(for body: String) {
+        autosaveTask?.cancel()
+        guard body != lastSavedBody else {
+            isAutosaving = false
+            return
+        }
+        isAutosaving = true
+        do {
+            try onSave(page, body)
+            lastSavedBody = body
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not save 2nd Brain page: \(error.localizedDescription)"
+        }
+        isAutosaving = false
     }
 
     @ViewBuilder
@@ -3791,13 +7086,11 @@ private struct GeneratedWikiPageView: View {
                 .font(headingFont(for: level))
                 .padding(.top, level <= 2 ? 8 : 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
         case .paragraph(let text):
             inlineText(text)
                 .font(.system(size: 14))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
         case .bulletList(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -3805,11 +7098,21 @@ private struct GeneratedWikiPageView: View {
                         Text("•")
                             .font(.system(size: 14))
                             .foregroundStyle(.secondary)
-                        inlineText(item)
-                            .font(.system(size: 14))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
+                        if let sourceMeeting = Self.sourceMeetingPath(in: item) {
+                            Button(action: { onOpenSourceMeeting(sourceMeeting) }) {
+                                Text(sourceMeeting)
+                                    .font(.system(size: 14, design: .monospaced))
+                                    .foregroundStyle(.blue)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open source meeting")
+                        } else {
+                            inlineText(item)
+                                .font(.system(size: 14))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }
@@ -3824,15 +7127,49 @@ private struct GeneratedWikiPageView: View {
         }
     }
 
-    private func inlineText(_ text: String) -> Text {
-        let transformed = Self.transformWikilinks(text)
+    private func inlineText(_ text: String) -> some View {
+        FlowLayout(spacing: 0) {
+            ForEach(Array(Self.inlineTokens(text).enumerated()), id: \.offset) { _, token in
+                switch token {
+                case .text(let value):
+                    markdownText(value)
+                case .wikilink(let name, let slug):
+                    let displayName = onResolveWikilinkTitle(slug) ?? name
+                    Button {
+                        linkClickInProgress = true
+                        DispatchQueue.main.async {
+                            linkClickInProgress = false
+                        }
+                        let cmdHeld = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
+                        if cmdHeld {
+                            onOpenWikilinkInNewTab(slug)
+                        } else {
+                            onOpenWikilink(slug)
+                        }
+                    } label: {
+                        Text(displayName)
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Open") { onOpenWikilink(slug) }
+                        Button("Open in New Tab") { onOpenWikilinkInNewTab(slug) }
+                    }
+                    .help("Open \(displayName). Command-click opens in a new tab.")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func markdownText(_ value: String) -> Text {
         if let attributed = try? AttributedString(
-            markdown: transformed,
+            markdown: value,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             return Text(attributed)
         }
-        return Text(text)
+        return Text(value)
     }
 
     private func headingFont(for level: Int) -> Font {
@@ -3859,6 +7196,282 @@ private struct GeneratedWikiPageView: View {
         }
         return result
     }
+
+    private enum InlineToken: Equatable {
+        case text(String)
+        case wikilink(name: String, slug: String)
+    }
+
+    private static func inlineTokens(_ text: String) -> [InlineToken] {
+        var out: [InlineToken] = []
+        let pattern = #"\[\[([^\]]+)\]\]|\[([^\]]+)\]\(generated-wikilink://([^\)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return textWordTokens(text)
+        }
+        let nsRange = NSRange(text.startIndex..., in: text)
+        var cursor = text.startIndex
+        for match in regex.matches(in: text, range: nsRange) {
+            guard let fullRange = Range(match.range, in: text) else { continue }
+            if cursor < fullRange.lowerBound {
+                out.append(contentsOf: textWordTokens(String(text[cursor..<fullRange.lowerBound])))
+            }
+            if let wikiNameRange = Range(match.range(at: 1), in: text) {
+                let name = String(text[wikiNameRange])
+                out.append(.wikilink(name: name, slug: MarkdownArchivePaths.slugForIndexEntry(name)))
+            } else if let markdownNameRange = Range(match.range(at: 2), in: text),
+                      let markdownSlugRange = Range(match.range(at: 3), in: text) {
+                out.append(.wikilink(name: String(text[markdownNameRange]), slug: String(text[markdownSlugRange])))
+            }
+            cursor = fullRange.upperBound
+        }
+        if cursor < text.endIndex {
+            out.append(contentsOf: textWordTokens(String(text[cursor...])))
+        }
+        return out.isEmpty ? textWordTokens(text) : out
+    }
+
+    private static func textWordTokens(_ text: String) -> [InlineToken] {
+        guard !text.isEmpty else { return [] }
+        var tokens: [InlineToken] = []
+        let pattern = #"\S+\s*|\s+"#
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            let nsRange = NSRange(text.startIndex..., in: text)
+            for match in regex.matches(in: text, range: nsRange) {
+                guard let range = Range(match.range, in: text) else { continue }
+                tokens.append(.text(String(text[range])))
+            }
+        }
+        return tokens.isEmpty ? [.text(text)] : tokens
+    }
+
+    private static func sourceMeetingPath(in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let patterns = [
+            #"^`([^`]+\.md)`$"#,
+            #"^([^`]+\.md)$"#
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(trimmed.startIndex..., in: trimmed)
+            guard let match = regex.firstMatch(in: trimmed, range: range),
+                  let capture = Range(match.range(at: 1), in: trimmed) else { continue }
+            return String(trimmed[capture])
+        }
+        return nil
+    }
+
+    private static func replacingBlock(at index: Int, in blocks: [EditableMarkdownBlock], with text: String) -> String {
+        var raws = blocks.map(\.raw)
+        guard raws.indices.contains(index) else { return raws.joined(separator: "\n\n") }
+        let replacement = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if replacement.isEmpty {
+            raws.remove(at: index)
+        } else {
+            raws[index] = replacement
+        }
+        return raws
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    private struct EditableMarkdownBlock: Identifiable, Equatable {
+        let id: Int
+        var raw: String
+
+        var rendered: MarkdownBlock {
+            MarkdownBlockParser.parse(raw).first ?? .paragraph(raw)
+        }
+
+        var editHeight: CGFloat {
+            let lineCount = max(2, raw.components(separatedBy: "\n").count)
+            return CGFloat(min(240, max(72, lineCount * 24 + 28)))
+        }
+
+        static func split(_ body: String) -> [EditableMarkdownBlock] {
+            var blocks: [String] = []
+            var current: [String] = []
+            var inFence = false
+            var inList = false
+
+            func flush() {
+                let text = current.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    blocks.append(text)
+                }
+                current = []
+                inList = false
+            }
+
+            for raw in body.components(separatedBy: "\n") {
+                let trimmed = raw.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("```") {
+                    current.append(raw)
+                    if inFence {
+                        inFence = false
+                        flush()
+                    } else {
+                        inFence = true
+                    }
+                    continue
+                }
+                if inFence {
+                    current.append(raw)
+                    continue
+                }
+                if trimmed.isEmpty {
+                    flush()
+                    continue
+                }
+                if headingLevel(trimmed) != nil {
+                    flush()
+                    current.append(raw)
+                    flush()
+                    continue
+                }
+                if bulletItem(trimmed) != nil {
+                    flush()
+                    current.append(raw)
+                    inList = true
+                    continue
+                }
+                if inList {
+                    flush()
+                }
+                current.append(raw)
+            }
+            flush()
+            return blocks.enumerated().map { EditableMarkdownBlock(id: $0.offset, raw: $0.element) }
+        }
+
+        private static func headingLevel(_ line: String) -> Int? {
+            var hashes = 0
+            for ch in line {
+                if ch == "#" { hashes += 1 } else { break }
+            }
+            guard hashes >= 1 && hashes <= 6 else { return nil }
+            let after = line.index(line.startIndex, offsetBy: hashes)
+            guard after < line.endIndex, line[after] == " " else { return nil }
+            return hashes
+        }
+
+        private static func bulletItem(_ line: String) -> String? {
+            if line.hasPrefix("- ") { return String(line.dropFirst(2)) }
+            if line.hasPrefix("* ") { return String(line.dropFirst(2)) }
+            if line.hasPrefix("• ") { return String(line.dropFirst(2)) }
+            return nil
+        }
+    }
+}
+
+private struct BlockKeyboardTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    var onCommit: () -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onCommit: onCommit, onCancel: onCancel)
+    }
+
+    func makeNSView(context: Context) -> KeyHandlingTextView {
+        let textView = KeyHandlingTextView()
+        textView.delegate = context.coordinator
+        textView.string = text
+        textView.font = NSFont.systemFont(ofSize: 14)
+        textView.textColor = NSColor.labelColor
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.allowsUndo = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainerInset = NSSize(width: 0, height: 0)
+        textView.keyHandler = context.coordinator
+        return textView
+    }
+
+    func updateNSView(_ textView: KeyHandlingTextView, context: Context) {
+        context.coordinator.text = $text
+        context.coordinator.onCommit = onCommit
+        context.coordinator.onCancel = onCancel
+        if textView.string != text {
+            textView.string = text
+        }
+        textView.keyHandler = context.coordinator
+        if context.coordinator.needsInitialFocus, let window = textView.window {
+            context.coordinator.needsInitialFocus = false
+            DispatchQueue.main.async {
+                window.makeFirstResponder(textView)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate, KeyHandlingTextViewDelegate {
+        var text: Binding<String>
+        var onCommit: () -> Void
+        var onCancel: () -> Void
+        var needsInitialFocus = true
+        var isClosing = false
+
+        init(text: Binding<String>, onCommit: @escaping () -> Void, onCancel: @escaping () -> Void) {
+            self.text = text
+            self.onCommit = onCommit
+            self.onCancel = onCancel
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            guard !isClosing, let textView = notification.object as? NSTextView else { return }
+            commitEditing(from: textView)
+        }
+
+        func commitEditing(from textView: NSTextView) {
+            guard !isClosing else { return }
+            isClosing = true
+            text.wrappedValue = textView.string
+            onCommit()
+        }
+
+        func cancelEditing(from textView: NSTextView) {
+            guard !isClosing else { return }
+            isClosing = true
+            text.wrappedValue = textView.string
+            onCancel()
+        }
+    }
+
+    final class KeyHandlingTextView: NSTextView {
+        weak var keyHandler: KeyHandlingTextViewDelegate?
+
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 53 {
+                keyHandler?.cancelEditing(from: self)
+                return
+            }
+            if event.keyCode == 36 || event.keyCode == 76 {
+                if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift) {
+                    insertNewlineIgnoringFieldEditor(self)
+                } else {
+                    keyHandler?.commitEditing(from: self)
+                }
+                return
+            }
+            super.keyDown(with: event)
+        }
+    }
+}
+
+private protocol KeyHandlingTextViewDelegate: AnyObject {
+    func commitEditing(from textView: NSTextView)
+    func cancelEditing(from textView: NSTextView)
 }
 
 private struct SecondBrainDashboardView: View {
@@ -3867,8 +7480,11 @@ private struct SecondBrainDashboardView: View {
     var onLint: () -> Void
     var onOpenPage: (URL) -> Void
     var onOpenPageInNewTab: (URL) -> Void
+    var onArchive: () -> Void
 
     @State private var graph = SecondBrainGraph(nodes: [], edges: [])
+    @State private var showArchiveConfirmation = false
+    @State private var archiveAlertMessage: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -3898,6 +7514,13 @@ private struct SecondBrainDashboardView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+
+                Button(role: .destructive, action: { showArchiveConfirmation = true }) {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(state.isGeneratingMeetingWiki || graph.nodes.isEmpty)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
@@ -3932,6 +7555,29 @@ private struct SecondBrainDashboardView: View {
         }
         .onAppear(perform: rebuildGraph)
         .onChange(of: state.generatedWikiFolders) { _, _ in rebuildGraph() }
+        .confirmationDialog(
+            "Archive 2nd Brain?",
+            isPresented: $showArchiveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Choose Archive Location...", role: .destructive) {
+                chooseArchiveLocationAndArchive()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This moves only derived 2nd Brain files, local history, and 2nd Brain cache files into an archive folder. Meeting sources, recordings, Granola imports, and Airtable imports are not moved.")
+        }
+        .alert(
+            "2nd Brain Archive",
+            isPresented: Binding(
+                get: { archiveAlertMessage != nil },
+                set: { if !$0 { archiveAlertMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(archiveAlertMessage ?? "")
+        }
     }
 
     @ViewBuilder
@@ -3981,6 +7627,27 @@ private struct SecondBrainDashboardView: View {
         state.loadGeneratedWikiFolders()
         graph = SecondBrainGraph.build(from: state.generatedWikiFolders)
     }
+
+    private func chooseArchiveLocationAndArchive() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose where to archive this 2nd Brain"
+        panel.message = "Ghost Pepper will create a dated archive folder here. Source meetings and imports will stay where they are."
+        panel.prompt = "Archive Here"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            let archiveURL = try state.archiveSecondBrain(to: destination)
+            onArchive()
+            rebuildGraph()
+            archiveAlertMessage = "Archived 2nd Brain to:\n\(archiveURL.path)\n\nSource meetings and imports were not moved."
+        } catch {
+            archiveAlertMessage = error.localizedDescription
+        }
+    }
 }
 
 private struct SecondBrainGraphView: View {
@@ -3989,54 +7656,645 @@ private struct SecondBrainGraphView: View {
     var onOpenPageInNewTab: (URL) -> Void
 
     var body: some View {
-        GeometryReader { proxy in
-            let positions = graph.positions(in: proxy.size)
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.62))
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.62))
 
-                if graph.nodes.isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                            .font(.system(size: 28))
-                            .foregroundStyle(.secondary)
-                        Text("No 2nd Brain graph yet")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("Add meetings to the 2nd Brain to create pages and links.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
+            if graph.nodes.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                    Text("No 2nd Brain graph yet")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Add meetings to the 2nd Brain to create pages and links.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
-
-                ForEach(graph.edges) { edge in
-                    if let start = positions[edge.sourceID], let end = positions[edge.targetID] {
-                        Path { path in
-                            path.move(to: start)
-                            path.addLine(to: end)
-                        }
-                        .stroke(Color.secondary.opacity(0.18), lineWidth: edge.weight > 1 ? 1.4 : 0.8)
-                    }
-                }
-
-                ForEach(graph.nodes) { node in
-                    let point = positions[node.id] ?? CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                    SecondBrainGraphNodeView(node: node)
-                        .position(point)
-                        .onTapGesture { onOpenPageInNewTab(node.url) }
-                        .contextMenu {
-                            Button("Open") { onOpenPage(node.url) }
-                            Button("Open in New Tab") { onOpenPageInNewTab(node.url) }
-                            Button("Show in Finder") {
-                                NSWorkspace.shared.selectFile(
-                                    node.url.path,
-                                    inFileViewerRootedAtPath: node.url.deletingLastPathComponent().path
-                                )
-                            }
-                        }
-                }
+            } else {
+                SecondBrainGraphWebView(
+                    graph: graph,
+                    onOpenPage: onOpenPage,
+                    onOpenPageInNewTab: onOpenPageInNewTab
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+                )
             }
         }
     }
+}
+
+private struct SecondBrainGraphWebView: NSViewRepresentable {
+    let graph: SecondBrainGraph
+    var onOpenPage: (URL) -> Void
+    var onOpenPageInNewTab: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onOpenPage: onOpenPage, onOpenPageInNewTab: onOpenPageInNewTab)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.userContentController.add(context.coordinator, name: "ghostPepperGraph")
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.loadHTMLString(Self.html, baseURL: Bundle.main.resourceURL)
+        context.coordinator.update(graph: graph, in: webView)
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onOpenPage = onOpenPage
+        context.coordinator.onOpenPageInNewTab = onOpenPageInNewTab
+        context.coordinator.update(graph: graph, in: webView)
+    }
+
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: "ghostPepperGraph")
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var onOpenPage: (URL) -> Void
+        var onOpenPageInNewTab: (URL) -> Void
+        private var graph = SecondBrainGraph(nodes: [], edges: [])
+        private var pendingPayload: String?
+        private var didFinishLoading = false
+
+        init(onOpenPage: @escaping (URL) -> Void, onOpenPageInNewTab: @escaping (URL) -> Void) {
+            self.onOpenPage = onOpenPage
+            self.onOpenPageInNewTab = onOpenPageInNewTab
+        }
+
+        func update(graph: SecondBrainGraph, in webView: WKWebView) {
+            self.graph = graph
+            guard let payload = Self.payloadJSONString(for: graph) else { return }
+            pendingPayload = payload
+            guard didFinishLoading else { return }
+            renderPendingPayload(in: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            didFinishLoading = true
+            renderPendingPayload(in: webView)
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "ghostPepperGraph",
+                  let body = message.body as? [String: Any],
+                  let action = body["action"] as? String,
+                  let id = body["id"] as? String,
+                  let node = graph.nodes.first(where: { $0.id == id }) else {
+                return
+            }
+
+            switch action {
+            case "open":
+                onOpenPage(node.url)
+            case "openInNewTab":
+                onOpenPageInNewTab(node.url)
+            default:
+                break
+            }
+        }
+
+        private func renderPendingPayload(in webView: WKWebView) {
+            guard let payload = pendingPayload else { return }
+            let script = "window.renderSecondBrainGraph(\(payload));"
+            webView.evaluateJavaScript(script)
+        }
+
+        private static func payloadJSONString(for graph: SecondBrainGraph) -> String? {
+            let payload = SecondBrainGraphPayload(graph: graph)
+            let encoder = JSONEncoder()
+            guard let data = try? encoder.encode(payload) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }
+    }
+
+    private struct SecondBrainGraphPayload: Encodable {
+        struct Node: Encodable {
+            let id: String
+            let label: String
+            let type: String
+            let folderTitle: String
+            let degree: Int
+            let isHub: Bool
+            let size: CGFloat
+        }
+
+        struct Edge: Encodable {
+            let id: String
+            let source: String
+            let target: String
+            let weight: Int
+        }
+
+        let nodes: [Node]
+        let edges: [Edge]
+
+        init(graph: SecondBrainGraph) {
+            nodes = graph.nodes.map { node in
+                Node(
+                    id: node.id,
+                    label: node.title,
+                    type: node.type,
+                    folderTitle: node.folderTitle,
+                    degree: node.degree,
+                    isHub: node.isHub,
+                    size: node.radius * 2
+                )
+            }
+            edges = graph.edges.map { edge in
+                Edge(
+                    id: edge.id,
+                    source: edge.sourceID,
+                    target: edge.targetID,
+                    weight: edge.weight
+                )
+            }
+        }
+    }
+
+    private static let html = """
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <script src="cytoscape.min.js"></script>
+      <style>
+        :root {
+          color-scheme: light dark;
+          --bg: rgba(248, 248, 248, 0.84);
+          --panel: rgba(255, 255, 255, 0.88);
+          --panel-soft: rgba(118, 118, 128, 0.08);
+          --border: rgba(60, 60, 67, 0.16);
+          --text: #1d1d1f;
+          --muted: rgba(60, 60, 67, 0.68);
+          --edge: rgba(60, 60, 67, 0.22);
+          --label-outline: rgba(248, 248, 248, 0.92);
+          --orange: #e8751a;
+          --blue: #4d8fb3;
+          --green: #5d9b78;
+          --violet: #9b79b8;
+          --yellow: #c49a35;
+          --neutral: #8e8e93;
+        }
+
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --bg: rgba(28, 28, 30, 0.74);
+            --panel: rgba(44, 44, 46, 0.84);
+            --panel-soft: rgba(255, 255, 255, 0.07);
+            --border: rgba(235, 235, 245, 0.14);
+            --text: #f2f2f7;
+            --muted: rgba(235, 235, 245, 0.62);
+            --edge: rgba(235, 235, 245, 0.20);
+            --label-outline: rgba(28, 28, 30, 0.94);
+            --neutral: #8e8e93;
+          }
+        }
+
+        html, body, #app, #cy {
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          overflow: hidden;
+          background: var(--bg);
+          font: 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+          color: var(--text);
+        }
+
+        #cy {
+          position: absolute;
+          inset: 0;
+        }
+
+        .toolbar {
+          position: absolute;
+          left: 12px;
+          top: 12px;
+          z-index: 2;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px;
+          background: var(--panel);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          backdrop-filter: blur(12px);
+        }
+
+        input {
+          width: 190px;
+          height: 24px;
+          box-sizing: border-box;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: var(--panel-soft);
+          color: var(--text);
+          outline: none;
+          padding: 0 9px;
+        }
+
+        button {
+          height: 24px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          color: var(--text);
+          background: var(--panel-soft);
+          padding: 0 9px;
+          font: inherit;
+        }
+
+        button:hover {
+          border-color: rgba(232, 117, 26, 0.38);
+        }
+
+        .stats {
+          color: var(--muted);
+          font-variant-numeric: tabular-nums;
+          padding: 0 5px;
+          white-space: nowrap;
+        }
+
+        .inspector {
+          position: absolute;
+          right: 12px;
+          top: 12px;
+          z-index: 2;
+          width: min(300px, calc(100% - 24px));
+          box-sizing: border-box;
+          padding: 10px;
+          background: var(--panel);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          backdrop-filter: blur(12px);
+        }
+
+        .inspector.hidden {
+          display: none;
+        }
+
+        .title {
+          font-size: 13px;
+          font-weight: 650;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .meta {
+          color: var(--muted);
+          margin-top: 4px;
+          line-height: 1.35;
+        }
+
+        .actions {
+          display: flex;
+          gap: 8px;
+          margin-top: 10px;
+        }
+
+        .actions button:first-child {
+          background: rgba(232, 117, 26, 0.16);
+          border-color: rgba(232, 117, 26, 0.32);
+        }
+
+        .legend {
+          position: absolute;
+          left: 12px;
+          bottom: 12px;
+          z-index: 2;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 9px;
+          max-width: calc(100% - 24px);
+          padding: 7px 9px;
+          background: var(--panel);
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          color: var(--muted);
+          backdrop-filter: blur(12px);
+        }
+
+        .dot {
+          display: inline-block;
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          margin-right: 5px;
+        }
+
+        .empty {
+          position: absolute;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          color: var(--muted);
+        }
+      </style>
+    </head>
+    <body>
+      <div id="app">
+        <div id="cy"></div>
+        <div class="toolbar">
+          <input id="search" placeholder="Search pages..." autocomplete="off">
+          <button id="fit">Fit</button>
+          <button id="clear">Clear</button>
+          <span class="stats" id="stats"></span>
+        </div>
+        <div class="inspector hidden" id="inspector">
+          <div class="title" id="selectedTitle"></div>
+          <div class="meta" id="selectedMeta"></div>
+          <div class="actions">
+            <button id="openTab">Open in Tab</button>
+            <button id="openHere">Open</button>
+          </div>
+        </div>
+        <div class="legend">
+          <span><span class="dot" style="background: var(--orange)"></span>Hub</span>
+          <span><span class="dot" style="background: var(--blue)"></span>Person</span>
+          <span><span class="dot" style="background: var(--green)"></span>Company</span>
+          <span><span class="dot" style="background: var(--violet)"></span>Concept</span>
+          <span><span class="dot" style="background: var(--yellow)"></span>Meeting</span>
+        </div>
+      </div>
+
+      <script>
+        let cy = null;
+        let selectedNodeID = null;
+
+        function currentPalette() {
+          const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          return dark ? {
+            hub: '#e8751a',
+            meeting_overview: '#b99342',
+            person: '#5f9fbd',
+            company: '#6ea983',
+            concept: '#a184bd',
+            default: '#8e8e93',
+            edge: 'rgba(235, 235, 245, 0.20)',
+            border: 'rgba(235, 235, 245, 0.28)',
+            hubBorder: '#efb27d',
+            label: '#f2f2f7',
+            labelOutline: '#1c1c1e',
+            focusedBorder: '#f8d2b2',
+            matchedBorder: '#d8b45a'
+          } : {
+            hub: '#e8751a',
+            meeting_overview: '#b98d28',
+            person: '#4d8fb3',
+            company: '#5d9b78',
+            concept: '#9b79b8',
+            default: '#8e8e93',
+            edge: 'rgba(60, 60, 67, 0.22)',
+            border: 'rgba(60, 60, 67, 0.24)',
+            hubBorder: '#b95d14',
+            label: '#1d1d1f',
+            labelOutline: '#f8f8f8',
+            focusedBorder: '#ad4f0d',
+            matchedBorder: '#9a741c'
+          };
+        }
+
+        function colorFor(node) {
+          const colors = currentPalette();
+          if (node.isHub) return colors.hub;
+          return colors[node.type] || colors.default;
+        }
+
+        function cssEscape(value) {
+          if (window.CSS && CSS.escape) return CSS.escape(value);
+          return String(value).replace(/["\\\\]/g, '\\\\$&');
+        }
+
+        function post(action, id) {
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ghostPepperGraph) {
+            window.webkit.messageHandlers.ghostPepperGraph.postMessage({ action, id });
+          }
+        }
+
+        function setInspector(node) {
+          const inspector = document.getElementById('inspector');
+          if (!node) {
+            inspector.classList.add('hidden');
+            selectedNodeID = null;
+            return;
+          }
+          selectedNodeID = node.id();
+          const data = node.data();
+          document.getElementById('selectedTitle').textContent = data.label;
+          document.getElementById('selectedMeta').textContent =
+            `${data.degree} links · ${data.folderTitle} · ${String(data.type).replaceAll('_', ' ')}`;
+          inspector.classList.remove('hidden');
+        }
+
+        function focusNode(node) {
+          cy.elements().removeClass('dimmed focused neighbor matched');
+          if (!node) {
+            setInspector(null);
+            return;
+          }
+          const neighborhood = node.closedNeighborhood();
+          cy.elements().not(neighborhood).addClass('dimmed');
+          neighborhood.addClass('neighbor');
+          node.addClass('focused');
+          setInspector(node);
+        }
+
+        function runSearch(query) {
+          if (!cy) return;
+          cy.elements().removeClass('matched');
+          const cleaned = query.trim().toLowerCase();
+          if (!cleaned) return;
+          cy.nodes().filter(node => String(node.data('label')).toLowerCase().includes(cleaned)).addClass('matched');
+        }
+
+        window.renderSecondBrainGraph = function(payload) {
+          const palette = currentPalette();
+          const elements = [
+            ...payload.nodes.map(node => ({
+              group: 'nodes',
+              data: {
+                id: node.id,
+                label: node.label,
+                type: node.type,
+                folderTitle: node.folderTitle,
+                degree: node.degree,
+                isHub: node.isHub,
+                size: Math.max(18, Math.min(58, node.size)),
+                color: colorFor(node),
+                borderColor: node.isHub ? palette.hubBorder : palette.border,
+                labelColor: palette.label,
+                labelOutline: palette.labelOutline,
+                labelSize: node.isHub ? 12 : 9,
+                labelOpacity: node.isHub || node.degree >= 3 ? 1 : 0
+              },
+              classes: `${node.isHub ? 'hub ' : ''}${node.type}`
+            })),
+            ...payload.edges.map(edge => ({
+              group: 'edges',
+              data: {
+                id: edge.id,
+                source: edge.source,
+                target: edge.target,
+                weight: edge.weight,
+                width: Math.max(0.8, Math.min(3.2, 0.7 + edge.weight * 0.45)),
+                color: palette.edge
+              }
+            }))
+          ];
+
+          if (cy) cy.destroy();
+          selectedNodeID = null;
+          document.getElementById('inspector').classList.add('hidden');
+          document.getElementById('stats').textContent = `${payload.nodes.length} nodes · ${payload.edges.length} links`;
+
+          cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements,
+            wheelSensitivity: 0.22,
+            minZoom: 0.12,
+            maxZoom: 3.5,
+            style: [
+              {
+                selector: 'node',
+                style: {
+                  'width': 'data(size)',
+                  'height': 'data(size)',
+                  'background-color': 'data(color)',
+                  'border-width': 1,
+                  'border-color': 'data(borderColor)',
+                  'label': 'data(label)',
+                  'font-family': '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+                  'font-size': 'data(labelSize)',
+                  'font-weight': 520,
+                  'color': 'data(labelColor)',
+                  'text-outline-width': 3,
+                  'text-outline-color': 'data(labelOutline)',
+                  'text-valign': 'bottom',
+                  'text-margin-y': 8,
+                  'text-opacity': 'data(labelOpacity)',
+                  'overlay-padding': 6,
+                  'transition-property': 'opacity, border-width, border-color, width, height, text-opacity',
+                  'transition-duration': '120ms'
+                }
+              },
+              {
+                selector: 'node.hub',
+                style: {
+                  'border-width': 3,
+                  'border-color': palette.hubBorder,
+                  'text-opacity': 1,
+                  'font-weight': 700
+                }
+              },
+              {
+                selector: 'edge',
+                style: {
+                  'width': 'data(width)',
+                  'line-color': 'data(color)',
+                  'curve-style': 'bezier',
+                  'opacity': 0.70,
+                  'transition-property': 'opacity, line-color, width',
+                  'transition-duration': '120ms'
+                }
+              },
+              {
+                selector: '.focused',
+                style: {
+                  'border-width': 4,
+                  'border-color': palette.focusedBorder,
+                  'text-opacity': 1,
+                  'z-index': 20
+                }
+              },
+              {
+                selector: '.neighbor',
+                style: {
+                  'text-opacity': 1
+                }
+              },
+              {
+                selector: '.dimmed',
+                style: {
+                  'opacity': 0.20,
+                  'text-opacity': 0
+                }
+              },
+              {
+                selector: '.matched',
+                style: {
+                  'border-width': 4,
+                  'border-color': palette.matchedBorder,
+                  'text-opacity': 1,
+                  'z-index': 30
+                }
+              }
+            ],
+            layout: {
+              name: 'cose',
+              animate: true,
+              animationDuration: 620,
+              randomize: true,
+              componentSpacing: 98,
+              nodeOverlap: 18,
+              nodeRepulsion: 720000,
+              idealEdgeLength: 118,
+              edgeElasticity: 120,
+              nestingFactor: 1.1,
+              gravity: 0.16,
+              numIter: 1400,
+              initialTemp: 220,
+              coolingFactor: 0.96,
+              minTemp: 1.0,
+              fit: true,
+              padding: 52
+            }
+          });
+
+          cy.on('tap', 'node', event => focusNode(event.target));
+          cy.on('tap', event => {
+            if (event.target === cy) focusNode(null);
+          });
+          cy.on('mouseover', 'node', event => event.target.addClass('neighbor'));
+          cy.on('mouseout', 'node', event => {
+            if (!selectedNodeID || event.target.id() !== selectedNodeID) event.target.removeClass('neighbor');
+          });
+
+          const query = document.getElementById('search').value || '';
+          runSearch(query);
+        };
+
+        document.getElementById('fit').addEventListener('click', () => {
+          if (cy) cy.fit(undefined, 52);
+        });
+        document.getElementById('clear').addEventListener('click', () => {
+          document.getElementById('search').value = '';
+          if (cy) {
+            cy.elements().removeClass('dimmed focused neighbor matched');
+            setInspector(null);
+            cy.fit(undefined, 52);
+          }
+        });
+        document.getElementById('search').addEventListener('input', event => runSearch(event.target.value));
+        document.getElementById('openTab').addEventListener('click', () => {
+          if (selectedNodeID) post('openInNewTab', selectedNodeID);
+        });
+        document.getElementById('openHere').addEventListener('click', () => {
+          if (selectedNodeID) post('open', selectedNodeID);
+        });
+      </script>
+    </body>
+    </html>
+    """
 }
 
 private struct SecondBrainGraphNodeView: View {
@@ -4213,33 +8471,187 @@ private struct SecondBrainGraph: Equatable {
         let width = max(size.width, 320)
         let height = max(size.height, 320)
         let center = CGPoint(x: width / 2, y: height / 2)
-        let hubs = nodes.filter(\.isHub)
-        let others = nodes.filter { !$0.isHub }
-        var out: [String: CGPoint] = [:]
+        let horizontalRadius = max(120, width * 0.42)
+        let verticalRadius = max(120, height * 0.40)
+        let maxDegree = max(nodes.map(\.degree).max() ?? 1, 1)
+        let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        let edgeNeighborhoods = neighborhoodMap()
+        var out = initialPositions(
+            center: center,
+            horizontalRadius: horizontalRadius,
+            verticalRadius: verticalRadius,
+            maxDegree: maxDegree
+        )
 
-        if hubs.isEmpty {
-            place(nodes: Array(nodes.prefix(1)), radius: 0, center: center, phase: 0, into: &out)
-            place(nodes: Array(nodes.dropFirst()), radius: min(width, height) * 0.38, center: center, phase: -CGFloat.pi / 2, into: &out)
+        let iterations: Int
+        if nodes.count > 220 {
+            iterations = 110
+        } else if nodes.count > 80 {
+            iterations = 180
         } else {
-            place(nodes: hubs, radius: min(width, height) * 0.18, center: center, phase: -CGFloat.pi / 2, into: &out)
-            place(nodes: others, radius: min(width, height) * 0.39, center: center, phase: -CGFloat.pi / 2, into: &out)
+            iterations = 160
         }
+        let repulsion = min(width, height) * 4.8
+        let centerPull: CGFloat = 0.018
+        let hubCenterPull: CGFloat = 0.045
+        let preferredLinkLength = max(64, min(width, height) * 0.16)
+        let repulsionPairs = repulsionPairs()
+
+        for step in 0..<iterations {
+            var delta = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, CGVector.zero) })
+            let cooling = 1 - CGFloat(step) / CGFloat(iterations)
+            let stepLimit = max(1.2, 10 * cooling)
+
+            for pair in repulsionPairs {
+                let lhs = nodes[pair.0]
+                let rhs = nodes[pair.1]
+                guard let lhsPoint = out[lhs.id], let rhsPoint = out[rhs.id] else { continue }
+                var dx = lhsPoint.x - rhsPoint.x
+                var dy = lhsPoint.y - rhsPoint.y
+                var distanceSquared = dx * dx + dy * dy
+                if distanceSquared < 0.01 {
+                    let angle = stableAngle(for: "\(lhs.id)|\(rhs.id)")
+                    dx = cos(angle)
+                    dy = sin(angle)
+                    distanceSquared = 1
+                }
+                let distance = sqrt(distanceSquared)
+                let isLinked = edgeNeighborhoods[lhs.id, default: []].contains(rhs.id)
+                let minimumDistance = lhs.radius + rhs.radius + (isLinked ? 16 : 28)
+                let force = max(0.5, repulsion / distanceSquared) + max(0, minimumDistance - distance) * 0.24
+                let pushX = dx / distance * force
+                let pushY = dy / distance * force
+                delta[lhs.id, default: .zero].dx += pushX
+                delta[lhs.id, default: .zero].dy += pushY
+                delta[rhs.id, default: .zero].dx -= pushX
+                delta[rhs.id, default: .zero].dy -= pushY
+            }
+
+            for edge in edges {
+                guard let source = nodeByID[edge.sourceID],
+                      let target = nodeByID[edge.targetID],
+                      let sourcePoint = out[edge.sourceID],
+                      let targetPoint = out[edge.targetID] else { continue }
+                let dx = targetPoint.x - sourcePoint.x
+                let dy = targetPoint.y - sourcePoint.y
+                let distance = max(1, sqrt(dx * dx + dy * dy))
+                let degreeBias = CGFloat(source.degree + target.degree) / CGFloat(maxDegree * 2)
+                let desired = preferredLinkLength + (1 - degreeBias) * 38 - CGFloat(min(edge.weight, 5)) * 6
+                let force = (distance - desired) * (0.020 + CGFloat(min(edge.weight, 6)) * 0.006)
+                let pullX = dx / distance * force
+                let pullY = dy / distance * force
+                delta[edge.sourceID, default: .zero].dx += pullX
+                delta[edge.sourceID, default: .zero].dy += pullY
+                delta[edge.targetID, default: .zero].dx -= pullX
+                delta[edge.targetID, default: .zero].dy -= pullY
+            }
+
+            for node in nodes {
+                guard let point = out[node.id] else { continue }
+                let degreeFraction = CGFloat(node.degree) / CGFloat(maxDegree)
+                let pull = node.isHub ? hubCenterPull : centerPull * max(0.25, degreeFraction)
+                delta[node.id, default: .zero].dx += (center.x - point.x) * pull
+                delta[node.id, default: .zero].dy += (center.y - point.y) * pull
+
+                if node.degree == 0 {
+                    let angle = stableAngle(for: node.id)
+                    let target = CGPoint(
+                        x: center.x + cos(angle) * horizontalRadius * 0.95,
+                        y: center.y + sin(angle) * verticalRadius * 0.95
+                    )
+                    delta[node.id, default: .zero].dx += (target.x - point.x) * 0.035
+                    delta[node.id, default: .zero].dy += (target.y - point.y) * 0.035
+                }
+            }
+
+            for node in nodes {
+                guard let point = out[node.id], let movement = delta[node.id] else { continue }
+                let movementLength = max(1, sqrt(movement.dx * movement.dx + movement.dy * movement.dy))
+                let scale = min(stepLimit, movementLength) / movementLength
+                out[node.id] = bounded(
+                    CGPoint(x: point.x + movement.dx * scale, y: point.y + movement.dy * scale),
+                    in: size,
+                    margin: node.radius + 58
+                )
+            }
+        }
+
         return out
     }
 
-    private func place(nodes: [Node], radius: CGFloat, center: CGPoint, phase: CGFloat, into out: inout [String: CGPoint]) {
-        guard !nodes.isEmpty else { return }
-        if nodes.count == 1 || radius == 0 {
-            out[nodes[0].id] = center
-            return
-        }
+    private func initialPositions(center: CGPoint, horizontalRadius: CGFloat, verticalRadius: CGFloat, maxDegree: Int) -> [String: CGPoint] {
+        let count = max(nodes.count, 1)
+        var positions: [String: CGPoint] = [:]
         for (idx, node) in nodes.enumerated() {
-            let angle = phase + CGFloat(idx) / CGFloat(nodes.count) * CGFloat.pi * 2
-            out[node.id] = CGPoint(
-                x: center.x + cos(angle) * radius,
-                y: center.y + sin(angle) * radius
+            let angle = stableAngle(for: node.id) + CGFloat(idx) / CGFloat(count) * 0.33
+            let degreeFraction = CGFloat(node.degree) / CGFloat(maxDegree)
+            let radiusScale = node.degree == 0 ? 0.98 : max(0.22, 0.92 - degreeFraction * 0.56)
+            let jitter = 0.86 + stableUnitValue(for: "\(node.id)-jitter") * 0.22
+            positions[node.id] = CGPoint(
+                x: center.x + cos(angle) * horizontalRadius * radiusScale * jitter,
+                y: center.y + sin(angle) * verticalRadius * radiusScale * jitter
             )
         }
+        return positions
+    }
+
+    private func neighborhoodMap() -> [String: Set<String>] {
+        var neighborhoods: [String: Set<String>] = [:]
+        for edge in edges {
+            neighborhoods[edge.sourceID, default: []].insert(edge.targetID)
+            neighborhoods[edge.targetID, default: []].insert(edge.sourceID)
+        }
+        return neighborhoods
+    }
+
+    private func repulsionPairs() -> [(Int, Int)] {
+        if nodes.count <= 220 {
+            var pairs: [(Int, Int)] = []
+            for lhs in nodes.indices {
+                guard lhs + 1 < nodes.count else { continue }
+                for rhs in (lhs + 1)..<nodes.count {
+                    pairs.append((lhs, rhs))
+                }
+            }
+            return pairs
+        }
+
+        let stride = max(7, nodes.count / 37)
+        let sampleCount = min(48, max(18, nodes.count / 12))
+        var seen: Set<String> = []
+        var pairs: [(Int, Int)] = []
+        for lhs in nodes.indices {
+            for offset in 1...sampleCount {
+                let rhs = (lhs + offset * stride) % nodes.count
+                guard lhs != rhs else { continue }
+                let first = min(lhs, rhs)
+                let second = max(lhs, rhs)
+                let key = "\(first)-\(second)"
+                guard seen.insert(key).inserted else { continue }
+                pairs.append((first, second))
+            }
+        }
+        return pairs
+    }
+
+    private func bounded(_ point: CGPoint, in size: CGSize, margin: CGFloat) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, margin), max(margin, size.width - margin)),
+            y: min(max(point.y, margin), max(margin, size.height - margin))
+        )
+    }
+
+    private func stableAngle(for value: String) -> CGFloat {
+        stableUnitValue(for: value) * CGFloat.pi * 2
+    }
+
+    private func stableUnitValue(for value: String) -> CGFloat {
+        var hash: UInt64 = 1469598103934665603
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        return CGFloat(hash % 10_000) / 10_000
     }
 
     private static func wikilinks(in text: String) -> [String] {
@@ -5112,6 +9524,7 @@ struct MeetingSidebarView: View {
             .padding(.horizontal, 16)
             .padding(.top, 16)
             .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Divider().padding(.horizontal, 12).padding(.bottom, 4)
 
@@ -5138,6 +9551,7 @@ struct MeetingSidebarView: View {
             .cornerRadius(6)
             .padding(.horizontal, 12)
             .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
@@ -5200,9 +9614,12 @@ struct MeetingSidebarView: View {
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: .infinity)
         }
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
         .background(Color(nsColor: .controlBackgroundColor))
         .onAppear {
             state.loadGeneratedWikiFolders()
@@ -5246,7 +9663,6 @@ struct MeetingSidebarView: View {
         if !state.wikiProposals.isEmpty {
             wikiSuggestionRow
         }
-        newWikiRow
     }
 
     @ViewBuilder
@@ -5323,10 +9739,11 @@ struct MeetingSidebarView: View {
                 Image(systemName: icon)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-            Text(title)
+                Text(title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("(\(count))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -5343,6 +9760,7 @@ struct MeetingSidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5372,6 +9790,7 @@ struct MeetingSidebarView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("(\(folder.items.count))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -5379,6 +9798,7 @@ struct MeetingSidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5399,11 +9819,13 @@ struct MeetingSidebarView: View {
                     .font(.system(size: 12))
                     .foregroundColor(isOpen ? .orange : .primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
             }
             .padding(.leading, 34)
             .padding(.trailing, 12)
             .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5439,6 +9861,7 @@ struct MeetingSidebarView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("(\(group.entries.count))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -5446,6 +9869,7 @@ struct MeetingSidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5461,11 +9885,13 @@ struct MeetingSidebarView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
             }
             .padding(.leading, 34)
             .padding(.trailing, 12)
             .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5492,29 +9918,12 @@ struct MeetingSidebarView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.orange)
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.top, 2)
-    }
-
-    private var newWikiRow: some View {
-        Button(action: { state.showNewWikiSheet = true }) {
-            HStack(spacing: 6) {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                Text("New 2nd Brain…")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -5534,6 +9943,8 @@ struct MeetingSidebarView: View {
                 Text(kind.displayName)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(isOpen ? .orange : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("(\(count))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -5541,6 +9952,7 @@ struct MeetingSidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

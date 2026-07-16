@@ -1379,7 +1379,7 @@ class AppState: ObservableObject {
         controller.onApproveWikiKind = { [weak self] spec in
             self?.approveWikiKind(spec)
         }
-        controller.onGenerateMeetingWiki = { [weak self] meetingURL, onProgress in
+        controller.onGenerateMeetingWiki = { [weak self] meetingURL, onProgress, review in
             guard let self else {
                 throw CancellationError()
             }
@@ -1388,7 +1388,7 @@ class AppState: ObservableObject {
                 archiveRoot: MeetingTranscriptSettings.effectiveSaveDirectory(),
                 modelKind: self.wikiModelKind()
             )
-            return try await engine.generate(for: meetingURL, onProgress: onProgress)
+            return try await engine.generate(for: meetingURL, onProgress: onProgress, review: review)
         }
         controller.cleanupManager = textCleanupManager
         controller.modelManager = modelManager

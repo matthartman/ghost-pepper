@@ -340,50 +340,50 @@ struct CommandKResults {
             return .init(wiki: [], people: [], meetings: [], notes: [], askQuestion: nil)
         }
 
-        var wiki: [CommandKItem] = []
-        var people: [CommandKItem] = []
-        var meetings: [CommandKItem] = []
-        var notes: [CommandKItem] = []
+        var wiki: [RankedCommandKItem] = []
+        var people: [RankedCommandKItem] = []
+        var meetings: [RankedCommandKItem] = []
+        var notes: [RankedCommandKItem] = []
 
         for entry in haystack {
             let titleHit = entry.titleLower.contains(needle)
             let contentHit = !entry.contentLower.isEmpty && entry.contentLower.contains(needle)
             let dateHit = !entry.dateFolderLower.isEmpty && entry.dateFolderLower.contains(needle)
             guard titleHit || contentHit || dateHit else { continue }
+            let score = CommandKMatchScore(titleHit: titleHit, contentHit: contentHit, dateHit: dateHit)
+            let subtitle = entry.subtitle.map { subtitle in
+                titleHit ? subtitle : "\(subtitle) • \(score.matchLabel)"
+            }
 
             switch entry.kind {
             case .wiki(let item, _):
-                if wiki.count >= perSectionLimit { continue }
-                wiki.append(CommandKItem(
+                wiki.append(RankedCommandKItem(score: score, item: CommandKItem(
                     id: entry.id,
                     title: entry.title,
-                    subtitle: entry.subtitle,
+                    subtitle: subtitle,
                     activate: { st in st.openGeneratedWikiPage(item.fileURL) }
-                ))
+                )))
             case .person(let kind, let item):
-                if people.count >= perSectionLimit { continue }
-                people.append(CommandKItem(
+                people.append(RankedCommandKItem(score: score, item: CommandKItem(
                     id: entry.id,
                     title: entry.title,
-                    subtitle: entry.subtitle,
+                    subtitle: subtitle,
                     activate: { st in st.openIndexEntry(kind: kind, slug: item.slug) }
-                ))
+                )))
             case .meeting(let history, _):
-                if meetings.count >= perSectionLimit { continue }
-                meetings.append(CommandKItem(
+                meetings.append(RankedCommandKItem(score: score, item: CommandKItem(
                     id: entry.id,
                     title: entry.title,
-                    subtitle: entry.subtitle,
+                    subtitle: subtitle,
                     activate: { st in st.openFile(history.fileURL) }
-                ))
+                )))
             case .note(let history, _):
-                if notes.count >= perSectionLimit { continue }
-                notes.append(CommandKItem(
+                notes.append(RankedCommandKItem(score: score, item: CommandKItem(
                     id: entry.id,
                     title: entry.title,
-                    subtitle: entry.subtitle,
+                    subtitle: subtitle,
                     activate: { st in st.openFile(history.fileURL) }
-                ))
+                )))
             }
         }
 
@@ -395,8 +395,59 @@ struct CommandKResults {
             activate: { _ in }
         ) : nil
 
-        wiki.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        people.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        return .init(wiki: wiki, people: people, meetings: meetings, notes: notes, askQuestion: askQuestion)
+        return .init(
+            wiki: rankedItems(wiki),
+            people: rankedItems(people),
+            meetings: rankedItems(meetings),
+            notes: rankedItems(notes),
+            askQuestion: askQuestion
+        )
+    }
+
+    private static func rankedItems(_ items: [RankedCommandKItem]) -> [CommandKItem] {
+        items
+            .sorted()
+            .prefix(perSectionLimit)
+            .map(\.item)
+    }
+}
+
+private struct CommandKMatchScore: Comparable {
+    let rank: Int
+    let matchLabel: String
+
+    init(titleHit: Bool, contentHit: Bool, dateHit: Bool) {
+        if titleHit {
+            rank = 0
+            matchLabel = "title match"
+        } else if contentHit {
+            rank = 1
+            matchLabel = "content match"
+        } else {
+            rank = 2
+            matchLabel = "date match"
+        }
+    }
+
+    static func < (lhs: CommandKMatchScore, rhs: CommandKMatchScore) -> Bool {
+        lhs.rank < rhs.rank
+    }
+}
+
+private struct RankedCommandKItem: Comparable {
+    let score: CommandKMatchScore
+    let item: CommandKItem
+
+    static func == (lhs: RankedCommandKItem, rhs: RankedCommandKItem) -> Bool {
+        lhs.score == rhs.score
+            && lhs.item.title == rhs.item.title
+            && lhs.item.id == rhs.item.id
+    }
+
+    static func < (lhs: RankedCommandKItem, rhs: RankedCommandKItem) -> Bool {
+        if lhs.score != rhs.score {
+            return lhs.score < rhs.score
+        }
+        return lhs.item.title.localizedCaseInsensitiveCompare(rhs.item.title) == .orderedAscending
     }
 }

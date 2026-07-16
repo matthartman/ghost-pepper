@@ -124,6 +124,10 @@ struct OnboardingView: View {
     let onComplete: () -> Void
     @State private var currentStep = 1
 
+    private var completionStep: Int {
+        GranolaImporter.isInstalled ? 5 : 4
+    }
+
     var body: some View {
         VStack {
             switch currentStep {
@@ -132,17 +136,27 @@ struct OnboardingView: View {
             case 2:
                 SetupStep(appState: appState, modelManager: appState.modelManager, onContinue: { currentStep = 3 })
             case 3:
-                TryItStep(appState: appState, onContinue: { currentStep = 4 })
-            case 4:
-                DoneStep(onComplete: {
-                    UserDefaults.standard.set(true, forKey: "onboardingCompleted")
-                    onComplete()
+                TryItStep(appState: appState, onContinue: {
+                    currentStep = GranolaImporter.isInstalled ? 4 : completionStep
                 })
+            case 4:
+                if GranolaImporter.isInstalled {
+                    GranolaOnboardingStep(onContinue: { currentStep = completionStep })
+                } else {
+                    DoneStep(onComplete: completeOnboarding)
+                }
+            case 5:
+                DoneStep(onComplete: completeOnboarding)
             default:
                 EmptyView()
             }
         }
         .frame(width: 480, height: 620)
+    }
+
+    private func completeOnboarding() {
+        UserDefaults.standard.set(true, forKey: "onboardingCompleted")
+        onComplete()
     }
 }
 
@@ -163,17 +177,27 @@ struct WelcomeStep: View {
             Text("Ghost Pepper")
                 .font(.system(size: 28, weight: .bold))
 
-            Text("Hold-to-talk speech-to-text\nfor your Mac")
+            Text("Sovereign personal intelligence\nfor your Mac")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            HStack(spacing: 8) {
-                Image(systemName: "lock.shield.fill")
-                    .foregroundStyle(.green)
-                Text("100% Private — Everything runs locally on your Mac.\nNo cloud, no accounts, no data ever leaves your machine.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.shield.fill")
+                        .foregroundStyle(.green)
+                    Text("All open-source models. Voice-to-text, meeting transcription, your second brain, and Q&A run under your control.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "externaldrive.fill")
+                        .foregroundStyle(.orange)
+                    Text("No accounts required. Your notes, transcripts, and wiki stay on this Mac.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding()
             .background(
@@ -210,14 +234,38 @@ struct SetupStep: View {
     @State private var micDenied = false
     @State private var accessibilityGranted = false
     @State private var permissionTimer: Timer?
-    @State private var modelLoadStarted = false
+    @State private var localIntelligenceLoadStarted = false
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @StateObject private var micLevel = MicLevelMonitor()
     @StateObject private var screenRecordingPermission = ScreenRecordingPermissionController()
 
     private var allComplete: Bool {
-        micGranted && accessibilityGranted && modelManager.isReady
+        micGranted && accessibilityGranted && localIntelligenceReady
+    }
+
+    private var secondBrainModelReady: Bool {
+        appState.textCleanupManager.cachedModelKinds.contains(appState.selectedWikiModelKind)
+    }
+
+    private var localIntelligenceReady: Bool {
+        modelManager.isReady && secondBrainModelReady
+    }
+
+    private var localIntelligenceStatus: String {
+        if modelManager.state == .error || appState.textCleanupManager.state == .error {
+            return "Download failed"
+        }
+
+        if let activeDownload = RuntimeModelInventory.activeDownloadText(rows: modelRows) {
+            return activeDownload
+        }
+
+        if modelManager.isReady && secondBrainModelReady {
+            return "Ready for dictation, meetings, wiki, and Q&A"
+        }
+
+        return "Downloading the local models Ghost Pepper needs"
     }
 
     private var modelRows: [RuntimeModelRow] {
@@ -229,8 +277,16 @@ struct SetupStep: View {
             cachedSpeechModelNames: modelManager.cachedModelNames,
             cleanupState: appState.textCleanupManager.state,
             selectedCleanupModelKind: appState.textCleanupManager.selectedCleanupModelKind,
+            selectedWikiModelKind: appState.selectedWikiModelKind,
             cachedCleanupKinds: appState.textCleanupManager.cachedModelKinds
         )
+    }
+
+    private var secondBrainModelRow: RuntimeModelRow? {
+        guard let descriptor = TextCleanupManager.cleanupModels.first(where: { $0.kind == appState.selectedWikiModelKind }) else {
+            return nil
+        }
+        return modelRows.first(where: { $0.id == "cleanup-\(descriptor.fileName)" })
     }
 
     var body: some View {
@@ -240,7 +296,7 @@ struct SetupStep: View {
                 .padding(.top, 24)
                 .padding(.bottom, 8)
 
-            Text("Grant permissions and download the app models")
+            Text("Grant permissions. Ghost Pepper chooses the local models.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 16)
@@ -364,18 +420,16 @@ struct SetupStep: View {
                 VStack(spacing: 8) {
                     SetupRow(
                         icon: "brain",
-                        title: "AI Models",
-                        subtitle: modelManager.state == .error
-                            ? "Download failed"
-                            : RuntimeModelInventory.activeDownloadText(rows: modelRows) ?? (modelManager.isReady ? "Ready" : "Waiting to download model"),
-                        isComplete: modelManager.isReady
+                        title: "Local Intelligence",
+                        subtitle: localIntelligenceStatus,
+                        isComplete: localIntelligenceReady
                     ) {
-                        if modelManager.state == .loading {
+                        if modelManager.state == .loading || appState.textCleanupManager.state.isLoading {
                             ProgressView()
                                 .controlSize(.small)
-                        } else if modelManager.state == .error {
+                        } else if modelManager.state == .error || appState.textCleanupManager.state == .error {
                             Button("Retry") {
-                                Task { await modelManager.loadModel() }
+                                Task { await loadRequiredLocalModels() }
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.orange)
@@ -385,7 +439,7 @@ struct SetupStep: View {
 
                     OnboardingModelSummary(
                         speechModelRow: modelRows.first(where: { $0.isSelected }),
-                        cleanupModelRow: modelRows.first(where: { $0.id.hasPrefix("cleanup-") && $0.status != .notLoaded }) ?? modelRows.first(where: { $0.id.hasPrefix("cleanup-") })
+                        secondBrainModelRow: secondBrainModelRow
                     )
                 }
             }
@@ -436,9 +490,9 @@ struct SetupStep: View {
                 micLevel.start(deviceID: selectedDeviceID == 0 ? nil : selectedDeviceID)
             }
 
-            if !modelLoadStarted && !modelManager.isReady {
-                modelLoadStarted = true
-                Task { await modelManager.loadModel() }
+            if !localIntelligenceLoadStarted && !localIntelligenceReady {
+                localIntelligenceLoadStarted = true
+                Task { await loadRequiredLocalModels() }
             }
 
             startPermissionPolling()
@@ -469,6 +523,22 @@ struct SetupStep: View {
     private func stopPermissionPolling() {
         permissionTimer?.invalidate()
         permissionTimer = nil
+    }
+
+    private func loadRequiredLocalModels() async {
+        await modelManager.loadModel()
+        await appState.textCleanupManager.loadModel(kind: appState.selectedWikiModelKind)
+    }
+}
+
+private extension CleanupModelState {
+    var isLoading: Bool {
+        switch self {
+        case .downloading, .loadingModel:
+            return true
+        case .idle, .ready, .error:
+            return false
+        }
     }
 }
 
@@ -514,18 +584,18 @@ struct SetupRow<Actions: View>: View {
 
 private struct OnboardingModelSummary: View {
     let speechModelRow: RuntimeModelRow?
-    let cleanupModelRow: RuntimeModelRow?
+    let secondBrainModelRow: RuntimeModelRow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let row = speechModelRow {
-                OnboardingModelRow(label: "Speech", name: row.name, size: row.sizeDescription, status: row.status)
+                OnboardingModelRow(label: "Voice", name: row.name, size: row.sizeDescription, status: row.status)
             }
-            if let row = cleanupModelRow {
-                OnboardingModelRow(label: "Cleanup", name: row.name, size: row.sizeDescription, status: row.status)
+            if let row = secondBrainModelRow {
+                OnboardingModelRow(label: "Brain", name: row.name, size: row.sizeDescription, status: row.status)
             }
 
-            Text("You can change models later in Settings.")
+            Text("Ghost Pepper picks these during onboarding. Advanced model controls live in Settings.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
@@ -834,7 +904,64 @@ struct KeyCap: View {
     }
 }
 
-// MARK: - Step 4: Done
+// MARK: - Step 4: Granola Import
+
+struct GranolaOnboardingStep: View {
+    let onContinue: () -> Void
+    @StateObject private var importer = GranolaImporter()
+    @StateObject private var meetingState = MeetingWindowState()
+    @State private var showImporter = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: "square.and.arrow.down")
+                .font(.system(size: 46))
+                .foregroundStyle(.orange)
+
+            Text("Bring in Granola")
+                .font(.system(size: 28, weight: .bold))
+
+            Text("Ghost Pepper found Granola on this Mac. Import your past meetings to seed the second brain you control.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 42)
+
+            VStack(alignment: .leading, spacing: 8) {
+                BulletPoint("Turn existing meeting notes into local markdown")
+                BulletPoint("Use them for wiki generation and private Q&A")
+                BulletPoint("Keep the archive on your machine")
+            }
+            .padding(.horizontal, 48)
+
+            Spacer()
+
+            Button(action: { showImporter = true }) {
+                Text("Import Granola Meetings")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .padding(.horizontal, 40)
+
+            Button("Skip for Now") {
+                onContinue()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 24)
+        }
+        .sheet(isPresented: $showImporter, onDismiss: onContinue) {
+            GranolaImportView(importer: importer, state: meetingState)
+        }
+    }
+}
+
+// MARK: - Step 5: Done
 
 struct DoneStep: View {
     let onComplete: () -> Void
@@ -894,9 +1021,9 @@ struct DoneStep: View {
                     .foregroundStyle(.secondary)
                 BulletPoint("Switch your microphone")
                 BulletPoint("Change your recording shortcuts")
-                BulletPoint("Toggle text cleanup on/off")
-                BulletPoint("Edit the cleanup prompt")
-                BulletPoint("Check for updates")
+                BulletPoint("Record and transcribe meetings")
+                BulletPoint("Import meetings and build your second brain")
+                BulletPoint("Ask local questions over your archive")
             }
             .padding(.horizontal, 40)
 

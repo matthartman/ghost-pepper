@@ -69,9 +69,7 @@ class PermissionChecker {
     }
 
     static func openInputMonitoringSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
-            NSWorkspace.shared.open(url)
-        }
+        openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
     }
 
     static func hasScreenRecordingPermission() -> Bool {
@@ -84,9 +82,19 @@ class PermissionChecker {
     }
 
     static func openScreenRecordingSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-            NSWorkspace.shared.open(url)
+        openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+    }
+
+    private static func openSystemSettingsPane(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        if NSWorkspace.shared.open(url) {
+            return
         }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [urlString]
+        try? process.run()
     }
 }
 
@@ -114,14 +122,10 @@ private extension PermissionChecker.Client {
             await AVCaptureDevice.requestAccess(for: .audio)
         },
         openAccessibilitySettings: {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
+            PermissionChecker.openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         },
         openMicrophoneSettings: {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                NSWorkspace.shared.open(url)
-            }
+            PermissionChecker.openSystemSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
         }
     )
 

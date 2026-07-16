@@ -71,6 +71,50 @@ final class MeetingTranscriptSpeakerLabelTests: XCTestCase {
 }
 
 @MainActor
+final class CommandKSearchRankingTests: XCTestCase {
+    func testTitleMatchesRankAboveWikiBodyMatches() {
+        let root = URL(fileURLWithPath: "/tmp/CommandKSearchRankingTests")
+        let directMatch = GeneratedWikiSidebarItem(
+            title: "Diana Berlin",
+            type: "person",
+            fileURL: root.appendingPathComponent("diana.md")
+        )
+        let bodyOnlyMatch = GeneratedWikiSidebarItem(
+            title: "Matt Hartman",
+            type: "person",
+            fileURL: root.appendingPathComponent("matt.md")
+        )
+
+        let results = CommandKResults.compute(
+            haystack: [
+                CommandKHaystackEntry(
+                    title: bodyOnlyMatch.title,
+                    titleLower: bodyOnlyMatch.title.lowercased(),
+                    subtitle: "People",
+                    contentLower: "worked with diana on matrix diligence.",
+                    dateFolderLower: "",
+                    id: "wiki-\(bodyOnlyMatch.fileURL.path)",
+                    kind: .wiki(bodyOnlyMatch, folderTitle: "People")
+                ),
+                CommandKHaystackEntry(
+                    title: directMatch.title,
+                    titleLower: directMatch.title.lowercased(),
+                    subtitle: "People",
+                    contentLower: "",
+                    dateFolderLower: "",
+                    id: "wiki-\(directMatch.fileURL.path)",
+                    kind: .wiki(directMatch, folderTitle: "People")
+                )
+            ],
+            query: "diana"
+        )
+
+        XCTAssertEqual(results.wiki.map(\.title), ["Diana Berlin", "Matt Hartman"])
+        XCTAssertEqual(results.wiki.last?.subtitle, "People • content match")
+    }
+}
+
+@MainActor
 final class MeetingMarkdownWriterParsingTests: XCTestCase {
     func testParsePreservesGranolaSpeakerLabelsAndContinuationLines() throws {
         let fileURL = try writeMarkdown(
@@ -123,6 +167,55 @@ final class MeetingMarkdownWriterParsingTests: XCTestCase {
         XCTAssertEqual(transcript.segments[2].startTime, 62)
         XCTAssertEqual(transcript.segments[3].speaker, .remote(name: "Facilitator"))
         XCTAssertEqual(transcript.segments[3].text, "Final plain speaker line.")
+    }
+
+    func testParseRestoresGranolaFrontmatterDateAndAttendees() throws {
+        let fileURL = try writeMarkdown(
+            """
+            ---
+            title: "Imported Meeting"
+            date: "2026-07-16T14:30:00.000Z"
+            attendees: ["Alice Example", "Bob, Jr.", "Casey \\\"CJ\\\" Stone"]
+            imported_from: granola
+            ---
+
+            # Imported Meeting
+
+            ## Transcript
+
+            **Alice Example:** We should preserve metadata.
+            """
+        )
+
+        let transcript = try MeetingMarkdownWriter.parse(from: fileURL)
+
+        XCTAssertEqual(transcript.importedFrom, "granola")
+        XCTAssertEqual(
+            transcript.attendees.map(\.name),
+            ["Alice Example", "Bob, Jr.", "Casey \"CJ\" Stone"]
+        )
+        XCTAssertEqual(
+            Int(transcript.startDate.timeIntervalSince1970),
+            Int(ISO8601DateFormatter().date(from: "2026-07-16T14:30:00Z")!.timeIntervalSince1970)
+        )
+    }
+
+    func testParseRestoresVisibleAttendeesLine() throws {
+        let fileURL = try writeMarkdown(
+            """
+            # Imported Meeting
+
+            **Attendees:** Alice Example, Bob Example
+
+            ## Transcript
+
+            **Alice Example:** We should preserve attendee names.
+            """
+        )
+
+        let transcript = try MeetingMarkdownWriter.parse(from: fileURL)
+
+        XCTAssertEqual(transcript.attendees.map(\.name), ["Alice Example", "Bob Example"])
     }
 
     private func writeMarkdown(_ markdown: String) throws -> URL {

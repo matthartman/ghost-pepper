@@ -22,12 +22,14 @@
 		00B000000000000000000013 /* WikiKindProposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000013 /* WikiKindProposer.swift */; };
 		00B000000000000000000015 /* GeneratedWikiEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000015 /* GeneratedWikiEngine.swift */; };
 		00B000000000000000000016 /* WikiSearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000016 /* WikiSearchService.swift */; };
+		00B000000000000000000017 /* GhostPepperHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000017 /* GhostPepperHistoryStore.swift */; };
 		00D963F24233D19221F6F3BA /* ClaudePricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45CD91720FB67A72CAEF0E9C /* ClaudePricing.swift */; };
 		04654E621041E2A81CC2CFC7 /* MeetingQAToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 785F5D6EDD25D78F6220268E /* MeetingQAToolsTests.swift */; };
 		056C454F3BD1A9795C6775A5 /* ScreenRecordingPermissionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E4B61BA7270EEC11A8AC69 /* ScreenRecordingPermissionController.swift */; };
 		0606E11E6F102BBB44ED08B6 /* ScreenRecordingPermissionControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C9ECBFE04804AA79262A07B /* ScreenRecordingPermissionControllerTests.swift */; };
 		09DA02222FFAFD8F32DB0212 /* TranscriptionLabStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7EC6EEC8F041DE99399C3E3 /* TranscriptionLabStoreTests.swift */; };
 		0A1823314AE4FF4E17DCF627 /* sprite_frame_0.png in Resources */ = {isa = PBXBuildFile; fileRef = 2AF744C59EEAE51FC81BE6D6 /* sprite_frame_0.png */; };
+		0AC7A5C3B9E8424694D7A001 /* cytoscape.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 0AC7A5C3B9E8424694D7A000 /* cytoscape.min.js */; };
 		0B50B23BDEAFA03CE3FFA368 /* Secrets.example in Resources */ = {isa = PBXBuildFile; fileRef = 84630A373DA596D94B45E867 /* Secrets.example */; };
 		0BC5D4645D21CA8AA000972E /* RecordingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A3540C6212101C885EA22CD /* RecordingOverlay.swift */; };
 		0CDA12F05A7C7464334FDD37 /* RecordingOCRPrefetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94E9AADC67C525B0A9E382AB /* RecordingOCRPrefetch.swift */; };
@@ -244,11 +246,13 @@
 		00A000000000000000000013 /* WikiKindProposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiKindProposer.swift; sourceTree = "<group>"; };
 		00A000000000000000000015 /* GeneratedWikiEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedWikiEngine.swift; sourceTree = "<group>"; };
 		00A000000000000000000016 /* WikiSearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiSearchService.swift; sourceTree = "<group>"; };
+		00A000000000000000000017 /* GhostPepperHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhostPepperHistoryStore.swift; sourceTree = "<group>"; };
 		0065F99395EEC3EB77997C2C /* CleanupSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupSettings.swift; sourceTree = "<group>"; };
 		016C38149DDDAA03B88E35C0 /* PerformanceTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceTrace.swift; sourceTree = "<group>"; };
 		01A8B88DFD046F1EC74E5CD6 /* TranscriptionLabStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabStore.swift; sourceTree = "<group>"; };
 		0267B716FEB381C08F172EE6 /* UsageReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageReportView.swift; sourceTree = "<group>"; };
 		029E36727193D8502C69FB38 /* sprite_frame_2@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_2@2x.png"; sourceTree = "<group>"; };
+		0AC7A5C3B9E8424694D7A000 /* cytoscape.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = cytoscape.min.js; sourceTree = "<group>"; };
 		0D91666EEE2CF7B4B78E3061 /* ChordBindingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChordBindingStore.swift; sourceTree = "<group>"; };
 		0EDE03E93B2A9E420B2C74CA /* PostPasteLearningCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostPasteLearningCoordinator.swift; sourceTree = "<group>"; };
 		0F634CFD724E29ECA57C0BB6 /* KeyChordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyChordTests.swift; sourceTree = "<group>"; };
@@ -622,6 +626,7 @@
 				FA48EF56983A55149A084D1B /* sprite_frame_3@2x.png */,
 				E02A8770518755585231EA8E /* sprite_frame_4.png */,
 				E0BBD0F5DD1B827D03F0F8F6 /* sprite_frame_4@2x.png */,
+				0AC7A5C3B9E8424694D7A000 /* cytoscape.min.js */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -759,6 +764,7 @@
 			children = (
 				00A000000000000000000007 /* LocalStructuredLLM.swift */,
 				00A000000000000000000015 /* GeneratedWikiEngine.swift */,
+				00A000000000000000000017 /* GhostPepperHistoryStore.swift */,
 				00A000000000000000000008 /* LocalWikiEngine.swift */,
 				00A000000000000000000009 /* LocalWikiPrompts.swift */,
 				00A000000000000000000010 /* MeetingCard.swift */,
@@ -1027,6 +1033,7 @@
 				9FF4377D176BB2AE30E4B08B /* sprite_frame_3@2x.png in Resources */,
 				5473AA5B45F41F058B0503A0 /* sprite_frame_4.png in Resources */,
 				1EF06A7EA54855634307E6A8 /* sprite_frame_4@2x.png in Resources */,
+				0AC7A5C3B9E8424694D7A001 /* cytoscape.min.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1091,6 +1098,7 @@
 				8F4C6360C1304C4A145DC34F /* LocalLLMProvider.swift in Sources */,
 				00B000000000000000000007 /* LocalStructuredLLM.swift in Sources */,
 				00B000000000000000000015 /* GeneratedWikiEngine.swift in Sources */,
+				00B000000000000000000017 /* GhostPepperHistoryStore.swift in Sources */,
 				00B000000000000000000008 /* LocalWikiEngine.swift in Sources */,
 				00B000000000000000000009 /* LocalWikiPrompts.swift in Sources */,
 				736FB3EB1125A9A9D328400E /* MarkdownArchivePaths.swift in Sources */,

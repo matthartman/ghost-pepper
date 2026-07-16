@@ -900,7 +900,11 @@ struct SettingsView: View {
                         PermissionStatusRow(
                             title: "Accessibility",
                             isGranted: hasAccessibilityPermission,
-                            action: { PermissionChecker.promptAccessibility() }
+                            action: {
+                                PermissionChecker.promptAccessibility()
+                                PermissionChecker.openAccessibilitySettings()
+                                startPermissionPollingIfNeeded()
+                            }
                         )
                         PermissionStatusRow(
                             title: "Input Monitoring",
@@ -908,10 +912,11 @@ struct SettingsView: View {
                             action: {
                                 PermissionChecker.promptInputMonitoring()
                                 PermissionChecker.openInputMonitoringSettings()
+                                startPermissionPollingIfNeeded()
                             }
                         )
 
-                        Text("Both permissions are required for hotkeys and pasting to work reliably. If Ghost Pepper doesn't appear in Input Monitoring, click + and select it from Applications.")
+                        Text("Both permissions are required for hotkeys and pasting to work reliably. If Ghost Pepper does not appear in a privacy list, click + and select it from Applications, then quit and reopen Ghost Pepper.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
