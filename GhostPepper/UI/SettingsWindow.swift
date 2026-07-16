@@ -104,6 +104,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case cleanup
     case models
+    case modelExperiment
     case transcriptionLab
     case recognizedVoices
     case pepperChat
@@ -116,6 +117,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: "General"
         case .cleanup: "Cleanup"
         case .models: "Models"
+        case .modelExperiment: "Model Experiment"
         case .transcriptionLab: "History"
         case .recognizedVoices: "Recognized Voices"
         case .pepperChat: "Context Bundler"
@@ -128,6 +130,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: "Startup behavior, shortcuts, microphone input, dictation testing, and sound feedback."
         case .cleanup: "Prompt cleanup, correction hints, OCR context, and learning behavior."
         case .models: "Speech and cleanup model downloads and runtime status."
+        case .modelExperiment: "Paste prompts and context to test local model behavior."
         case .transcriptionLab: "Saved recordings, reruns, and cleanup experiments."
         case .recognizedVoices: "Reusable speaker labels and 'this is me' voice prints."
         case .pepperChat: "Capture screen context and send to Zo, Trello, or clipboard."
@@ -140,6 +143,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: "gearshape"
         case .cleanup: "sparkles"
         case .models: "brain"
+        case .modelExperiment: "testtube.2"
         case .transcriptionLab: "waveform.badge.magnifyingglass"
         case .recognizedVoices: "person.crop.circle.badge.checkmark"
         case .pepperChat: "bubble.right"
@@ -158,6 +162,35 @@ struct RecordingSpeakerFilteringToggleState {
     }
 }
 
+private struct ModelExperimentRunResult: Identifiable, Equatable, Codable {
+    var id: UUID = UUID()
+    var title: String
+    var modelDisplayName: String
+    var sourceName: String
+    var systemPrompt: String
+    var contextPreview: String
+    var output: String
+    var rawOutput: String
+    var tokenCount: Int
+    var duration: TimeInterval
+    var rating: Int?
+    var errorMessage: String?
+    var createdAt: Date = Date()
+}
+
+private struct SavedModelExperimentPrompt: Identifiable, Equatable, Codable {
+    var id: UUID = UUID()
+    var title: String
+    var systemPrompt: String
+    var defaultModelKindRaw: String?
+    var updatedAt: Date = Date()
+
+    var defaultModelKind: LocalCleanupModelKind? {
+        guard let defaultModelKindRaw else { return nil }
+        return LocalCleanupModelKind(rawValue: defaultModelKindRaw)
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var appState: AppState
     @State private var inputDevices: [AudioInputDevice] = []
@@ -172,8 +205,24 @@ struct SettingsView: View {
     @State private var recognizedVoices: [RecognizedVoiceProfile] = []
     @State private var recognizedVoiceSpeakerProfilesByID: [UUID: [TranscriptionLabSpeakerProfile]] = [:]
     @State private var recognizedVoicesErrorMessage: String?
+    @State private var experimentModelKind: LocalCleanupModelKind = .wikiDefault
+    @State private var experimentSystemPrompt = "You are a careful assistant. Use only the provided context."
+    @State private var experimentContext = ""
+    @State private var experimentOutput = ""
+    @State private var experimentRawOutput = ""
+    @State private var experimentTokenCount = 0
+    @State private var experimentLoadedFileURL: URL?
+    @State private var experimentRuns: [ModelExperimentRunResult] = []
+    @State private var savedExperimentPrompts: [SavedModelExperimentPrompt] = []
+    @State private var selectedSavedExperimentPromptID: UUID?
+    @State private var experimentPromptTitle = ""
+    @State private var experimentErrorMessage: String?
+    @State private var isRunningExperiment = false
     @StateObject private var dictationTestController: SettingsDictationTestController
     @StateObject private var transcriptionLabController: TranscriptionLabController
+
+    private static let savedExperimentPromptsDefaultsKey = "modelExperimentSavedPrompts"
+    private static let experimentRunHistoryDefaultsKey = "modelExperimentRunHistory"
 
     init(appState: AppState, initialSection: SettingsSection = .general) {
         self.appState = appState
@@ -251,6 +300,7 @@ struct SettingsView: View {
             cachedSpeechModelNames: appState.modelManager.cachedModelNames,
             cleanupState: appState.textCleanupManager.state,
             selectedCleanupModelKind: appState.textCleanupManager.selectedCleanupModelKind,
+            selectedWikiModelKind: appState.selectedWikiModelKind,
             cachedCleanupKinds: appState.textCleanupManager.cachedModelKinds
         )
     }
@@ -499,6 +549,293 @@ struct SettingsView: View {
         return entry.rawTranscription ?? ""
     }
 
+    private func experimentModelStatusText(_ descriptor: CleanupModelDescriptor) -> String {
+        let downloaded = appState.textCleanupManager.cachedModelKinds.contains(descriptor.kind)
+        if !downloaded {
+            return "This model is not downloaded yet. Download it from Settings > Models first."
+        }
+        if descriptor.runtime != .gguf {
+            return "This model is downloaded/selectable, but MLX inference is not wired yet. Choose a GGUF model for now."
+        }
+        return "Downloaded and runnable locally."
+    }
+
+    private func experimentPromptBudgetText(_ descriptor: CleanupModelDescriptor) -> String {
+        let prompt = LocalStructuredLLM.buildPrompt(system: experimentSystemPrompt, user: experimentContext)
+        let estimatedTokens = max(1, Int(ceil(Double(prompt.count) / 4.0)))
+        let maxTokens = Int(descriptor.maxTokenCount)
+        let outputRoom = max(0, maxTokens - estimatedTokens)
+        return "Estimated prompt: ~\(estimatedTokens) tokens of \(maxTokens) · output room: ~\(outputRoom) tokens"
+    }
+
+    private func loadSavedExperimentPrompts() {
+        guard let data = UserDefaults.standard.data(forKey: Self.savedExperimentPromptsDefaultsKey),
+              let prompts = try? JSONDecoder().decode([SavedModelExperimentPrompt].self, from: data) else {
+            savedExperimentPrompts = []
+            return
+        }
+        savedExperimentPrompts = prompts.sorted { $0.updatedAt > $1.updatedAt }
+        persistSavedExperimentPrompts()
+    }
+
+    private func persistSavedExperimentPrompts() {
+        guard let data = try? JSONEncoder().encode(savedExperimentPrompts) else { return }
+        UserDefaults.standard.set(data, forKey: Self.savedExperimentPromptsDefaultsKey)
+    }
+
+    private func loadExperimentRunHistory() {
+        guard let data = UserDefaults.standard.data(forKey: Self.experimentRunHistoryDefaultsKey),
+              let runs = try? JSONDecoder().decode([ModelExperimentRunResult].self, from: data) else {
+            experimentRuns = []
+            return
+        }
+        experimentRuns = runs.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func persistExperimentRunHistory() {
+        let cappedRuns = Array(experimentRuns.prefix(100))
+        guard let data = try? JSONEncoder().encode(cappedRuns) else { return }
+        UserDefaults.standard.set(data, forKey: Self.experimentRunHistoryDefaultsKey)
+    }
+
+    private func insertExperimentRun(_ run: ModelExperimentRunResult) {
+        experimentRuns.insert(run, at: 0)
+        experimentRuns = Array(experimentRuns.prefix(100))
+        persistExperimentRunHistory()
+    }
+
+    private func rateExperimentRun(id: UUID, rating: Int?) {
+        guard let index = experimentRuns.firstIndex(where: { $0.id == id }) else { return }
+        experimentRuns[index].rating = rating
+        persistExperimentRunHistory()
+    }
+
+    private func saveCurrentExperimentPrompt() {
+        let title = experimentPromptTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            experimentErrorMessage = "Give this function a title before saving."
+            return
+        }
+        let existingID = selectedSavedExperimentPromptID
+        let prompt = SavedModelExperimentPrompt(
+            id: existingID ?? UUID(),
+            title: title,
+            systemPrompt: experimentSystemPrompt,
+            defaultModelKindRaw: experimentModelKind.rawValue,
+            updatedAt: Date()
+        )
+        if let existingID,
+           let index = savedExperimentPrompts.firstIndex(where: { $0.id == existingID }) {
+            savedExperimentPrompts[index] = prompt
+        } else if let index = savedExperimentPrompts.firstIndex(where: { $0.title.caseInsensitiveCompare(title) == .orderedSame }) {
+            savedExperimentPrompts[index] = prompt
+            selectedSavedExperimentPromptID = prompt.id
+        } else {
+            savedExperimentPrompts.insert(prompt, at: 0)
+            selectedSavedExperimentPromptID = prompt.id
+        }
+        savedExperimentPrompts.sort { $0.updatedAt > $1.updatedAt }
+        persistSavedExperimentPrompts()
+        experimentErrorMessage = nil
+    }
+
+    private func loadSelectedExperimentPrompt() {
+        guard let selectedSavedExperimentPromptID,
+              let prompt = savedExperimentPrompts.first(where: { $0.id == selectedSavedExperimentPromptID }) else {
+            return
+        }
+        experimentPromptTitle = prompt.title
+        experimentSystemPrompt = prompt.systemPrompt
+        if let defaultModelKind = prompt.defaultModelKind,
+           downloadedRunnableExperimentModels.contains(where: { $0.kind == defaultModelKind }) {
+            experimentModelKind = defaultModelKind
+            experimentErrorMessage = nil
+        } else if let defaultModelKind = prompt.defaultModelKind {
+            experimentErrorMessage = "Saved function default model is not downloaded or wired up: \(defaultModelKind.rawValue)"
+        }
+        experimentLoadedFileURL = nil
+        if prompt.defaultModelKind == nil {
+            experimentErrorMessage = nil
+        }
+    }
+
+    private func deleteSelectedExperimentPrompt() {
+        guard let selectedSavedExperimentPromptID else { return }
+        savedExperimentPrompts.removeAll { $0.id == selectedSavedExperimentPromptID }
+        self.selectedSavedExperimentPromptID = savedExperimentPrompts.first?.id
+        if let first = savedExperimentPrompts.first {
+            experimentPromptTitle = first.title
+        } else {
+            experimentPromptTitle = ""
+        }
+        persistSavedExperimentPrompts()
+    }
+
+    private func functionPickerTitle(_ prompt: SavedModelExperimentPrompt) -> String {
+        guard let raw = prompt.defaultModelKindRaw else { return prompt.title }
+        let modelName = TextCleanupManager.cleanupModels.first(where: { $0.kind.rawValue == raw })?.displayName ?? raw
+        return "\(prompt.title) · \(modelName)"
+    }
+
+    private var downloadedRunnableExperimentModels: [CleanupModelDescriptor] {
+        TextCleanupManager.wikiGenerationModels.filter { descriptor in
+            descriptor.runtime == .gguf && appState.textCleanupManager.cachedModelKinds.contains(descriptor.kind)
+        }
+    }
+
+    private func runModelExperiment() {
+        guard let descriptor = TextCleanupManager.cleanupModels.first(where: { $0.kind == experimentModelKind }) else {
+            experimentErrorMessage = "Unknown model."
+            return
+        }
+        runModelExperiment(models: [descriptor])
+    }
+
+    private func runAllDownloadedModelExperiments() {
+        let models = downloadedRunnableExperimentModels
+        guard !models.isEmpty else {
+            experimentErrorMessage = "Download a runnable GGUF model before running the lab."
+            return
+        }
+        runModelExperiment(models: models)
+    }
+
+    private func runModelExperiment(models: [CleanupModelDescriptor]) {
+        guard !isRunningExperiment else { return }
+        let runnableModels = models.filter { descriptor in
+            appState.textCleanupManager.cachedModelKinds.contains(descriptor.kind) && descriptor.runtime == .gguf
+        }
+        guard runnableModels.count == models.count else {
+            if let blocked = models.first(where: { !appState.textCleanupManager.cachedModelKinds.contains($0.kind) }) {
+                experimentErrorMessage = "Download \(blocked.displayName) before running it."
+            } else if let blocked = models.first(where: { $0.runtime != .gguf }) {
+                experimentErrorMessage = "\(blocked.displayName) uses MLX. This experiment runner can list it, but MLX inference is not wired yet."
+            }
+            return
+        }
+
+        let system = experimentSystemPrompt
+        let context = experimentContext
+        let sourceName = experimentLoadedFileURL?.lastPathComponent ?? "Pasted context"
+        isRunningExperiment = true
+        experimentErrorMessage = nil
+        experimentOutput = ""
+        experimentRawOutput = ""
+        experimentTokenCount = 0
+
+        Task { @MainActor in
+            for descriptor in runnableModels {
+                do {
+                    let result = try await runSingleModelExperiment(
+                        descriptor: descriptor,
+                        system: system,
+                        context: context,
+                        sourceName: sourceName
+                    )
+                    insertExperimentRun(result)
+                } catch {
+                    let result = ModelExperimentRunResult(
+                        title: descriptor.displayName,
+                        modelDisplayName: descriptor.displayName,
+                        sourceName: sourceName,
+                        systemPrompt: system,
+                        contextPreview: Self.previewText(context),
+                        output: "",
+                        rawOutput: "",
+                        tokenCount: 0,
+                        duration: 0,
+                        rating: nil,
+                        errorMessage: error.localizedDescription
+                    )
+                    insertExperimentRun(result)
+                    experimentErrorMessage = error.localizedDescription
+                }
+            }
+            isRunningExperiment = false
+        }
+    }
+
+    private func runSingleModelExperiment(
+        descriptor: CleanupModelDescriptor,
+        system: String,
+        context: String,
+        sourceName: String
+    ) async throws -> ModelExperimentRunResult {
+        let startedAt = Date()
+        let prompt = LocalStructuredLLM.buildPrompt(system: system, user: context)
+        let stream = try await appState.textCleanupManager.streamCompletion(
+            prompt: prompt,
+            modelKind: descriptor.kind,
+            thinkingMode: .none
+        )
+        var output = ""
+        var tokenCount = 0
+        experimentOutput = ""
+        experimentRawOutput = ""
+        experimentTokenCount = 0
+        for await token in stream {
+            if Task.isCancelled { break }
+            output += token
+            tokenCount += 1
+            experimentRawOutput = output
+            experimentTokenCount = tokenCount
+            let cleaned = LocalStructuredLLM.stripThinking(output)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            experimentOutput = cleaned.isEmpty ? output : cleaned
+        }
+        experimentRawOutput = output
+        experimentTokenCount = tokenCount
+        let cleaned = LocalStructuredLLM.stripThinking(output)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        experimentOutput = cleaned.isEmpty ? output : cleaned
+        let duration = Date().timeIntervalSince(startedAt)
+        let emptyOutputMessage: String?
+        if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let estimatedTokens = max(1, Int(ceil(Double(prompt.count) / 4.0)))
+            emptyOutputMessage = "The model returned no tokens. Estimated prompt size is ~\(estimatedTokens) tokens."
+            experimentErrorMessage = emptyOutputMessage
+        } else {
+            emptyOutputMessage = nil
+        }
+        return ModelExperimentRunResult(
+            title: "\(descriptor.displayName) · \(sourceName)",
+            modelDisplayName: descriptor.displayName,
+            sourceName: sourceName,
+            systemPrompt: system,
+            contextPreview: Self.previewText(context),
+            output: experimentOutput,
+            rawOutput: output,
+            tokenCount: tokenCount,
+            duration: duration,
+            rating: nil,
+            errorMessage: emptyOutputMessage
+        )
+    }
+
+    private func loadExperimentContextFromFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a transcript, markdown file, or text file to use as Model Lab context."
+        panel.prompt = "Use File"
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                experimentContext = try String(contentsOf: url, encoding: .utf8)
+                experimentLoadedFileURL = url
+                experimentErrorMessage = nil
+            } catch {
+                experimentErrorMessage = "Could not read \(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private static func previewText(_ text: String) -> String {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned.count > 700 else { return cleaned }
+        return String(cleaned.prefix(700)) + "\n..."
+    }
+
 
     private func formattedStageDuration(_ duration: TimeInterval) -> String {
         if duration < 1 {
@@ -539,6 +876,8 @@ struct SettingsView: View {
                 cleanupSection
             case .models:
                 modelsSection
+            case .modelExperiment:
+                modelExperimentSection
             case .transcriptionLab:
                 transcriptionLabSection
             case .recognizedVoices:
@@ -866,7 +1205,10 @@ struct SettingsView: View {
 
                 SettingsField("Language") {
                     Picker("Language", selection: $appState.preferredLanguage) {
-                        Text("Auto-detect").tag("auto")
+                        Text(
+                            SpeechModelCatalog.model(named: appState.speechModel)?.automaticLanguageLabel
+                                ?? "Auto-detect"
+                        ).tag("auto")
                         Text("English").tag("en")
                         Text("Spanish").tag("es")
                         Text("French").tag("fr")
@@ -883,6 +1225,11 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                     .frame(maxWidth: 320, alignment: .leading)
+                    .onChange(of: appState.preferredLanguage) { _, _ in
+                        Task {
+                            await appState.reloadSpeechAnalyzerForPreferredLanguageIfNeeded()
+                        }
+                    }
                 }
 
                 if appState.preferredLanguage != "auto" && appState.preferredLanguage != "en" && appState.speechModel.hasSuffix(".en") {
@@ -906,7 +1253,7 @@ struct SettingsView: View {
                             set: { appState.textCleanupManager.selectedCleanupModelKind = $0 }
                         )
                     ) {
-                        ForEach(TextCleanupManager.cleanupModels, id: \.kind) { model in
+                        ForEach(TextCleanupManager.cleanupGenerationModels, id: \.kind) { model in
                             Text(model.displayName).tag(model.kind)
                         }
                     }
@@ -925,6 +1272,29 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            SettingsCard("2nd Brain generation model") {
+                SettingsField("Default 2nd Brain model") {
+                    Picker(
+                        "2nd Brain model",
+                        selection: Binding(
+                            get: { appState.selectedWikiModelKind },
+                            set: { appState.selectedWikiModelKind = $0 }
+                        )
+                    ) {
+                        ForEach(TextCleanupManager.wikiGenerationModels, id: \.kind) { model in
+                            Text(model.displayName).tag(model.kind)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 420, alignment: .leading)
+                }
+
+                Text("2nd Brain generation can use a larger downloaded local model than live dictation cleanup. Gemma 4 12B MLX is the recommended target, but MLX inference support is still being wired in.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             SettingsCard("Runtime models") {
                 VStack(alignment: .leading, spacing: 16) {
                     ModelInventoryCard(rows: modelRows, onDelete: offloadModel, onDownload: downloadModel)
@@ -935,6 +1305,253 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            }
+        }
+    }
+
+    private var modelExperimentSection: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsCard("Run a local model") {
+                VStack(alignment: .leading, spacing: 16) {
+                    SettingsField("Local function") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 10) {
+                                TextField("Function title", text: $experimentPromptTitle)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(maxWidth: 340)
+                                    .disabled(isRunningExperiment)
+
+                                Button {
+                                    saveCurrentExperimentPrompt()
+                                } label: {
+                                    Label("Save", systemImage: "tray.and.arrow.down")
+                                }
+                                .disabled(isRunningExperiment)
+                            }
+
+                            HStack(spacing: 10) {
+                                Picker(
+                                    "Local functions",
+                                    selection: Binding(
+                                        get: { selectedSavedExperimentPromptID },
+                                        set: { selectedSavedExperimentPromptID = $0 }
+                                    )
+                                ) {
+                                    Text("Choose local function").tag(Optional<UUID>.none)
+                                    ForEach(savedExperimentPrompts) { prompt in
+                                        Text(functionPickerTitle(prompt)).tag(Optional(prompt.id))
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: 340)
+                                .disabled(isRunningExperiment || savedExperimentPrompts.isEmpty)
+
+                                Button {
+                                    loadSelectedExperimentPrompt()
+                                } label: {
+                                    Label("Load", systemImage: "arrow.down.doc")
+                                }
+                                .disabled(isRunningExperiment || selectedSavedExperimentPromptID == nil)
+
+                                Button {
+                                    deleteSelectedExperimentPrompt()
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                .disabled(isRunningExperiment || selectedSavedExperimentPromptID == nil)
+                            }
+                        }
+                    }
+
+                    SettingsField("Input file") {
+                        HStack(spacing: 10) {
+                            Button {
+                                loadExperimentContextFromFile()
+                            } label: {
+                                Label("Choose File", systemImage: "doc.badge.plus")
+                            }
+                            .disabled(isRunningExperiment)
+
+                            Text(experimentLoadedFileURL?.path ?? "No file selected; using pasted context.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+
+                    SettingsField("Model") {
+                        Picker(
+                            "Model",
+                            selection: $experimentModelKind
+                        ) {
+                            ForEach(downloadedRunnableExperimentModels, id: \.kind) { model in
+                                Text(model.displayName).tag(model.kind)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 460, alignment: .leading)
+                        .disabled(isRunningExperiment || downloadedRunnableExperimentModels.isEmpty)
+                    }
+
+                    if downloadedRunnableExperimentModels.isEmpty {
+                        Text("No downloaded wired-up GGUF models are available. Download one from Settings > Models first.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let descriptor = downloadedRunnableExperimentModels.first(where: { $0.kind == experimentModelKind }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(experimentModelStatusText(descriptor))
+                            Text(experimentPromptBudgetText(descriptor))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("System prompt")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        BorderedTextEditor(
+                            text: $experimentSystemPrompt,
+                            minimumHeight: 90,
+                            maximumHeight: 140,
+                            monospaced: false
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Context / user prompt")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        BorderedTextEditor(
+                            text: $experimentContext,
+                            minimumHeight: 180,
+                            maximumHeight: 320,
+                            monospaced: false
+                        )
+                    }
+
+                    HStack(spacing: 10) {
+                        Button(isRunningExperiment ? "Running..." : "Run") {
+                            runModelExperiment()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            isRunningExperiment ||
+                            experimentContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                            !downloadedRunnableExperimentModels.contains(where: { $0.kind == experimentModelKind })
+                        )
+
+                        Button("Run All Downloaded") {
+                            runAllDownloadedModelExperiments()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isRunningExperiment || experimentContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || downloadedRunnableExperimentModels.isEmpty)
+
+                        Button("Clear Output") {
+                            experimentOutput = ""
+                            experimentRawOutput = ""
+                            experimentTokenCount = 0
+                            experimentErrorMessage = nil
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isRunningExperiment || (experimentOutput.isEmpty && experimentRawOutput.isEmpty && experimentErrorMessage == nil))
+
+                        Button("Clear History") {
+                            experimentRuns.removeAll()
+                            persistExperimentRunHistory()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isRunningExperiment || experimentRuns.isEmpty)
+
+                        if isRunningExperiment {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Generating")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let experimentErrorMessage {
+                        Label(experimentErrorMessage, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.08))
+                            .cornerRadius(8)
+                    }
+                }
+            }
+
+            SettingsCard("Output") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Model output")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(experimentTokenCount) token\(experimentTokenCount == 1 ? "" : "s") · \(experimentRawOutput.count) raw chars")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(experimentOutput.isEmpty ? "(empty)" : experimentOutput)
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+                        .padding(12)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                        )
+                        .cornerRadius(8)
+
+                    if experimentRawOutput != experimentOutput {
+                        Text("Raw stream")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(experimentRawOutput.isEmpty ? "(empty)" : experimentRawOutput)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+                            .padding(12)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                            )
+                            .cornerRadius(8)
+                    }
+                }
+            }
+
+            if !experimentRuns.isEmpty {
+                SettingsCard("Run History") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(experimentRuns) { run in
+                            ModelExperimentRunCard(run: run) { rating in
+                                rateExperimentRun(id: run.id, rating: rating)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if downloadedRunnableExperimentModels.contains(where: { $0.kind == appState.selectedWikiModelKind }) {
+                experimentModelKind = appState.selectedWikiModelKind
+            } else if let first = downloadedRunnableExperimentModels.first {
+                experimentModelKind = first.kind
+            }
+            loadSavedExperimentPrompts()
+            loadExperimentRunHistory()
+            if selectedSavedExperimentPromptID == nil {
+                selectedSavedExperimentPromptID = savedExperimentPrompts.first?.id
             }
         }
     }
@@ -1418,7 +2035,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
 
                         Picker("Cleanup model", selection: $transcriptionLabController.selectedCleanupModelKind) {
-                            ForEach(TextCleanupManager.cleanupModels, id: \.kind) { model in
+                            ForEach(TextCleanupManager.cleanupGenerationModels, id: \.kind) { model in
                                 Text(model.displayName).tag(model.kind)
                             }
                         }
@@ -1821,17 +2438,11 @@ struct SettingsView: View {
     @State private var claudeAPIKeySaved: Bool = (KeychainHelper.get(AnthropicProvider.keychainKey) ?? "").isEmpty == false
 
     private var crossMeetingQACard: some View {
-        SettingsCard("Cross-Meeting Q&A") {
+        SettingsCard("Cloud API (optional)") {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Ask questions across all meeting transcripts. The assistant searches your archive with grep / read_file / list_dir and cites sources.")
+                Text("2nd Brain Q&A now runs locally. This Claude key is kept for optional cloud-backed legacy indexing and experiments.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                Picker("Provider", selection: .constant(LLMProviderKind.anthropic)) {
-                    ForEach(LLMProviderKind.allCases) { provider in
-                        Text(provider.displayName).tag(provider)
-                    }
-                }
 
                 Picker("Model", selection: $appState.claudeAPIModel) {
                     ForEach(ClaudeAPIModel.allCases) { model in
@@ -1858,7 +2469,7 @@ struct SettingsView: View {
                     .disabled(claudeAPIKeyInput.isEmpty && !claudeAPIKeySaved)
                 }
 
-                Text("API key is stored in your macOS Keychain. Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys). Cost is shown after each answer; prompt caching keeps follow-up questions cheap.")
+                Text("API key is stored in your macOS Keychain. Get one at [console.anthropic.com](https://console.anthropic.com/settings/keys).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1950,11 +2561,23 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
+                            if !GoogleCalendarService.isConfigured {
+                                Text("Google Calendar OAuth is not configured in this build.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            if let authError = calendarService.authError {
+                                Text(authError)
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+
                             Button("Connect Google Calendar") {
                                 calendarService.signIn()
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.orange)
+                            .disabled(!GoogleCalendarService.isConfigured)
                         }
                     }
                 }
@@ -1979,7 +2602,7 @@ struct SettingsView: View {
                                 panel.canChooseDirectories = true
                                 panel.allowsMultipleSelection = false
                                 panel.canCreateDirectories = true
-                                panel.message = "Choose where to save meeting transcripts"
+                                panel.message = "Choose where to save Ghost Pepper meetings and 2nd Brain files"
                                 panel.prompt = "Select Folder"
 
                                 if panel.runModal() == .OK, let url = panel.url {
@@ -1989,7 +2612,7 @@ struct SettingsView: View {
                             }
                         }
 
-                        Text("Transcripts are saved as Markdown files organized in date folders (e.g., 2026-04-07/standup.md).")
+                        Text("Meetings are saved as Markdown files organized in date folders. Generated 2nd Brain files are saved under the same folder in wikis/.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -2450,6 +3073,92 @@ private struct SettingsField<Content: View>: View {
                 .font(.subheadline.weight(.medium))
             content
         }
+    }
+}
+
+private struct ModelExperimentRunCard: View {
+    let run: ModelExperimentRunResult
+    let onRate: (Int?) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(run.modelDisplayName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(run.sourceName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("\(run.tokenCount) token\(run.tokenCount == 1 ? "" : "s")")
+                    Text(Self.durationText(run.duration))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                Text("Rating")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(1...5, id: \.self) { value in
+                    Button {
+                        onRate(run.rating == value ? nil : value)
+                    } label: {
+                        Image(systemName: (run.rating ?? 0) >= value ? "star.fill" : "star")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle((run.rating ?? 0) >= value ? .yellow : .secondary)
+                    .help("\(value) star\(value == 1 ? "" : "s")")
+                }
+                if run.rating != nil {
+                    Button("Clear") {
+                        onRate(nil)
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if let errorMessage = run.errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            Text(run.output.isEmpty ? "(empty)" : run.output)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(10)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+                .cornerRadius(8)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+        .cornerRadius(10)
+    }
+
+    private static func durationText(_ duration: TimeInterval) -> String {
+        if duration <= 0 { return "not timed" }
+        if duration < 1 { return "\(Int((duration * 1000).rounded())) ms" }
+        if duration < 60 { return String(format: "%.1fs", duration) }
+        let minutes = Int(duration / 60)
+        let seconds = Int(duration.truncatingRemainder(dividingBy: 60))
+        return "\(minutes)m \(seconds)s"
     }
 }
 

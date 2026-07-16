@@ -12,13 +12,28 @@ class MicLevelMonitor: ObservableObject {
     private var engine: AVAudioEngine?
     private var isRunning = false
 
-    func start() {
+    func start(deviceID: AudioDeviceID? = nil) {
         guard !isRunning else { return }
         // Only start if mic permission is already granted
         guard PermissionChecker.microphoneStatus() == .authorized else { return }
         let engine = AVAudioEngine()
+
+        if let deviceID {
+            let audioUnit = engine.inputNode.audioUnit!
+            var targetDeviceID = deviceID
+            let status = AudioUnitSetProperty(
+                audioUnit,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &targetDeviceID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            guard status == noErr else { return }
+        }
+
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        let format = inputNode.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { return }
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -252,8 +267,8 @@ struct SetupStep: View {
                                 micGranted = granted
                                 if granted {
                                     inputDevices = AudioDeviceManager.listInputDevices()
-                                    selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
-                                    micLevel.start()
+                                    selectedDeviceID = AudioDeviceManager.selectedInputDeviceID() ?? AudioDeviceManager.defaultInputDeviceID() ?? 0
+                                    micLevel.start(deviceID: selectedDeviceID == 0 ? nil : selectedDeviceID)
                                 } else {
                                     micDenied = true
                                 }
@@ -277,7 +292,7 @@ struct SetupStep: View {
                                 AudioDeviceManager.setSelectedInputDevice(newValue)
                                 // Restart level monitor for new device
                                 micLevel.stop()
-                                micLevel.start()
+                                micLevel.start(deviceID: newValue == 0 ? nil : newValue)
                             }
                         }
 
@@ -315,7 +330,7 @@ struct SetupStep: View {
                 ) {
                     if !accessibilityGranted {
                         Button("Grant") {
-                            PermissionChecker.promptAccessibility()
+                            PermissionChecker.openAccessibilitySettings()
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.orange)
@@ -331,14 +346,6 @@ struct SetupStep: View {
                 ) {
                     if !screenRecordingPermission.isGranted {
                         Button("Enable") {
-                            // Schedule relaunch in case macOS kills us after granting
-                            let appURL = Bundle.main.bundleURL
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                                let task = Process()
-                                task.executableURL = URL(fileURLWithPath: "/bin/sh")
-                                task.arguments = ["-c", "sleep 3 && open \"\(appURL.path)\""]
-                                try? task.run()
-                            }
                             screenRecordingPermission.requestAccess()
                             PermissionChecker.openScreenRecordingSettings()
                         }
@@ -403,13 +410,13 @@ struct SetupStep: View {
                 .padding(.bottom, 24)
             } else {
                 Button(action: {
-                    let tweet = "hey @matthartman I'm trying out Ghost Pepper 🌶️ will let you know how I like it!"
+                    let tweet = "Trying out Ghost Pepper 🌶️ and liking it so far."
                     let encoded = tweet.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
                     if let url = URL(string: "https://twitter.com/intent/tweet?text=\(encoded)") {
                         NSWorkspace.shared.open(url)
                     }
                 }) {
-                    Text("📣 Tell Matt you're trying out Ghost Pepper!")
+                    Text("📣 Share Ghost Pepper")
                         .font(.callout)
                 }
                 .buttonStyle(.plain)
@@ -425,8 +432,8 @@ struct SetupStep: View {
 
             if micGranted {
                 inputDevices = AudioDeviceManager.listInputDevices()
-                selectedDeviceID = AudioDeviceManager.defaultInputDeviceID() ?? 0
-                micLevel.start()
+                selectedDeviceID = AudioDeviceManager.selectedInputDeviceID() ?? AudioDeviceManager.defaultInputDeviceID() ?? 0
+                micLevel.start(deviceID: selectedDeviceID == 0 ? nil : selectedDeviceID)
             }
 
             if !modelLoadStarted && !modelManager.isReady {
@@ -582,6 +589,10 @@ private struct OnboardingModelRow: View {
             Image(systemName: "circle")
                 .foregroundStyle(.quaternary)
                 .font(.caption)
+        case .systemManaged:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.caption)
         }
     }
 
@@ -592,6 +603,7 @@ private struct OnboardingModelRow: View {
         case .downloading(let progress?): "Downloading \(Int(progress * 100))%"
         case .downloading(nil): "Preparing..."
         case .notLoaded: size
+        case .systemManaged: "Managed by macOS"
         }
     }
 }
@@ -603,6 +615,7 @@ class TryItController: ObservableObject {
     @Published var isRecording = false
     @Published var isTranscribing = false
     @Published var transcribedText: String?
+    @Published var statusMessage = "Waiting for you to hold Right Command + Right Option..."
     @Published var monitorStartFailed = false
 
     private var hotkeyMonitor: HotkeyMonitoring?
@@ -625,6 +638,7 @@ class TryItController: ObservableObject {
 
     func start(onAdvance: @escaping () -> Void) {
         let recorder = AudioRecorder()
+        recorder.targetDeviceID = AudioDeviceManager.selectedInputDeviceID()
         recorder.prewarm()
         self.audioRecorder = recorder
 
@@ -634,6 +648,7 @@ class TryItController: ObservableObject {
         monitor.onRecordingStart = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                self.statusMessage = ""
                 self.isRecording = true
                 try? recorder.startRecording()
             }
@@ -651,6 +666,8 @@ class TryItController: ObservableObject {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                         self?.advance(onAdvance: onAdvance)
                     }
+                } else {
+                    self.statusMessage = "No speech detected. Check the selected microphone and try again."
                 }
             }
         }
@@ -761,7 +778,7 @@ struct TryItStep: View {
                         .foregroundStyle(.red)
                         .multilineTextAlignment(.center)
                 } else {
-                    Text("Waiting for you to hold Right Command + Right Option...")
+                    Text(controller.statusMessage)
                         .foregroundStyle(.secondary)
                 }
             }

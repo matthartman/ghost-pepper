@@ -490,7 +490,13 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                     speakerID: "Speaker 0",
                     startTime: 2.48,
                     endTime: 4.32,
-                    text: "And that have been around a long time."
+                    text: "And that have been around a long time.",
+                    attribution: .init(
+                        speakerID: "Speaker 0",
+                        confidence: 0.5,
+                        evidenceDuration: 1.84,
+                        source: .singleSpeakerFallback
+                    )
                 )
             ]
         )
@@ -569,7 +575,13 @@ final class TranscriptionLabRunnerTests: XCTestCase {
                     speakerID: "Speaker 0",
                     startTime: 2.48,
                     endTime: 4.24,
-                    text: "And that have been around a long time."
+                    text: "And that have been around a long time.",
+                    attribution: .init(
+                        speakerID: "Speaker 0",
+                        confidence: 0.5,
+                        evidenceDuration: 1.76,
+                        source: .singleSpeakerFallback
+                    )
                 )
             ]
         )

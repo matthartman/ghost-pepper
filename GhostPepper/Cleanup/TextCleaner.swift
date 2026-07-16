@@ -179,7 +179,7 @@ final class TextCleaner {
             let postProcessDuration = Date().timeIntervalSince(postProcessStart)
 
             switch error {
-            case .unavailable:
+            case .unavailable, .unsupportedRuntime:
                 debugLogger?(.cleanup, "Cleanup backend unavailable, returning raw transcription.")
                 return TextCleanerResult(
                     text: text,

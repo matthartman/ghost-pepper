@@ -20,7 +20,7 @@ final class IndexSystemPromptTests: XCTestCase {
     }
 
     func testIncrementalPromptEmbedsAliasSnapshotJSON() {
-        let snapshot = ["John Smith": ["John", "JS"], "Lara Chen": []]
+        let snapshot = ["John Smith": ["John", "JS"], "Jordan Pike": []]
         let prompt = IndexSystemPrompt.buildPeopleIndexIncremental(
             archiveRootPath: "/a",
             indexRootPath: "/i",
@@ -29,7 +29,7 @@ final class IndexSystemPromptTests: XCTestCase {
         )
         XCTAssertTrue(prompt.contains("\"John Smith\""))
         XCTAssertTrue(prompt.contains("\"JS\""))
-        XCTAssertTrue(prompt.contains("\"Lara Chen\""))
+        XCTAssertTrue(prompt.contains("\"Jordan Pike\""))
     }
 
     func testIncrementalPromptEmbedsMeetingPathExactlyOnce() {

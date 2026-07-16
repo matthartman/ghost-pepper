@@ -17,7 +17,10 @@ struct ZoBackend: PepperChatBackend {
         }
 
         // Try non-streaming first — simpler and more reliable
-        let url = URL(string: "\(host)/zo/ask")!
+        guard let url = URL(string: "\(host)/zo/ask"),
+              Self.isAllowedCredentialDestination(url) else {
+            throw PepperChatBackendError.serverError("Zo host must use HTTPS unless it is localhost.")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -46,5 +49,11 @@ struct ZoBackend: PepperChatBackend {
         }
 
         await onChunk(output)
+    }
+
+    private static func isAllowedCredentialDestination(_ url: URL) -> Bool {
+        if url.scheme == "https" { return true }
+        guard url.scheme == "http", let host = url.host?.lowercased() else { return false }
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
     }
 }

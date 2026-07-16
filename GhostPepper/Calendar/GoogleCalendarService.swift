@@ -11,7 +11,7 @@ private struct CalendarFetchError: LocalizedError {
 }
 
 /// Reads Google Calendar events via OAuth 2.0 (PKCE flow for desktop apps).
-/// Token is stored locally in UserDefaults — never sent anywhere except googleapis.com.
+/// Tokens are stored locally in Keychain and only sent to googleapis.com.
 @MainActor
 final class GoogleCalendarService: ObservableObject {
     static let shared = GoogleCalendarService()
@@ -19,9 +19,15 @@ final class GoogleCalendarService: ObservableObject {
     @Published var isSignedIn = false
     @Published var isLoading = false
     @Published var userName: String?
+    @Published var authError: String?
 
     private static let clientID = Secrets.googleClientID
     private static let clientSecret = Secrets.googleClientSecret
+    static var isConfigured: Bool {
+        !clientID.isEmpty
+            && !clientID.contains("YOUR_CLIENT_ID")
+            && !clientSecret.contains("YOUR_CLIENT_SECRET")
+    }
     // Google requires loopback redirect for desktop OAuth clients.
     // We bind to 127.0.0.1 only (not accessible from network), use a random port,
     // and shut down immediately after receiving the code.
@@ -34,13 +40,13 @@ final class GoogleCalendarService: ObservableObject {
     private static let tokenExpiryKey = "googleCalendarTokenExpiry"
 
     private var accessToken: String? {
-        get { UserDefaults.standard.string(forKey: Self.tokenKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.tokenKey) }
+        get { KeychainHelper.get(Self.tokenKey) }
+        set { _ = KeychainHelper.set(newValue ?? "", for: Self.tokenKey) }
     }
 
     private var refreshToken: String? {
-        get { UserDefaults.standard.string(forKey: Self.refreshTokenKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.refreshTokenKey) }
+        get { KeychainHelper.get(Self.refreshTokenKey) }
+        set { _ = KeychainHelper.set(newValue ?? "", for: Self.refreshTokenKey) }
     }
 
     private var tokenExpiry: Date? {
@@ -49,8 +55,12 @@ final class GoogleCalendarService: ObservableObject {
     }
 
     private var codeVerifier: String?
+    private var oauthState: String?
 
     private init() {
+        KeychainHelper.migrateUserDefaultsString(defaultsKey: Self.tokenKey, keychainKey: Self.tokenKey)
+        KeychainHelper.migrateUserDefaultsString(defaultsKey: Self.refreshTokenKey, keychainKey: Self.refreshTokenKey)
+        UserDefaults.standard.removeObject(forKey: Self.diskCacheKey)
         isSignedIn = accessToken != nil
     }
 
@@ -61,24 +71,48 @@ final class GoogleCalendarService: ObservableObject {
 
     /// Start the OAuth sign-in flow — starts a loopback server and opens the browser.
     func signIn() {
+        authError = nil
+        isLoading = true
+        defer {
+            if activeServer == nil {
+                isLoading = false
+            }
+        }
+
+        guard Self.isConfigured else {
+            authError = "Google Calendar OAuth is not configured in this build."
+            calendarLog.error("OAuth client is not configured")
+            return
+        }
+
         let verifier = generateCodeVerifier()
         codeVerifier = verifier
+        let state = generateCodeVerifier()
+        oauthState = state
         let challenge = generateCodeChallenge(from: verifier)
 
         // Start loopback server on a random port (127.0.0.1 only, not network-accessible)
-        let server = LoopbackOAuthServer { [weak self] code in
+        let server = LoopbackOAuthServer { [weak self] callback in
             Task { @MainActor [weak self] in
-                guard let self, let verifier = self.codeVerifier else { return }
+                guard let self, let verifier = self.codeVerifier, callback.state == self.oauthState else {
+                    self?.codeVerifier = nil
+                    self?.oauthState = nil
+                    self?.activeServer = nil
+                    return
+                }
                 self.codeVerifier = nil
+                self.oauthState = nil
                 self.activeServer = nil
                 self.isLoading = true
-                await self.exchangeCodeForToken(code: code, verifier: verifier)
+                await self.exchangeCodeForToken(code: callback.code, verifier: verifier)
                 self.isLoading = false
             }
         }
         activeServer = server
         guard let port = server.start() else {
-            print("GoogleCalendar: failed to start loopback server")
+            authError = "Could not start the local Google sign-in callback. Check the app sandbox network server entitlement."
+            calendarLog.error("Failed to start loopback OAuth server")
+            activeServer = nil
             return
         }
         loopbackPort = port
@@ -93,12 +127,21 @@ final class GoogleCalendarService: ObservableObject {
             URLQueryItem(name: "scope", value: Self.scope),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "access_type", value: "offline"),
             URLQueryItem(name: "prompt", value: "consent"),
         ]
 
-        if let url = components.url {
-            NSWorkspace.shared.open(url)
+        guard let url = components.url else {
+            authError = "Could not create the Google sign-in URL."
+            calendarLog.error("Failed to create Google OAuth URL")
+            activeServer = nil
+            return
+        }
+        if !NSWorkspace.shared.open(url) {
+            authError = "Could not open the Google sign-in page."
+            calendarLog.error("NSWorkspace failed to open Google OAuth URL")
+            activeServer = nil
         }
     }
 
@@ -107,6 +150,7 @@ final class GoogleCalendarService: ObservableObject {
         accessToken = nil
         refreshToken = nil
         tokenExpiry = nil
+        UserDefaults.standard.removeObject(forKey: Self.diskCacheKey)
         isSignedIn = false
         userName = nil
     }
@@ -206,48 +250,37 @@ final class GoogleCalendarService: ObservableObject {
 
     private static let diskCacheKey = "calendarEventsTodayCache"
 
-    private struct DiskCachePayload: Codable {
-        let dateKey: String
-        let fetchedAt: Date
-        let events: [CalendarEvent]
-    }
-
-    private static let dateKeyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone.current
-        return f
-    }()
-
     private func rememberTodayCache(_ events: [CalendarEvent]) {
         let now = Date()
         todayCache = (events: events, fetchedAt: now)
-        let payload = DiskCachePayload(
-            dateKey: Self.dateKeyFormatter.string(from: now),
-            fetchedAt: now,
-            events: events
-        )
-        if let data = try? JSONEncoder().encode(payload) {
-            UserDefaults.standard.set(data, forKey: Self.diskCacheKey)
-        }
     }
 
     private func fallbackToDiskCache(reason: String) -> TodayResult {
-        guard let data = UserDefaults.standard.data(forKey: Self.diskCacheKey),
-              let payload = try? JSONDecoder().decode(DiskCachePayload.self, from: data) else {
-            return TodayResult(events: [], errorMessage: reason)
+        UserDefaults.standard.removeObject(forKey: Self.diskCacheKey)
+        return TodayResult(events: [], errorMessage: Self.userFacingCalendarError(from: reason))
+    }
+
+    static func userFacingCalendarError(from rawMessage: String) -> String {
+        let lowercased = rawMessage.lowercased()
+        if lowercased.contains("http 401")
+            || lowercased.contains("invalid authentication credentials")
+            || lowercased.contains("unauthorized")
+            || lowercased.contains("no access token") {
+            return "Google Calendar connection expired. Disconnect and reconnect to continue."
         }
-        let todayKey = Self.dateKeyFormatter.string(from: Date())
-        guard payload.dateKey == todayKey else {
-            return TodayResult(events: [], errorMessage: reason)
+
+        if lowercased.contains("http 403") || lowercased.contains("insufficient") {
+            return "Google Calendar needs updated permissions. Disconnect and reconnect to continue."
         }
-        let timeFmt = DateFormatter()
-        timeFmt.timeStyle = .short
-        let stamp = timeFmt.string(from: payload.fetchedAt)
-        return TodayResult(
-            events: payload.events,
-            errorMessage: "Offline — showing cached events from \(stamp)."
-        )
+
+        if lowercased.contains("timed out")
+            || lowercased.contains("not connected")
+            || lowercased.contains("network")
+            || lowercased.contains("offline") {
+            return "Couldn't reach Google Calendar. Check your connection and try Refresh."
+        }
+
+        return "Couldn't load Google Calendar. Try Refresh, or Disconnect and reconnect."
     }
 
     private func fetchCalendarIDs() async -> Result<[String], CalendarFetchError> {
@@ -264,7 +297,8 @@ final class GoogleCalendarService: ObservableObject {
             }
             if http.statusCode != 200 {
                 let body = String(data: data, encoding: .utf8) ?? ""
-                return .failure(CalendarFetchError(message: "HTTP \(http.statusCode): \(body.prefix(200))"))
+                calendarLog.error("fetchCalendarIDs failed: HTTP \(http.statusCode, privacy: .public), body: \(body.prefix(500), privacy: .private)")
+                return .failure(CalendarFetchError(message: "HTTP \(http.statusCode)"))
             }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let items = json["items"] as? [[String: Any]] else {
@@ -312,7 +346,8 @@ final class GoogleCalendarService: ObservableObject {
             }
             if httpResponse.statusCode != 200 {
                 let body = String(data: data, encoding: .utf8) ?? ""
-                return .failure(CalendarFetchError(message: "HTTP \(httpResponse.statusCode): \(body.prefix(200))"))
+                calendarLog.error("fetchEvents failed: HTTP \(httpResponse.statusCode, privacy: .public), body: \(body.prefix(500), privacy: .private)")
+                return .failure(CalendarFetchError(message: "HTTP \(httpResponse.statusCode)"))
             }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let items = json["items"] as? [[String: Any]] else {
@@ -469,14 +504,16 @@ final class GoogleCalendarService: ObservableObject {
     }
 
     private func exchangeCodeForToken(code: String, verifier: String) async {
-        let params = [
+        var params = [
             "code": code,
             "client_id": Self.clientID,
-            "client_secret": Self.clientSecret,
             "redirect_uri": "\(Self.loopbackHost):\(loopbackPort)",
             "grant_type": "authorization_code",
             "code_verifier": verifier,
         ]
+        if !Self.clientSecret.isEmpty {
+            params["client_secret"] = Self.clientSecret
+        }
 
         guard let tokenData = await postTokenRequest(params: params) else { return }
         storeTokens(from: tokenData)
@@ -485,12 +522,14 @@ final class GoogleCalendarService: ObservableObject {
     private func refreshAccessToken() async -> Bool {
         guard let refresh = refreshToken else { return false }
 
-        let params = [
+        var params = [
             "refresh_token": refresh,
             "client_id": Self.clientID,
-            "client_secret": Self.clientSecret,
             "grant_type": "refresh_token",
         ]
+        if !Self.clientSecret.isEmpty {
+            params["client_secret"] = Self.clientSecret
+        }
 
         guard let tokenData = await postTokenRequest(params: params) else { return false }
         storeTokens(from: tokenData)
@@ -575,10 +614,15 @@ final class GoogleCalendarService: ObservableObject {
 /// extracts the auth code, sends a "success" page, and shuts down immediately.
 /// This is Google's officially recommended approach for desktop OAuth apps.
 private class LoopbackOAuthServer {
-    private let onCode: (String) -> Void
+    struct Callback {
+        let code: String
+        let state: String?
+    }
+
+    private let onCode: (Callback) -> Void
     private var serverSocket: Int32 = -1
 
-    init(onCode: @escaping (String) -> Void) {
+    init(onCode: @escaping (Callback) -> Void) {
         self.onCode = onCode
     }
 
@@ -619,32 +663,100 @@ private class LoopbackOAuthServer {
             let bytesRead = read(client, &buffer, buffer.count)
             let request = bytesRead > 0 ? String(bytes: buffer[0..<bytesRead], encoding: .utf8) ?? "" : ""
 
-            // Extract code from: GET /?code=AUTH_CODE&scope=... HTTP/1.1
-            var authCode: String?
-            if let queryStart = request.range(of: "GET /?"),
-               let httpEnd = request.range(of: " HTTP/") {
-                let query = String(request[queryStart.upperBound..<httpEnd.lowerBound])
+            // Extract query params from: GET /?code=AUTH_CODE&state=... HTTP/1.1
+            var queryParams: [String: String] = [:]
+            if let requestTarget = Self.httpRequestTarget(from: request),
+               let queryStart = requestTarget.firstIndex(of: "?") {
+                let query = String(requestTarget[requestTarget.index(after: queryStart)...])
                 for param in query.components(separatedBy: "&") {
-                    let kv = param.components(separatedBy: "=")
-                    if kv.count == 2, kv[0] == "code" {
-                        authCode = kv[1].removingPercentEncoding ?? kv[1]
+                    let kv = param.split(separator: "=", maxSplits: 1).map(String.init)
+                    if kv.count == 2 {
+                        queryParams[kv[0]] = kv[1].removingPercentEncoding ?? kv[1]
                     }
                 }
             }
+            let authCode = queryParams["code"]
+            let state = queryParams["state"]
 
             let html = authCode != nil
-                ? "<html><body style='font-family:system-ui;text-align:center;padding:60px'><h2>Connected to Ghost Pepper!</h2><p>You can close this tab.</p></body></html>"
-                : "<html><body style='font-family:system-ui;text-align:center;padding:60px'><h2>Something went wrong</h2><p>Please try again from Ghost Pepper settings.</p></body></html>"
-            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.count)\r\nConnection: close\r\n\r\n\(html)"
-            _ = response.withCString { write(client, $0, response.count) }
+                ? Self.successHTML
+                : Self.failureHTML
+            let htmlData = Data(html.utf8)
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(htmlData.count)\r\nConnection: close\r\n\r\n"
+            _ = header.withCString { write(client, $0, strlen($0)) }
+            htmlData.withUnsafeBytes { bytes in
+                if let base = bytes.baseAddress {
+                    _ = write(client, base, htmlData.count)
+                }
+            }
 
             if let code = authCode {
-                onCode(code)
+                onCode(Callback(code: code, state: state))
             }
         }
 
         return port
     }
+
+    private static func httpRequestTarget(from request: String) -> String? {
+        guard let firstLine = request.split(separator: "\r\n", maxSplits: 1).first else { return nil }
+        let parts = firstLine.split(separator: " ")
+        guard parts.count >= 2, parts[0] == "GET" else { return nil }
+        return String(parts[1])
+    }
+
+    private static let successHTML = """
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Ghost Pepper Connected</title>
+        <style>
+          body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #20272b; color: #f1f3f4; }
+          main { text-align: center; max-width: 520px; padding: 48px 24px; }
+          h1 { font-size: 32px; margin: 0 0 12px; }
+          p { color: #aeb6ba; font-size: 17px; line-height: 1.45; margin: 0 0 24px; }
+          a { display: inline-block; background: #ff8f2a; color: white; text-decoration: none; font-weight: 700; padding: 12px 18px; border-radius: 8px; }
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Ready to return to Ghost Pepper</h1>
+          <p>Google Calendar is connected. You can close this tab, or jump back to the app.</p>
+          <a href="com.github.matthartman.ghostpepper://calendar-connected">Return to Ghost Pepper</a>
+        </main>
+        <script>
+          setTimeout(function () {
+            window.location.href = "com.github.matthartman.ghostpepper://calendar-connected";
+          }, 700);
+        </script>
+      </body>
+    </html>
+    """
+
+    private static let failureHTML = """
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Ghost Pepper Calendar Error</title>
+        <style>
+          body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #20272b; color: #f1f3f4; }
+          main { text-align: center; max-width: 520px; padding: 48px 24px; }
+          h1 { font-size: 32px; margin: 0 0 12px; }
+          p { color: #aeb6ba; font-size: 17px; line-height: 1.45; margin: 0; }
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Could not connect Calendar</h1>
+          <p>Please return to Ghost Pepper and try connecting Google Calendar again.</p>
+        </main>
+      </body>
+    </html>
+    """
 }
 
 /// A calendar event with meeting metadata.

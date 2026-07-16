@@ -271,7 +271,13 @@ final class FluidAudioSpeechSessionTests: XCTestCase {
                         speakerID: "Speaker A",
                         startTime: 0.9,
                         endTime: 1.6,
-                        text: "speaker a two"
+                        text: "speaker a two",
+                        attribution: .init(
+                            speakerID: "Speaker A",
+                            confidence: 0.68 / 0.7,
+                            evidenceDuration: 0.68,
+                            source: .diarization
+                        )
                     ),
                 ]
             )

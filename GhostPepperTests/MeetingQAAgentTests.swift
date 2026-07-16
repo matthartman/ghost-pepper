@@ -30,7 +30,7 @@ final class MeetingQAAgentTests: XCTestCase {
         rootDir = FileManager.default.temporaryDirectory.appendingPathComponent("MeetingQAAgentTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: rootDir.appendingPathComponent("2025-01-29"), withIntermediateDirectories: true)
-        try "Quinn Adler".write(to: rootDir.appendingPathComponent("2025-01-29/dana-matt.md"), atomically: true, encoding: .utf8)
+        try "Quinn Adler".write(to: rootDir.appendingPathComponent("2025-01-29/speaker-one-speaker-two.md"), atomically: true, encoding: .utf8)
     }
 
     override func tearDownWithError() throws {
@@ -66,7 +66,7 @@ final class MeetingQAAgentTests: XCTestCase {
                 .stop(reason: .toolUse, usage: ProviderUsage(inputTokens: 50, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0)),
             ],
             [
-                .textDelta("Found in 2025-01-29/dana-matt.md."),
+                .textDelta("Found in 2025-01-29/speaker-one-speaker-two.md."),
                 .stop(reason: .endTurn, usage: ProviderUsage(inputTokens: 80, outputTokens: 8, cacheReadTokens: 0, cacheWriteTokens: 0)),
             ],
         ])
@@ -85,7 +85,7 @@ final class MeetingQAAgentTests: XCTestCase {
         }
         XCTAssertTrue(sawToolCall)
         XCTAssertTrue(sawToolResult)
-        XCTAssertEqual(text, "Found in 2025-01-29/dana-matt.md.")
+        XCTAssertEqual(text, "Found in 2025-01-29/speaker-one-speaker-two.md.")
         XCTAssertEqual(provider.calls.count, 2)
     }
 

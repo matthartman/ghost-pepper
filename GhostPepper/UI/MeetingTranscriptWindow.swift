@@ -21,6 +21,267 @@ struct QAHistoryTurn: Equatable {
     let answer: String
 }
 
+struct ScopedQAPrompt: Equatable {
+    let displayQuestion: String
+    let agentQuestion: String
+}
+
+private struct WikiGenerationFunctionRun: Identifiable, Equatable {
+    let id = UUID()
+    var name: String
+    var system: String
+    var user: String
+    var output: String = ""
+    var inputTokens: Int = 0
+    var outputTokens: Int = 0
+    var isFinished: Bool = false
+}
+
+@MainActor
+private final class WikiGenerationRun: ObservableObject, Identifiable {
+    let id = UUID()
+    let meetingURL: URL
+    let archiveRoot: URL
+    let meetingTitle: String
+    let modelCallTotal: Int
+    let isBatch: Bool
+
+    @Published var status: String = "Adding to 2nd Brain..."
+    @Published var functions: [WikiGenerationFunctionRun] = []
+    @Published var selectedFunctionID: UUID? = nil
+    @Published var savedRelativePaths: [String] = []
+    @Published var result: GeneratedWikiResult? = nil
+    @Published var errorMessage: String? = nil
+    @Published var isRunning: Bool = true
+    @Published var modelCallsCompleted: Int = 0
+    @Published var estimatedInputTokens: Int = 0
+    @Published var estimatedOutputTokens: Int = 0
+    @Published var totalSourceCount: Int = 1
+    @Published var completedSourceCount: Int = 0
+    @Published var currentSourceIndex: Int = 0
+    @Published var currentSourceTitle: String = ""
+    @Published var failedSourceSummaries: [String] = []
+
+    private var completedInputTokens: Int = 0
+    private var completedOutputTokens: Int = 0
+    private var currentInputTokenEstimate: Int = 0
+
+    init(meetingURL: URL, archiveRoot: URL, modelCallTotal: Int = 2) {
+        self.meetingURL = meetingURL
+        self.archiveRoot = archiveRoot
+        self.meetingTitle = meetingURL.deletingPathExtension().lastPathComponent
+        self.modelCallTotal = modelCallTotal
+        self.isBatch = false
+        self.currentSourceTitle = self.meetingTitle
+    }
+
+    init(batchTitle: String, archiveRoot: URL, sourceCount: Int, modelCallTotal: Int) {
+        self.meetingURL = archiveRoot
+        self.archiveRoot = archiveRoot
+        self.meetingTitle = batchTitle
+        self.modelCallTotal = modelCallTotal
+        self.isBatch = true
+        self.totalSourceCount = max(1, sourceCount)
+        self.currentSourceTitle = batchTitle
+    }
+
+    var isFinished: Bool {
+        result != nil || errorMessage != nil || !isRunning
+    }
+
+    var progressFraction: Double {
+        if result != nil { return 1 }
+        guard isRunning else { return errorMessage == nil ? 1 : 0 }
+        if isBatch {
+            let sourceBase = Double(completedSourceCount) / Double(max(1, totalSourceCount))
+            let activeSourceSpan = 1.0 / Double(max(1, totalSourceCount))
+            return min(0.98, sourceBase + activeSourceSpan * currentSourceProgressFraction)
+        }
+        guard modelCallTotal > 0 else { return 0.1 }
+        return min(0.98, (Double(modelCallsCompleted) + currentCallProgressFraction) / Double(modelCallTotal))
+    }
+
+    var selectedFunction: WikiGenerationFunctionRun? {
+        if let selectedFunctionID,
+           let selected = functions.first(where: { $0.id == selectedFunctionID }) {
+            return selected
+        }
+        return functions.last
+    }
+
+    var activeOutputTokenEstimate: Int {
+        guard let selectedFunction else { return 0 }
+        if selectedFunction.isFinished { return selectedFunction.outputTokens }
+        return selectedFunction.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? 0
+            : max(1, selectedFunction.output.count / 4)
+    }
+
+    var currentCallProgressFraction: Double {
+        guard let selectedFunction else { return 0.08 }
+        if selectedFunction.isFinished { return 1 }
+        if selectedFunction.output.isEmpty { return 0.12 }
+        return min(0.85, 0.18 + Double(activeOutputTokenEstimate) / 1200.0)
+    }
+
+    var currentSourceProgressFraction: Double {
+        guard isRunning else { return 1 }
+        guard modelCallTotal > 0 else { return currentCallProgressFraction }
+        let callsPerSource = max(1, modelCallTotal / max(1, totalSourceCount))
+        let completedCallsForCurrentSource = modelCallsCompleted % callsPerSource
+        return min(0.95, (Double(completedCallsForCurrentSource) + currentCallProgressFraction) / Double(callsPerSource))
+    }
+
+    var terminalText: String {
+        guard let selectedFunction else {
+            return """
+            [status] Preparing 2nd Brain run
+            [sources] \(completedSourceCount)/\(totalSourceCount) complete
+            [model] Waiting for the local model...
+            """
+        }
+        let output = selectedFunction.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.isEmpty {
+            return """
+            [status] \(status)
+            [source] \(currentSourceTitle)
+            [sources] \(completedSourceCount)/\(totalSourceCount) complete
+            [step] \(selectedFunction.name)
+            [input] ~\(selectedFunction.inputTokens) input tokens prepared
+            [model] Prompt sent; waiting for the first output token...
+            """
+        }
+        return output
+    }
+
+    func beginSource(_ url: URL, index: Int, total: Int) {
+        totalSourceCount = max(1, total)
+        currentSourceIndex = index
+        currentSourceTitle = url.deletingPathExtension().lastPathComponent
+        status = "Adding \(index) of \(total): \(currentSourceTitle)"
+    }
+
+    func sourceFinished() {
+        completedSourceCount += 1
+    }
+
+    func sourceFailed(_ url: URL, error: Error) {
+        completedSourceCount += 1
+        failedSourceSummaries.append("\(url.lastPathComponent): \(error.localizedDescription)")
+        status = "Skipped \(url.deletingPathExtension().lastPathComponent): \(error.localizedDescription)"
+    }
+
+    func handle(_ progress: GeneratedWikiProgress) {
+        switch progress {
+        case .status(let message):
+            status = message
+        case .functionStarted(let name, let system, let user):
+            status = name
+            currentInputTokenEstimate = max(1, (system.count + user.count) / 4)
+            estimatedInputTokens = completedInputTokens + currentInputTokenEstimate
+            estimatedOutputTokens = completedOutputTokens
+            let run = WikiGenerationFunctionRun(
+                name: name,
+                system: system,
+                user: user,
+                inputTokens: currentInputTokenEstimate,
+                outputTokens: 0,
+                isFinished: false
+            )
+            functions.append(run)
+            selectedFunctionID = run.id
+        case .token(let token):
+            guard let idx = functions.indices.last else { return }
+            functions[idx].output += token
+            estimatedOutputTokens = completedOutputTokens + max(1, functions[idx].output.count / 4)
+        case .functionFinished(let name, let output, let inputTokens, let outputTokens):
+            status = "\(name) complete"
+            if let idx = functions.lastIndex(where: { $0.name == name && !$0.isFinished }) ?? functions.indices.last {
+                functions[idx].output = output
+                functions[idx].inputTokens = inputTokens
+                functions[idx].outputTokens = outputTokens
+                functions[idx].isFinished = true
+                selectedFunctionID = functions[idx].id
+            }
+            completedInputTokens += inputTokens
+            completedOutputTokens += outputTokens
+            currentInputTokenEstimate = 0
+            estimatedInputTokens = completedInputTokens
+            estimatedOutputTokens = completedOutputTokens
+            modelCallsCompleted += 1
+        case .saved(let url):
+            let relative = url.path.replacingOccurrences(of: archiveRoot.path + "/", with: "")
+            if !savedRelativePaths.contains(relative) {
+                savedRelativePaths.append(relative)
+            }
+            status = "Saved \(relative)"
+        }
+    }
+
+    func finish(_ result: GeneratedWikiResult) {
+        self.result = result
+        if isBatch {
+            let failed = failedSourceSummaries.isEmpty ? "" : " (\(failedSourceSummaries.count) failed)"
+            self.status = "Added \(completedSourceCount) sources to 2nd Brain\(failed)"
+        } else {
+            self.status = "Added to 2nd Brain"
+        }
+        self.isRunning = false
+        self.estimatedInputTokens = result.usage.inputTokens
+        self.estimatedOutputTokens = result.usage.outputTokens
+    }
+
+    func fail(_ message: String) {
+        self.errorMessage = message
+        self.status = "Add to 2nd Brain failed"
+        self.isRunning = false
+    }
+
+    func fullDebugText() -> String {
+        var lines: [String] = [
+            "2nd Brain generation",
+            isBatch ? "Batch: \(meetingTitle)" : "Meeting: \(meetingURL.path)",
+            "Status: \(status)",
+            "Sources: \(completedSourceCount)/\(totalSourceCount)",
+            "Tokens: \(estimatedInputTokens) in / \(estimatedOutputTokens) out",
+            ""
+        ]
+        if !failedSourceSummaries.isEmpty {
+            lines.append("--- FAILURES ---")
+            lines.append(contentsOf: failedSourceSummaries)
+            lines.append("")
+        }
+        for function in functions {
+            lines.append("## \(function.name)")
+            lines.append("")
+            lines.append("### System")
+            lines.append(function.system)
+            lines.append("")
+            lines.append("### User")
+            lines.append(function.user)
+            lines.append("")
+            lines.append("### Output")
+            lines.append(function.output)
+            lines.append("")
+            lines.append("\(function.inputTokens) input tokens / \(function.outputTokens) output tokens")
+            lines.append("")
+        }
+        if !savedRelativePaths.isEmpty {
+            lines.append("## Saved")
+            lines.append(contentsOf: savedRelativePaths)
+        }
+        if let result {
+            lines.append("")
+            lines.append(result.gitMessage)
+        }
+        if let errorMessage {
+            lines.append("")
+            lines.append("Error: \(errorMessage)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 enum MeetingTranscriptWindowPresentation {
     static func windowLevel(
         shouldFloatWhileRecording: Bool,
@@ -39,8 +300,13 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onLoadSpeakerReviewItems: ((MeetingTranscript) -> [MeetingSpeakerReviewItem])?
+    var onUpdateSpeakerLabel: ((_ transcript: MeetingTranscript, _ currentDisplayName: String, _ newDisplayName: String) throws -> Void)?
     var onAskQuestion: ((_ question: String, _ history: [QAHistoryTurn]) -> AsyncThrowingStream<QAEvent, Error>)?
-    var onMakeIndexBuilder: ((IndexKind) -> IndexBuilder?)?
+    var onMakeIndexBuilder: ((IndexKind) -> (any IndexBuilding)?)?
+    var onGenerateWikiProposals: (() async throws -> [WikiKindProposal])?
+    var onApproveWikiKind: ((WikiKindSpec) -> Void)?
+    var onGenerateMeetingWiki: ((_ meetingURL: URL, _ onProgress: @MainActor @escaping (GeneratedWikiProgress) -> Void) async throws -> GeneratedWikiResult)?
     var shouldFloatWhileRecording: () -> Bool = { false }
     var pushToTalkDisplayProvider: () -> String = { "" }
 
@@ -72,8 +338,13 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
         state.onStartRecording = onStartRecording
         state.onStopRecording = onStopRecording
         state.onGenerateSummary = onGenerateSummary
+        state.onLoadSpeakerReviewItems = onLoadSpeakerReviewItems
+        state.onUpdateSpeakerLabel = onUpdateSpeakerLabel
         state.onAskQuestion = onAskQuestion
         state.onMakeIndexBuilder = onMakeIndexBuilder
+        state.onGenerateWikiProposals = onGenerateWikiProposals
+        state.onApproveWikiKind = onApproveWikiKind
+        state.onGenerateMeetingWiki = onGenerateMeetingWiki
         state.pushToTalkDisplay = pushToTalkDisplayProvider()
         state.onRecordingStateChanged = { [weak self] in
             self?.updateWindowLevel()
@@ -226,6 +497,9 @@ enum NavTabContent {
     case indexEntry(kind: IndexKind, slug: String, entry: IndexEntry)
     case meeting(OpenMeetingTab)
     case indexList(kind: IndexKind)
+    case secondBrain
+    case generatedWikiPage(GeneratedWikiPage)
+    case airtableTable(AirtableTablePreview)
 
     @MainActor
     var title: String {
@@ -233,6 +507,9 @@ enum NavTabContent {
         case .indexEntry(_, _, let entry): return entry.canonicalName
         case .meeting(let tab): return tab.transcript.meetingName
         case .indexList(let kind): return kind.displayName
+        case .secondBrain: return "2nd Brain"
+        case .generatedWikiPage(let page): return page.title
+        case .airtableTable(let table): return table.name
         }
     }
 
@@ -241,8 +518,18 @@ enum NavTabContent {
         case .indexEntry(let kind, _, _): return kind.iconSystemName
         case .meeting: return "doc.text"
         case .indexList(let kind): return kind.iconSystemName
+        case .secondBrain: return "brain.head.profile"
+        case .generatedWikiPage(let page): return page.type == "meeting_overview" ? "rectangle.stack.badge.person.crop" : "link"
+        case .airtableTable: return "tablecells"
         }
     }
+}
+
+struct AirtableTablePreview: Equatable {
+    let name: String
+    let fileURL: URL
+    let headers: [String]
+    let rows: [[String]]
 }
 
 /// One open document shown as a tab in the file tab bar. Holds a nav stack
@@ -280,6 +567,21 @@ struct IndexHistoryItem: Identifiable, Hashable {
     var id: String { "\(kind.rawValue)/\(slug)" }
 }
 
+struct GeneratedWikiSidebarItem: Identifiable, Hashable {
+    let title: String
+    let type: String
+    let fileURL: URL
+    var id: String { fileURL.path }
+}
+
+struct GeneratedWikiSidebarFolder: Identifiable, Hashable {
+    let slug: String
+    let title: String
+    let iconSystemName: String
+    let items: [GeneratedWikiSidebarItem]
+    var id: String { slug }
+}
+
 @MainActor
 final class MeetingWindowState: ObservableObject {
     var onAskQuestion: ((_ question: String, _ history: [QAHistoryTurn]) -> AsyncThrowingStream<QAEvent, Error>)?
@@ -299,12 +601,24 @@ final class MeetingWindowState: ObservableObject {
     var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
-    var onMakeIndexBuilder: ((IndexKind) -> IndexBuilder?)?
+    var onLoadSpeakerReviewItems: ((MeetingTranscript) -> [MeetingSpeakerReviewItem])?
+    var onUpdateSpeakerLabel: ((_ transcript: MeetingTranscript, _ currentDisplayName: String, _ newDisplayName: String) throws -> Void)?
+    var onMakeIndexBuilder: ((IndexKind) -> (any IndexBuilding)?)?
+    var onGenerateWikiProposals: (() async throws -> [WikiKindProposal])?
+    var onApproveWikiKind: ((WikiKindSpec) -> Void)?
+    var onGenerateMeetingWiki: ((_ meetingURL: URL, _ onProgress: @MainActor @escaping (GeneratedWikiProgress) -> Void) async throws -> GeneratedWikiResult)?
 
     @Published var indexItems: [IndexKind: [IndexHistoryItem]] = [:]
     @Published var indexTabs: [OpenIndexTab] = []
     @Published var showBuildIndexSheet: Bool = false
     @Published var pendingBuildIndexKind: IndexKind = .people
+    @Published var wikiProposals: [WikiKindProposal] = []
+    @Published var generatedWikiFolders: [GeneratedWikiSidebarFolder] = []
+    @Published var generatedWikiArchiveRoot: URL? = nil
+    @Published var showNewWikiSheet: Bool = false
+    @Published var pendingGenerateWikiURL: URL? = nil
+    @Published var pendingGenerateWikiBatch: Bool = false
+    @Published var isGeneratingMeetingWiki: Bool = false
 
     /// Right-side Models panel toggle.
     @Published var showModelsSidebar: Bool = false
@@ -313,6 +627,7 @@ final class MeetingWindowState: ObservableObject {
     /// to drop a prompt into the bottom Q&A bar and fire it. The root view
     /// consumes this on `.onChange` and clears it back to nil.
     @Published var pendingQAPrompt: String? = nil
+    @Published var pendingScopedQAPrompt: ScopedQAPrompt? = nil
 
     /// When the Q&A run was triggered by a per-entry refresh, this holds the
     /// dossier we should offer to write the answer back into. Cleared when
@@ -365,6 +680,11 @@ final class MeetingWindowState: ObservableObject {
     }
 
     func openFile(_ url: URL) {
+        if url.pathExtension.lowercased() == "csv" {
+            openAirtableTable(url)
+            return
+        }
+
         // Already open? Switch to it.
         if let existing = tabs.first(where: { $0.fileURL == url }) {
             selectedSurface = .tab(existing.id)
@@ -381,6 +701,56 @@ final class MeetingWindowState: ObservableObject {
         } catch {
             print("MeetingWindowState: failed to load \(url.lastPathComponent): \(error)")
         }
+    }
+
+    func openAirtableTable(_ url: URL) {
+        if let existing = indexTabs.first(where: { tab in
+            if case let .airtableTable(table) = tab.content { return table.fileURL == url }
+            return false
+        }) {
+            selectedSurface = .indexTab(existing.id)
+            return
+        }
+        do {
+            let table = try Self.loadAirtableTablePreview(from: url)
+            let tab = OpenIndexTab(content: .airtableTable(table))
+            indexTabs.append(tab)
+            selectedSurface = .indexTab(tab.id)
+        } catch {
+            print("MeetingWindowState: failed to load Airtable CSV \(url.lastPathComponent): \(error)")
+        }
+    }
+
+    func openGeneratedWikiPage(_ url: URL) {
+        if let existing = indexTabs.first(where: { tab in
+            if case let .generatedWikiPage(page) = tab.content { return page.url == url }
+            return false
+        }) {
+            selectedSurface = .indexTab(existing.id)
+            return
+        }
+        guard let content = loadGeneratedWikiPageContent(url) else { return }
+        let tab = OpenIndexTab(content: content)
+        indexTabs.append(tab)
+        selectedSurface = .indexTab(tab.id)
+    }
+
+    func loadGeneratedWikiPageContent(_ url: URL) -> NavTabContent? {
+        do {
+            return .generatedWikiPage(try GeneratedWikiPaths.readPage(from: url))
+        } catch {
+            print("MeetingWindowState: failed to load generated wiki page \(url.lastPathComponent): \(error)")
+            return nil
+        }
+    }
+
+    func resolveGeneratedWikilink(slug: String) -> URL? {
+        for archiveRoot in generatedWikiArchiveCandidates() {
+            if let url = GeneratedWikiPaths.findPage(in: archiveRoot, slug: slug) {
+                return url
+            }
+        }
+        return nil
     }
 
     func openIndexEntry(kind: IndexKind, slug: String) {
@@ -408,6 +778,20 @@ final class MeetingWindowState: ObservableObject {
             return
         }
         let tab = OpenIndexTab(content: .indexList(kind: kind))
+        indexTabs.append(tab)
+        selectedSurface = .indexTab(tab.id)
+    }
+
+    func openSecondBrain() {
+        if let existing = indexTabs.first(where: { tab in
+            if case .secondBrain = tab.content { return true }
+            return false
+        }) {
+            selectedSurface = .indexTab(existing.id)
+            return
+        }
+        loadGeneratedWikiFolders()
+        let tab = OpenIndexTab(content: .secondBrain)
         indexTabs.append(tab)
         selectedSurface = .indexTab(tab.id)
     }
@@ -486,6 +870,7 @@ final class MeetingWindowState: ObservableObject {
             byKind[kind] = items
         }
         indexItems = byKind
+        wikiProposals = WikiKindStore.shared.proposals
     }
 
     func presentBuildIndexSheet(for kind: IndexKind) {
@@ -585,6 +970,137 @@ final class MeetingWindowState: ObservableObject {
     func loadHistory() {
         let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
         historyGroups = MeetingHistory.loadEntries(from: dir)
+        loadGeneratedWikiFolders()
+    }
+
+    func loadGeneratedWikiFolders() {
+        var selectedArchiveRoot = saveDirectory
+        var selectedFolders = Self.makeGeneratedWikiFolders(in: selectedArchiveRoot)
+
+        if Self.generatedWikiItemCount(in: selectedFolders) == 0 {
+            for archiveRoot in generatedWikiArchiveCandidates().dropFirst() {
+                let folders = Self.makeGeneratedWikiFolders(in: archiveRoot)
+                guard Self.generatedWikiItemCount(in: folders) > 0 else { continue }
+                selectedArchiveRoot = archiveRoot
+                selectedFolders = folders
+                break
+            }
+        }
+
+        generatedWikiArchiveRoot = selectedArchiveRoot
+        generatedWikiFolders = selectedFolders
+    }
+
+    func generatedWikiRootForDisplay() -> URL {
+        if let generatedWikiArchiveRoot {
+            return GeneratedWikiPaths.root(in: generatedWikiArchiveRoot)
+        }
+        for archiveRoot in generatedWikiArchiveCandidates() {
+            let folders = Self.makeGeneratedWikiFolders(in: archiveRoot)
+            if Self.generatedWikiItemCount(in: folders) > 0 {
+                return GeneratedWikiPaths.root(in: archiveRoot)
+            }
+        }
+        return GeneratedWikiPaths.root(in: saveDirectory)
+    }
+
+    private func generatedWikiArchiveCandidates() -> [URL] {
+        var candidates = [saveDirectory]
+        if let containerArchive = MeetingTranscriptSettings.appContainerArchiveIfPresent(),
+           containerArchive.standardizedFileURL.path != saveDirectory.standardizedFileURL.path {
+            candidates.append(containerArchive)
+        }
+        return candidates
+    }
+
+    private static func makeGeneratedWikiFolders(in archiveRoot: URL) -> [GeneratedWikiSidebarFolder] {
+        let root = GeneratedWikiPaths.root(in: archiveRoot)
+        let specs: [(slug: String, title: String, icon: String)] = [
+            ("meetings", "Meeting Overviews", "rectangle.stack.badge.person.crop"),
+            ("people", "People", "person.2"),
+            ("companies", "Companies", "building.2"),
+            ("concepts", "Concepts", "lightbulb")
+        ]
+        return specs.compactMap { spec in
+            let folderURL = root.appendingPathComponent(spec.slug, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: folderURL.path) else {
+                return GeneratedWikiSidebarFolder(slug: spec.slug, title: spec.title, iconSystemName: spec.icon, items: [])
+            }
+            let urls = (try? FileManager.default.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: nil)) ?? []
+            let items = urls
+                .filter { $0.pathExtension == "md" && !$0.lastPathComponent.hasPrefix("_") }
+                .compactMap { url -> GeneratedWikiSidebarItem? in
+                    let page = try? GeneratedWikiPaths.readPage(from: url)
+                    return GeneratedWikiSidebarItem(
+                        title: page?.title ?? url.deletingPathExtension().lastPathComponent,
+                        type: page?.type ?? spec.slug,
+                        fileURL: url
+                    )
+                }
+                .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return GeneratedWikiSidebarFolder(slug: spec.slug, title: spec.title, iconSystemName: spec.icon, items: items)
+        }
+    }
+
+    private static func generatedWikiItemCount(in folders: [GeneratedWikiSidebarFolder]) -> Int {
+        folders.reduce(0) { $0 + $1.items.count }
+    }
+
+    private static func loadAirtableTablePreview(from url: URL) throws -> AirtableTablePreview {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let records = parseCSV(text)
+        let headers = records.first ?? []
+        let rows = Array(records.dropFirst())
+        return AirtableTablePreview(
+            name: url.deletingPathExtension().lastPathComponent,
+            fileURL: url,
+            headers: headers,
+            rows: rows
+        )
+    }
+
+    private static func parseCSV(_ text: String) -> [[String]] {
+        var rows: [[String]] = []
+        var row: [String] = []
+        var field = ""
+        var inQuotes = false
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let char = text[index]
+            if char == "\"" {
+                let next = text.index(after: index)
+                if inQuotes, next < text.endIndex, text[next] == "\"" {
+                    field.append("\"")
+                    index = next
+                } else {
+                    inQuotes.toggle()
+                }
+            } else if char == ",", !inQuotes {
+                row.append(field)
+                field = ""
+            } else if (char == "\n" || char == "\r"), !inQuotes {
+                row.append(field)
+                field = ""
+                if !row.allSatisfy({ $0.isEmpty }) {
+                    rows.append(row)
+                }
+                row = []
+                let next = text.index(after: index)
+                if char == "\r", next < text.endIndex, text[next] == "\n" {
+                    index = next
+                }
+            } else {
+                field.append(char)
+            }
+            index = text.index(after: index)
+        }
+
+        if !field.isEmpty || !row.isEmpty {
+            row.append(field)
+            rows.append(row)
+        }
+        return rows
     }
 
     func renameActiveTab() {
@@ -639,6 +1155,8 @@ struct MeetingRootView: View {
     @State private var qaTraceExpanded: Bool = false
     @StateObject private var qaTranscript: QATranscript = QATranscript()
     @State private var currentQATask: Task<Void, Never>? = nil
+    @State private var wikiGenerationRun: WikiGenerationRun? = nil
+    @State private var wikiGenerationTask: Task<Void, Never>? = nil
     @State private var isApplyingDossier: Bool = false
     @AppStorage("agentBackend") private var qaAgentBackendStorage: String = "claude:\(ClaudeAPIModel.sonnet.rawValue)"
     @State private var showCommandKSearch: Bool = false
@@ -751,6 +1269,21 @@ struct MeetingRootView: View {
             state.pendingQAPrompt = nil
             askAcrossMeetings()
         }
+        .onChange(of: state.pendingScopedQAPrompt) { _, prompt in
+            guard let prompt, !prompt.displayQuestion.isEmpty, !qaIsLoading else { return }
+            state.pendingScopedQAPrompt = nil
+            askAcrossMeetings(displayQuestion: prompt.displayQuestion, agentQuestionOverride: prompt.agentQuestion)
+        }
+        .onChange(of: state.pendingGenerateWikiURL) { _, url in
+            guard let url else { return }
+            state.pendingGenerateWikiURL = nil
+            runMeetingWikiGeneration(fileURL: url)
+        }
+        .onChange(of: state.pendingGenerateWikiBatch) { _, shouldRun in
+            guard shouldRun else { return }
+            state.pendingGenerateWikiBatch = false
+            runWikiBatchGeneration()
+        }
         .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
             if state.showSidebar { state.loadHistory() }
         }
@@ -764,13 +1297,25 @@ struct MeetingRootView: View {
                 .allowsHitTesting(false)
         )
         .background(
+            Button(action: { showCommandKSearch = true }) { EmptyView() }
+                .keyboardShortcut("k", modifiers: .control)
+                .opacity(0)
+                .allowsHitTesting(false)
+        )
+        .background(
             Button(action: { state.startNewNote() }) { EmptyView() }
                 .keyboardShortcut("n", modifiers: .command)
                 .opacity(0)
                 .allowsHitTesting(false)
         )
         .sheet(isPresented: $showCommandKSearch) {
-            CommandKSearchSheet(state: state, isPresented: $showCommandKSearch)
+            CommandKSearchSheet(
+                state: state,
+                isPresented: $showCommandKSearch,
+                onAskQuestion: { question in
+                    state.pendingQAPrompt = question
+                }
+            )
         }
         .sheet(isPresented: $showQAMentionSheet) {
             CommandKSearchSheet(
@@ -800,6 +1345,33 @@ struct MeetingRootView: View {
             } else {
                 MissingAPIKeyView(onClose: { state.showBuildIndexSheet = false }, onOpenSettings: { state.onOpenSettings?() })
             }
+        }
+        .sheet(isPresented: $state.showNewWikiSheet) {
+            NewWikiSheet(state: state)
+        }
+        .sheet(item: $wikiGenerationRun) { run in
+            WikiGenerationConsoleSheet(
+                run: run,
+                onCancel: {
+                    wikiGenerationTask?.cancel()
+                    run.fail("Cancelled")
+                    state.isGeneratingMeetingWiki = false
+                    wikiGenerationTask = nil
+                },
+                onOpenOverview: {
+                    if let url = run.result?.overviewURL {
+                        state.openGeneratedWikiPage(url)
+                        wikiGenerationRun = nil
+                    }
+                },
+                onClose: {
+                    guard !run.isRunning else { return }
+                    wikiGenerationRun = nil
+                }
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wikiKindsChanged)) { _ in
+            state.loadIndexes()
         }
         .sheet(isPresented: $showReaderCapture) {
             ReaderCaptureSheet(
@@ -877,7 +1449,7 @@ struct MeetingRootView: View {
     private var qaResponseContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Status line + trace toggle + Stop button
-            if qaIsLoading || !qaTranscript.events.isEmpty {
+            if qaIsLoading || !qaTranscript.events.isEmpty || !qaThread.isEmpty {
                 Divider()
                 HStack(spacing: 6) {
                     if qaIsLoading {
@@ -902,6 +1474,10 @@ struct MeetingRootView: View {
                                 .labelStyle(.titleAndIcon)
                         }
                         .buttonStyle(.borderless)
+                    }
+                    if !qaThread.isEmpty || !qaTranscript.events.isEmpty {
+                        CopyButton(text: { fullThreadDebugText() }, label: "Copy thread")
+                            .help("Copy the full conversation and trace for debugging")
                     }
                     if qaIsLoading {
                         Button("Stop") {
@@ -1027,22 +1603,6 @@ struct MeetingRootView: View {
                 Image(systemName: "cpu")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
-                Picker("", selection: $qaAgentBackendStorage) {
-                    Section("Cloud") {
-                        ForEach(ClaudeAPIModel.allCases) { model in
-                            Text(model.shortDisplayName).tag("claude:\(model.rawValue)")
-                        }
-                    }
-                    Section("Local") {
-                        ForEach(LocalCleanupModelKind.allCases) { kind in
-                            Text(localPickerLabel(for: kind)).tag("local:\(kind.rawValue)")
-                        }
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(maxWidth: 160)
-                .help("Model used for this conversation. Local models run on-device — slower, free, and best on 8B+ for tool use.")
 
                 TextField(qaPlaceholder, text: $qaQuestion)
                     .textFieldStyle(.plain)
@@ -1144,12 +1704,18 @@ struct MeetingRootView: View {
     }
 
     private func runningCostText(_ u: QAUsage) -> String {
-        if u.isLocal { return "free" }
+        if u.isLocal {
+            let nf = NumberFormatter()
+            nf.numberStyle = .decimal
+            let fmtIn = nf.string(from: NSNumber(value: u.inputTokens)) ?? "\(u.inputTokens)"
+            let fmtOut = nf.string(from: NSNumber(value: u.outputTokens)) ?? "\(u.outputTokens)"
+            return "~\(fmtIn) in / ~\(fmtOut) out · free"
+        }
         return String(format: "~$%.4f", u.estimatedCostUSD)
     }
 
     private var qaPlaceholder: String {
-        "Run agent across meeting data..."
+        "Ask the local 2nd Brain..."
     }
 
     /// Routes clicks on rendered answer links. Custom `gp://` schemes open
@@ -1167,11 +1733,15 @@ struct MeetingRootView: View {
             let fileURL = state.saveDirectory.appendingPathComponent(path)
             state.openFile(fileURL)
             return .handled
+        case "wiki":
+            let fileURL = state.saveDirectory.appendingPathComponent(path)
+            state.openGeneratedWikiPage(fileURL)
+            return .handled
         case "person":
             // path looks like "people/<slug>" (kind subdirectory + slug)
             let parts = path.split(separator: "/", maxSplits: 1).map(String.init)
-            guard parts.count == 2,
-                  let kind = IndexKind(rawValue: parts[0]) else { return .discarded }
+            guard parts.count == 2 else { return .discarded }
+            let kind = IndexKind(rawValue: parts[0])
             state.openIndexEntry(kind: kind, slug: parts[1])
             return .handled
         default:
@@ -1185,7 +1755,28 @@ struct MeetingRootView: View {
         case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B (local)"
         case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B (local)"
         case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B (local)"
+        case .gemma4_12b_it_optiq_4bit_mlx: return "Gemma 4 12B MLX (local)"
         }
+    }
+
+    /// Serializes the whole Q&A session — every turn (question, answer, usage
+    /// footer) followed by the full event trace — into one plain-text blob for
+    /// pasting into a bug report.
+    private func fullThreadDebugText() -> String {
+        var lines: [String] = []
+        for (i, turn) in qaThread.enumerated() {
+            lines.append("Q\(i + 1): \(turn.question)")
+            lines.append("A\(i + 1): \(turn.answer)")
+            if let usage = turn.usage {
+                lines.append("    [\(usageFooterText(usage))]")
+            }
+            lines.append("")
+        }
+        if !qaTranscript.events.isEmpty {
+            lines.append("--- TRACE ---")
+            lines.append(contentsOf: qaTranscript.events.map { formatTraceLine($0) })
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func formatTraceLine(_ event: QAEvent) -> String {
@@ -1194,8 +1785,12 @@ struct MeetingRootView: View {
             return "[status]    \(s)"
         case .toolCall(_, let name, let summary, _):
             return "[\(name)]    \(summary)"
-        case .toolResult(_, let summary, _, let isError):
-            return isError ? "[result]    ERROR: \(summary)" : "[result]    \(summary)"
+        case .toolResult(_, let summary, let fullOutput, let isError):
+            let prefix = isError ? "[result]    ERROR: \(summary)" : "[result]    \(summary)"
+            let details = fullOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !details.isEmpty else { return prefix }
+            let capped = details.count > 1800 ? String(details.prefix(1800)) + "\n...[trace truncated]" : details
+            return prefix + "\n" + capped
         case .text:
             return "[text]      (streaming...)"
         case .usage(let u):
@@ -1211,6 +1806,10 @@ struct MeetingRootView: View {
         case "grep": return "Searching: \(summary)"
         case "read_file": return "Reading \(summary)"
         case "list_dir": return "Listing \(summary)"
+        case "wiki_route": return "Routing through 2nd Brain: \(summary)"
+        case "wiki_lint_scope": return "Linting generated 2nd Brain: \(summary)"
+        case "source_links": return "Following source links: \(summary)"
+        case "source_search": return "Reading original sources: \(summary)"
         default: return "\(name): \(summary)"
         }
     }
@@ -1238,7 +1837,7 @@ struct MeetingRootView: View {
         let summary = (qaThread.last?.answer ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !summary.isEmpty, !isApplyingDossier else { return }
         guard let builder = state.onMakeIndexBuilder?(pending.kind) else {
-            appendErrorToActiveTurn("apply failed: Claude API key not configured")
+            appendErrorToActiveTurn("apply failed: no index builder available")
             return
         }
 
@@ -1296,8 +1895,273 @@ struct MeetingRootView: View {
         }
     }
 
-    private func askAcrossMeetings() {
-        let userQuestion = qaQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func runMeetingWikiGeneration(fileURL: URL) {
+        guard !state.isGeneratingMeetingWiki else { return }
+        guard let runner = state.onGenerateMeetingWiki else {
+            let run = WikiGenerationRun(meetingURL: fileURL, archiveRoot: state.saveDirectory)
+            run.fail("2nd Brain generation is not wired up.")
+            wikiGenerationRun = run
+            return
+        }
+
+        state.isGeneratingMeetingWiki = true
+        state.pendingDossierApply = nil
+
+        let run = WikiGenerationRun(meetingURL: fileURL, archiveRoot: state.saveDirectory)
+        wikiGenerationRun = run
+
+        wikiGenerationTask = Task { @MainActor in
+            do {
+                let result = try await runner(fileURL) { progress in
+                    run.handle(progress)
+                }
+
+                run.finish(result)
+                state.loadGeneratedWikiFolders()
+                state.openGeneratedWikiPage(result.overviewURL)
+            } catch is CancellationError {
+                run.fail("Cancelled")
+            } catch {
+                run.fail(error.localizedDescription)
+            }
+            state.isGeneratingMeetingWiki = false
+            wikiGenerationTask = nil
+        }
+    }
+
+    private func runWikiBatchGeneration(limit: Int = 50) {
+        guard !state.isGeneratingMeetingWiki else { return }
+        guard let runner = state.onGenerateMeetingWiki else {
+            let run = WikiGenerationRun(batchTitle: "Next 2nd Brain batch", archiveRoot: state.saveDirectory, sourceCount: 0, modelCallTotal: 0)
+            run.fail("2nd Brain generation is not wired up.")
+            wikiGenerationRun = run
+            return
+        }
+
+        state.openSecondBrain()
+        let sourceURLs = Self.pendingSecondBrainSourceURLs(in: state.saveDirectory, limit: limit)
+        let run = WikiGenerationRun(
+            batchTitle: sourceURLs.isEmpty ? "2nd Brain is up to date" : "Next \(sourceURLs.count) sources",
+            archiveRoot: state.saveDirectory,
+            sourceCount: max(1, sourceURLs.count),
+            modelCallTotal: max(0, sourceURLs.count * 2 + 1)
+        )
+        wikiGenerationRun = run
+
+        guard !sourceURLs.isEmpty else {
+            run.fail("No unprocessed meetings or notes found. Every date-folder markdown file already has a generated 2nd Brain overview.")
+            return
+        }
+
+        state.isGeneratingMeetingWiki = true
+        state.pendingDossierApply = nil
+
+        wikiGenerationTask = Task { @MainActor in
+            var touchedURLs: [URL] = []
+            var firstOverviewURL: URL?
+            var totalInputTokens = 0
+            var totalOutputTokens = 0
+
+            do {
+                for (offset, sourceURL) in sourceURLs.enumerated() {
+                    try Task.checkCancellation()
+                    run.beginSource(sourceURL, index: offset + 1, total: sourceURLs.count)
+                    do {
+                        let result = try await runner(sourceURL) { progress in
+                            run.handle(progress)
+                        }
+                        firstOverviewURL = firstOverviewURL ?? result.overviewURL
+                        touchedURLs.append(contentsOf: result.touchedURLs)
+                        totalInputTokens += result.usage.inputTokens
+                        totalOutputTokens += result.usage.outputTokens
+                        run.sourceFinished()
+                        state.loadGeneratedWikiFolders()
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        run.sourceFailed(sourceURL, error: error)
+                    }
+                }
+
+                try Task.checkCancellation()
+                let lintUsage = try await runSecondBrainLintForBatch(run: run)
+                totalInputTokens += lintUsage.inputTokens
+                totalOutputTokens += lintUsage.outputTokens
+
+                state.loadGeneratedWikiFolders()
+                let result = GeneratedWikiResult(
+                    overviewURL: firstOverviewURL ?? GeneratedWikiPaths.root(in: state.saveDirectory),
+                    touchedURLs: Self.uniqueURLs(touchedURLs),
+                    gitMessage: batchGitMessage(run: run, total: sourceURLs.count),
+                    usage: .local(
+                        modelDisplayName: "Local 2nd Brain batch",
+                        inputTokens: totalInputTokens,
+                        outputTokens: totalOutputTokens
+                    )
+                )
+                run.finish(result)
+                refreshBrainBuildStatus()
+            } catch is CancellationError {
+                run.fail("Cancelled")
+            } catch {
+                run.fail(error.localizedDescription)
+            }
+            state.isGeneratingMeetingWiki = false
+            wikiGenerationTask = nil
+        }
+    }
+
+    private func runSecondBrainLintForBatch(run: WikiGenerationRun) async throws -> QAUsage {
+        guard let ask = state.onAskQuestion else {
+            run.handle(.status("Skipping lint: local Q&A is not wired up"))
+            return .local(modelDisplayName: "Local 2nd Brain lint", inputTokens: 0, outputTokens: 0)
+        }
+
+        let displayQuestion = "Lint the generated 2nd Brain pages after this batch. Look for duplicate entities, missing backlinks, unsupported claims, and stale or contradictory generated claims. Use generated `wikis/...` pages only."
+        let agentQuestion = """
+        __2ND_BRAIN_LINT_ONLY__
+        \(displayQuestion)
+        """
+        let system = "Generated-pages-only lint pass after a 2nd Brain batch."
+        run.currentSourceTitle = "Generated 2nd Brain pages"
+        run.handle(.status("Linting generated 2nd Brain pages"))
+        run.handle(.functionStarted(name: "Lint generated pages", system: system, user: agentQuestion))
+
+        var output = ""
+        var usage: QAUsage?
+        let stream = ask(agentQuestion, [])
+        for try await event in stream {
+            try Task.checkCancellation()
+            switch event {
+            case .status(let status):
+                run.handle(.status("Linting: \(status)"))
+            case .toolCall(_, let name, let summary, _):
+                run.handle(.status("Linting: \(name) \(summary)"))
+            case .toolResult(_, let summary, _, let isError):
+                if isError {
+                    let line = "\n[lint tool error] \(summary)\n"
+                    output += line
+                    run.handle(.token(line))
+                }
+            case .text(let delta):
+                output += delta
+                run.handle(.token(delta))
+            case .usage(let reportedUsage):
+                usage = reportedUsage
+            case .error(let message):
+                let line = "\n[lint error] \(message)\n"
+                output += line
+                run.handle(.token(line))
+            }
+        }
+
+        let resolvedUsage = usage ?? .local(
+            modelDisplayName: "Local 2nd Brain lint",
+            inputTokens: max(1, agentQuestion.count / 4),
+            outputTokens: max(1, output.count / 4)
+        )
+        run.handle(.functionFinished(
+            name: "Lint generated pages",
+            output: output.trimmingCharacters(in: .whitespacesAndNewlines),
+            inputTokens: resolvedUsage.inputTokens,
+            outputTokens: resolvedUsage.outputTokens
+        ))
+        return resolvedUsage
+    }
+
+    private func batchGitMessage(run: WikiGenerationRun, total: Int) -> String {
+        if run.failedSourceSummaries.isEmpty {
+            return "Added \(total) source\(total == 1 ? "" : "s") to 2nd Brain and ran lint."
+        }
+        return "Added \(total - run.failedSourceSummaries.count) of \(total) sources to 2nd Brain, ran lint, and skipped \(run.failedSourceSummaries.count) with errors."
+    }
+
+    private static func pendingSecondBrainSourceURLs(in archiveRoot: URL, limit: Int) -> [URL] {
+        IndexBuilder.allMeetingPaths(in: archiveRoot)
+            .filter { relativePath in
+                let overviewURL = GeneratedWikiPaths.meetingOverviewURL(in: archiveRoot, meetingPath: relativePath)
+                return !FileManager.default.fileExists(atPath: overviewURL.path)
+            }
+            .prefix(limit)
+            .map { archiveRoot.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private static func uniqueURLs(_ urls: [URL]) -> [URL] {
+        var seen: Set<String> = []
+        return urls.filter { seen.insert($0.path).inserted }
+    }
+
+    @MainActor
+    private func handleWikiProgress(_ progress: GeneratedWikiProgress, activeTurnID: UUID) {
+        func appendAnswer(_ text: String) {
+            mutateActiveTurn(id: activeTurnID) { $0.answer += text }
+        }
+
+        switch progress {
+        case .status(let status):
+            qaStatusLine = status
+            qaTranscript.append(.status(status))
+        case .functionStarted(let name, let system, let user):
+            qaStatusLine = name
+            qaTranscript.append(.toolCall(
+                id: UUID().uuidString,
+                name: "wiki_function",
+                inputSummary: name,
+                fullInput: ["system": system, "user": user]
+            ))
+            appendAnswer("""
+
+
+            ## \(name)
+
+            ### System prompt
+
+            ```text
+            \(Self.fenceSafe(system))
+            ```
+
+            ### User/context prompt
+
+            ```text
+            \(Self.fenceSafe(user))
+            ```
+
+            ```json
+            """)
+        case .token(let token):
+            qaStatusLine = "Streaming 2nd Brain model output..."
+            appendAnswer(token)
+            qaTranscript.append(.text(token))
+        case .functionFinished(let name, let output, let inputTokens, let outputTokens):
+            qaStatusLine = "\(name) complete"
+            appendAnswer("""
+
+            ```
+
+            `\(inputTokens)` input tokens · `\(outputTokens)` output tokens
+
+            """)
+            qaTranscript.append(.toolResult(
+                id: UUID().uuidString,
+                summary: "\(name): \(inputTokens) in / \(outputTokens) out",
+                fullOutput: output,
+                isError: false
+            ))
+        case .saved(let url):
+            let relative = url.path.replacingOccurrences(of: state.saveDirectory.path + "/", with: "")
+            qaStatusLine = "Saved \(relative)"
+            appendAnswer("\n- saved `\(relative)`")
+            qaTranscript.append(.status("Saved \(relative)"))
+        }
+    }
+
+    private static func fenceSafe(_ text: String) -> String {
+        text.replacingOccurrences(of: "```", with: "`\u{200B}``")
+    }
+
+    private func askAcrossMeetings(displayQuestion: String? = nil, agentQuestionOverride: String? = nil) {
+        let userQuestion = (displayQuestion ?? qaQuestion).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !userQuestion.isEmpty, !qaIsLoading else { return }
         qaIsLoading = true
         qaStatusLine = ""
@@ -1307,7 +2171,9 @@ struct MeetingRootView: View {
         // If the user attached context refs via @-mention, prefix them so the
         // agent reads those files first.
         let question: String
-        if !qaAttachments.isEmpty {
+        if let agentQuestionOverride {
+            question = agentQuestionOverride
+        } else if !qaAttachments.isEmpty {
             let pathList = qaAttachments.map { "- \($0.relativePath)" }.joined(separator: "\n")
             question = """
             Context references — please read these as primary sources for the question:
@@ -1333,7 +2199,7 @@ struct MeetingRootView: View {
 
         guard let stream = state.onAskQuestion?(question, history) else {
             mutateActiveTurn(id: activeTurnID) {
-                $0.answer = "Could not answer — open Settings → Meeting Transcript → Cross-Meeting Q&A to configure."
+                $0.answer = "Could not answer — download a wired local model in Settings → Models."
                 $0.isStreaming = false
             }
             qaIsLoading = false
@@ -1505,19 +2371,20 @@ struct MeetingRootView: View {
     // MARK: - Empty State
 
     @StateObject private var granolaImporter = GranolaImporter()
+    @StateObject private var airtableImporter = AirtableImporter()
     @State private var showGranolaImport = false
+    @State private var showAirtableImport = false
     @State private var showReaderCapture = false
     @State private var todayEvents: [CalendarEvent] = []
     @State private var todayEventsLoaded = false
     @State private var todayEventsError: String?
     @State private var whitelistEmail: String = ""
     @State private var granolaPendingCount: Int? = nil
-    @State private var peopleIndexStatus: PeopleIndexStatus? = nil
+    @State private var brainBuildStatus: BrainBuildStatus? = nil
 
-    enum PeopleIndexStatus: Equatable {
+    enum BrainBuildStatus: Equatable {
         case notBuilt(meetingCount: Int)
-        case upToDate(entryCount: Int)
-        case pending(newCount: Int, entryCount: Int)
+        case built(pageCount: Int)
     }
 
     private var homeBrandHeader: some View {
@@ -1542,16 +2409,14 @@ struct MeetingRootView: View {
                     disconnectedQuickActions
                 }
 
-                if GranolaImporter.isCacheAvailable {
-                    granolaSyncRow
-                        .padding(.top, GoogleCalendarService.shared.isSignedIn ? 8 : 0)
-                }
+                granolaSyncRow
+                    .padding(.top, GoogleCalendarService.shared.isSignedIn ? 8 : 0)
 
-                peopleIndexRow
+                brainBuildRow
                     .padding(.top, 4)
 
                 todayCalendarSection
-                    .padding(.top, (GoogleCalendarService.shared.isSignedIn && !GranolaImporter.isCacheAvailable) ? 8 : 0)
+                    .padding(.top, GoogleCalendarService.shared.isSignedIn ? 8 : 0)
             }
             .frame(maxWidth: .infinity)
             .padding(.bottom, 16)
@@ -1560,68 +2425,43 @@ struct MeetingRootView: View {
         .sheet(isPresented: $showGranolaImport, onDismiss: { refreshGranolaPendingCount() }) {
             GranolaImportView(importer: granolaImporter, state: state)
         }
+        .sheet(isPresented: $showAirtableImport) {
+            AirtableImportView(importer: airtableImporter)
+        }
         .task {
             await loadTodayEvents()
             refreshGranolaPendingCount()
-            refreshPeopleIndexStatus()
+            refreshBrainBuildStatus()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await loadTodayEvents() }
             refreshGranolaPendingCount()
-            refreshPeopleIndexStatus()
+            refreshBrainBuildStatus()
         }
         .onReceive(NotificationCenter.default.publisher(for: .meetingRecordingStopped)) { _ in
             GoogleCalendarService.shared.invalidateTodayCache()
             Task { await loadTodayEvents() }
-            refreshPeopleIndexStatus()
+            refreshBrainBuildStatus()
         }
         .onReceive(NotificationCenter.default.publisher(for: .indexUpdated)) { _ in
-            refreshPeopleIndexStatus()
+            refreshBrainBuildStatus()
         }
     }
 
     @ViewBuilder
-    private var peopleIndexRow: some View {
+    private var brainBuildRow: some View {
         HStack(spacing: 8) {
-            Image(systemName: IndexKind.people.iconSystemName)
+            Image(systemName: "brain.head.profile")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
-            switch peopleIndexStatus {
-            case .pending(let newCount, _):
-                Button {
-                    state.presentBuildIndexSheet(for: .people)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("Sync \(newCount) new into People index")
-                            .font(.system(size: 12, weight: .medium))
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 10, weight: .semibold))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.orange))
-                    .foregroundColor(.white)
-                }
-                .buttonStyle(.plain)
-            case .upToDate:
-                Text("People index up to date")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                Button {
-                    state.presentBuildIndexSheet(for: .people)
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Re-sync People index")
+            switch brainBuildStatus {
             case .notBuilt(let meetings) where meetings > 0:
                 Button {
-                    state.presentBuildIndexSheet(for: .people)
+                    state.openSecondBrain()
+                    state.pendingGenerateWikiBatch = true
                 } label: {
                     HStack(spacing: 6) {
-                        Text("Build People index from \(meetings) meetings")
+                        Text("Build 2nd Brain")
                             .font(.system(size: 12, weight: .medium))
                         Image(systemName: "arrow.right")
                             .font(.system(size: 10, weight: .semibold))
@@ -1632,6 +2472,33 @@ struct MeetingRootView: View {
                     .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
+                .disabled(state.isGeneratingMeetingWiki)
+                .help("Build generated 2nd Brain pages for the next 50 unprocessed meetings or notes.")
+                Text("\(meetings) meetings available")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            case .built(let pageCount):
+                Button {
+                    state.openSecondBrain()
+                    state.pendingGenerateWikiBatch = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Update 2nd Brain")
+                            .font(.system(size: 12, weight: .medium))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.orange))
+                    .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(state.isGeneratingMeetingWiki)
+                .help("Update the 2nd Brain by adding the next 50 unprocessed meetings or notes.")
+                Text("\(pageCount) pages")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             case .notBuilt, .none:
                 EmptyView()
             }
@@ -1641,23 +2508,50 @@ struct MeetingRootView: View {
         .padding(.horizontal, 24)
     }
 
-    private func refreshPeopleIndexStatus() {
+    private func refreshBrainBuildStatus() {
         let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
         Task.detached(priority: .background) {
             let allMeetings = IndexBuilder.allMeetingPaths(in: saveDir)
-            let entryCount = IndexBuilder.countExistingEntries(in: saveDir, kind: .people)
-            let covered = IndexBuilder.coveredMeetings(in: saveDir, kind: .people)
-            let unprocessed = allMeetings.filter { !covered.contains($0) }.count
-            let status: PeopleIndexStatus
-            if entryCount == 0 {
+            let pageCount = Self.generatedBrainPageCount(in: saveDir)
+            let status: BrainBuildStatus
+            if pageCount == 0 {
                 status = .notBuilt(meetingCount: allMeetings.count)
-            } else if unprocessed == 0 {
-                status = .upToDate(entryCount: entryCount)
             } else {
-                status = .pending(newCount: unprocessed, entryCount: entryCount)
+                status = .built(pageCount: pageCount)
             }
-            await MainActor.run { self.peopleIndexStatus = status }
+            await MainActor.run { self.brainBuildStatus = status }
         }
+    }
+
+    private nonisolated static func generatedBrainPageCount(in saveDir: URL) -> Int {
+        var archiveRoots = [saveDir]
+        if let containerArchive = MeetingTranscriptSettings.appContainerArchiveIfPresent(),
+           containerArchive.standardizedFileURL.path != saveDir.standardizedFileURL.path {
+            archiveRoots.append(containerArchive)
+        }
+        return archiveRoots
+            .map { generatedBrainPageCount(at: GeneratedWikiPaths.root(in: $0)) }
+            .max() ?? 0
+    }
+
+    private nonisolated static func generatedBrainPageCount(at root: URL) -> Int {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var count = 0
+        for case let url as URL in enumerator {
+            guard url.pathExtension.lowercased() == "md" else { continue }
+            guard !url.lastPathComponent.hasPrefix("_") else { continue }
+            if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+                count += 1
+            }
+        }
+        return count
     }
 
     private var granolaSyncRow: some View {
@@ -1702,7 +2596,7 @@ struct MeetingRootView: View {
                     showGranolaImport = true
                 } label: {
                     HStack(spacing: 6) {
-                        Text("Sync Granola")
+                        Text(GranolaImporter.isInstalled ? "Connect Granola" : "Import from Granola")
                             .font(.system(size: 12, weight: .medium))
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 10, weight: .semibold))
@@ -1713,8 +2607,25 @@ struct MeetingRootView: View {
                     .foregroundColor(.white)
                 }
                 .buttonStyle(.plain)
-                .help("Open the Granola sync sheet")
+                .help("Open the Granola import sheet")
             }
+
+            Button {
+                showAirtableImport = true
+            } label: {
+                HStack(spacing: 6) {
+                    Text(airtableImporter.isConfigured ? "Sync Airtable CSVs" : "Connect Airtable")
+                        .font(.system(size: 12, weight: .medium))
+                    Image(systemName: "tablecells")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(Color.orange.opacity(0.85)))
+                .foregroundColor(.white)
+            }
+            .buttonStyle(.plain)
+            .help("Export Airtable tables as CSV files")
             Spacer()
         }
         .frame(maxWidth: 560)
@@ -1782,6 +2693,7 @@ struct MeetingRootView: View {
                             GoogleCalendarService.shared.signIn()
                         }
                         .buttonStyle(.bordered)
+                        .disabled(!GoogleCalendarService.isConfigured)
                         Text("BETA")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundColor(.white)
@@ -1793,10 +2705,22 @@ struct MeetingRootView: View {
 
                     Divider()
 
-                    Text("Calendar access is invite-only while in beta. Send Matt your email and he'll allow-list you.")
+                    Text("Calendar access is invite-only while in beta. Send your email and it can be allow-listed.")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if !GoogleCalendarService.isConfigured {
+                        Text("Google Calendar OAuth is not configured in this build.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let authError = GoogleCalendarService.shared.authError {
+                        Text(authError)
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
                     HStack(spacing: 8) {
                         TextField("you@example.com", text: $whitelistEmail)
@@ -2015,9 +2939,9 @@ struct MeetingRootView: View {
     private func sendWhitelistRequest(via transport: WhitelistTransport) {
         let email = whitelistEmail.trimmingCharacters(in: .whitespaces)
         guard isLikelyEmail(email) else { return }
-        let to = "ghostpepper@factorial.cc"
+        let to = "support@example.invalid"
         let subject = "Whitelist request for Ghost Pepper"
-        let body = "Hey Matt, can you white list my email address for ghost pepper calendar integration: \(email)"
+        let body = "Please allow-list this email address for Ghost Pepper calendar integration: \(email)"
         let allowed = CharacterSet.urlQueryAllowed
         guard let encodedSubject = subject.addingPercentEncoding(withAllowedCharacters: allowed),
               let encodedBody = body.addingPercentEncoding(withAllowedCharacters: allowed) else {
@@ -2330,6 +3254,1054 @@ struct NavTabContentView: View {
                     },
                     onBuild: { state.presentBuildIndexSheet(for: kind) }
                 )
+            case .secondBrain:
+                SecondBrainDashboardView(
+                    state: state,
+                    onBuildNextBatch: {
+                        state.pendingGenerateWikiBatch = true
+                    },
+                    onLint: {
+                        let displayQuestion = """
+                        Lint my local 2nd Brain. Look for likely duplicate entities, stale or contradictory claims, missing backlinks, orphan pages, unsupported claims without evidence, missing aliases, and important entities/concepts that should have pages. Return a concise prioritized report with source page paths.
+                        """
+                        state.pendingScopedQAPrompt = ScopedQAPrompt(
+                            displayQuestion: displayQuestion,
+                            agentQuestion: """
+                            __2ND_BRAIN_LINT_ONLY__
+                            \(displayQuestion)
+                            """
+                        )
+                    },
+                    onOpenPage: { url in
+                        if let content = state.loadGeneratedWikiPageContent(url) {
+                            tab.navigate(to: content)
+                        }
+                    },
+                    onOpenPageInNewTab: { url in
+                        state.openGeneratedWikiPage(url)
+                    }
+                )
+            case .generatedWikiPage(let page):
+                GeneratedWikiPageView(
+                    page: page,
+                    onOpenWikilink: { slug in
+                        if let url = state.resolveGeneratedWikilink(slug: slug),
+                           let content = state.loadGeneratedWikiPageContent(url) {
+                            tab.navigate(to: content)
+                        }
+                    },
+                    onOpenWikilinkInNewTab: { slug in
+                        if let url = state.resolveGeneratedWikilink(slug: slug) {
+                            state.openGeneratedWikiPage(url)
+                        }
+                    },
+                    onOpenSourceMeeting: { path in
+                        if let content = state.loadMeetingContent(relativePath: path) {
+                            tab.navigate(to: content)
+                        }
+                    }
+                )
+            case .airtableTable(let table):
+                AirtableTablePreviewView(table: table)
+            }
+        }
+    }
+}
+
+private struct WikiGenerationConsoleSheet: View {
+    @ObservedObject var run: WikiGenerationRun
+    let onCancel: () -> Void
+    let onOpenOverview: () -> Void
+    let onClose: () -> Void
+    @State private var showPrompt: Bool = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            HStack(spacing: 0) {
+                leftRail
+                    .frame(width: 300)
+                Divider()
+                detailPane
+            }
+        }
+        .frame(width: 980, height: 720)
+        .interactiveDismissDisabled(run.isRunning)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: run.errorMessage == nil ? "brain.head.profile" : "exclamationmark.triangle")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(run.errorMessage == nil ? .orange : .red)
+                    .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Adding to 2nd Brain")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text(run.meetingTitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(run.status)
+                        .font(.system(size: 12))
+                        .foregroundColor(run.errorMessage == nil ? .secondary : .red)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if run.isRunning {
+                        Text(activeProcessingText)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text(tokenCounterText)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("\(run.modelCallsCompleted)/\(run.modelCallTotal) model calls")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    if run.isRunning, run.activeOutputTokenEstimate > 0 {
+                        Text("current call ~\(run.activeOutputTokenEstimate) out")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if run.isRunning {
+                    Button("Stop", action: onCancel)
+                        .buttonStyle(.bordered)
+                } else {
+                    Button("Close", action: onClose)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+
+            ProgressView(value: run.progressFraction)
+                .tint(run.errorMessage == nil ? .orange : .red)
+        }
+        .padding(18)
+    }
+
+    private var leftRail: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(run.isBatch ? "Batch progress" : "Meeting progress")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                progressRow(
+                    title: run.isBatch ? "Sources" : "Meeting",
+                    value: sourceProgressText,
+                    isActive: run.isRunning
+                )
+                progressRow(
+                    title: "Model calls",
+                    value: modelCallProgressText,
+                    isActive: run.isRunning
+                )
+                progressRow(
+                    title: "Current call",
+                    value: currentCallProgressText,
+                    isActive: run.isRunning && run.selectedFunction?.isFinished == false
+                )
+                progressRow(
+                    title: "Files saved",
+                    value: "\(run.savedRelativePaths.count)",
+                    isActive: run.status.hasPrefix("Saved")
+                )
+            }
+
+            Divider()
+
+            Text("Steps")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(run.functions) { function in
+                        Button {
+                            run.selectedFunctionID = function.id
+                        } label: {
+                            functionCard(function)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if run.functions.isEmpty {
+                        Text("The first model call will appear here.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                    }
+                }
+            }
+
+            Spacer()
+
+            CopyButton(text: { run.fullDebugText() }, label: "Copy trace")
+            .help("Copy prompts, model output, saved files, and token counts")
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+    }
+
+    private var detailPane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let selected = run.selectedFunction {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(selected.name)
+                            .font(.system(size: 15, weight: .semibold))
+                        Text(functionStatusText(selected))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        showPrompt.toggle()
+                    } label: {
+                        Label(showPrompt ? "Hide prompt" : "Show prompt", systemImage: showPrompt ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                if showPrompt {
+                    promptTrace(selected)
+                        .frame(maxHeight: 210)
+                }
+            } else {
+                Text("Starting...")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+
+            terminalView
+
+            if let error = run.errorMessage {
+                resultCard(title: "Error", systemImage: "exclamationmark.triangle", tint: .red) {
+                    Text(error)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            } else if let result = run.result {
+                resultCard(title: "Result", systemImage: "checkmark.circle", tint: .green) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(result.gitMessage)
+                            .font(.system(size: 12))
+                            .textSelection(.enabled)
+
+                        HStack {
+                            Button(openOverviewButtonTitle, action: onOpenOverview)
+                                .buttonStyle(.borderedProminent)
+                            Text("Saved \(run.savedRelativePaths.count) files")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    }
+                }
+            } else if !run.savedRelativePaths.isEmpty {
+                resultCard(title: "Saved files", systemImage: "doc.text", tint: .orange) {
+                    savedFilesList
+                }
+            }
+        }
+        .padding(18)
+    }
+
+    private var terminalView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Text(run.terminalText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .id("terminal-bottom")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.82))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .onChange(of: run.terminalText) { _, _ in
+                proxy.scrollTo("terminal-bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    private var openOverviewButtonTitle: String {
+        run.isBatch ? "Open first overview" : "Open meeting overview"
+    }
+
+    private var activeProcessingText: String {
+        if run.isBatch {
+            let index = max(1, run.currentSourceIndex)
+            return "Processing source \(index) of \(run.totalSourceCount): \(run.currentSourceTitle)"
+        }
+        return "Processing \(run.currentSourceTitle)"
+    }
+
+    private var sourceProgressText: String {
+        if run.isBatch {
+            if run.isRunning {
+                let activeIndex = min(max(1, run.currentSourceIndex), run.totalSourceCount)
+                return "\(run.completedSourceCount) done · \(activeIndex)/\(run.totalSourceCount) active"
+            }
+            return "\(run.completedSourceCount) complete"
+        }
+        return run.result == nil && run.errorMessage == nil ? "processing" : "complete"
+    }
+
+    private var modelCallProgressText: String {
+        if run.isRunning, run.activeOutputTokenEstimate > 0 {
+            return "\(run.modelCallsCompleted) of \(run.modelCallTotal) · +\(run.activeOutputTokenEstimate) out"
+        }
+        return "\(run.modelCallsCompleted) of \(run.modelCallTotal)"
+    }
+
+    private var currentCallProgressText: String {
+        guard let selected = run.selectedFunction else { return "waiting" }
+        if selected.isFinished { return "complete" }
+        if run.activeOutputTokenEstimate == 0 { return "waiting" }
+        return "~\(run.activeOutputTokenEstimate) out"
+    }
+
+    private func functionStatusText(_ selected: WikiGenerationFunctionRun) -> String {
+        if selected.isFinished {
+            return "\(selected.inputTokens) in / \(selected.outputTokens) out"
+        }
+        if selected.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Waiting for first output token"
+        }
+        return "Streaming local model output"
+    }
+
+    private func promptTrace(_ function: WikiGenerationFunctionRun) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                promptBlock(title: "System instruction", text: function.system)
+                promptBlock(title: "Context/user prompt", text: function.user)
+            }
+            .padding(10)
+        }
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func promptBlock(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 10, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func progressRow(title: String, value: String, isActive: Bool) -> some View {
+        let isComplete = !isActive
+            && value != "0"
+            && value != "waiting"
+            && value != "processing"
+            && !value.hasPrefix("0 of")
+        return HStack {
+            Image(systemName: isActive ? "circle.dotted" : (isComplete ? "checkmark.circle" : "circle"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isActive ? Color.orange : (isComplete ? Color.secondary : Color.secondary.opacity(0.45)))
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func functionCard(_ function: WikiGenerationFunctionRun) -> some View {
+        let selected = run.selectedFunctionID == function.id
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: function.isFinished ? "checkmark.circle.fill" : "waveform")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(function.isFinished ? .green : .orange)
+                Text(function.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Spacer()
+            }
+            Text(function.isFinished ? "\(function.inputTokens) in / \(function.outputTokens) out" : function.output.isEmpty ? "waiting..." : "streaming...")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected ? Color.orange.opacity(0.16) : Color.secondary.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func resultCard<Content: View>(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var savedFilesList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(run.savedRelativePaths, id: \.self) { path in
+                    Text(path)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxHeight: 110)
+    }
+
+    private var tokenCounterText: String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        let input = nf.string(from: NSNumber(value: run.estimatedInputTokens)) ?? "\(run.estimatedInputTokens)"
+        let output = nf.string(from: NSNumber(value: run.estimatedOutputTokens)) ?? "\(run.estimatedOutputTokens)"
+        return "~\(input) in / ~\(output) out · free"
+    }
+}
+
+private struct GeneratedWikiPageView: View {
+    let page: GeneratedWikiPage
+    var onOpenWikilink: (String) -> Void
+    var onOpenWikilinkInNewTab: (String) -> Void
+    var onOpenSourceMeeting: (String) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                if let source = page.sourceMeetingPath, !source.isEmpty {
+                    sourceCallout(source)
+                }
+                bodyRendered
+            }
+            .padding(.horizontal, 48)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "generated-wikilink" {
+                let slug = url.host ?? url.lastPathComponent
+                let cmdHeld = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
+                if cmdHeld {
+                    onOpenWikilinkInNewTab(slug)
+                } else {
+                    onOpenWikilink(slug)
+                }
+                return .handled
+            }
+            return .systemAction
+        })
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(page.title)
+                .font(.system(size: 24, weight: .semibold))
+            HStack(spacing: 12) {
+                Label(page.type.replacingOccurrences(of: "_", with: " ").capitalized, systemImage: page.type == "meeting_overview" ? "rectangle.stack.badge.person.crop" : "link")
+                Text(page.url.path)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func sourceCallout(_ source: String) -> some View {
+        Button(action: { onOpenSourceMeeting(source) }) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text.magnifyingglass")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Generated overview")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Source of truth: \(source)")
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.10))
+            .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var bodyRendered: some View {
+        let blocks = MarkdownBlockParser.parse(page.body)
+        return VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                renderBlock(block)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func renderBlock(_ block: MarkdownBlock) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            inlineText(text)
+                .font(headingFont(for: level))
+                .padding(.top, level <= 2 ? 8 : 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        case .paragraph(let text):
+            inlineText(text)
+                .font(.system(size: 14))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        case .bulletList(let items):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                        inlineText(item)
+                            .font(.system(size: 14))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        case .codeBlock(let text):
+            Text(text)
+                .font(.system(.caption, design: .monospaced))
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.08))
+                .cornerRadius(4)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func inlineText(_ text: String) -> Text {
+        let transformed = Self.transformWikilinks(text)
+        if let attributed = try? AttributedString(
+            markdown: transformed,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return Text(attributed)
+        }
+        return Text(text)
+    }
+
+    private func headingFont(for level: Int) -> Font {
+        switch level {
+        case 1: return .system(size: 20, weight: .bold)
+        case 2: return .system(size: 16, weight: .semibold)
+        default: return .system(size: 14, weight: .semibold)
+        }
+    }
+
+    private static func transformWikilinks(_ text: String) -> String {
+        let pattern = #"\[\[([^\]]+)\]\]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        let matches = regex.matches(in: text, range: range)
+        guard !matches.isEmpty else { return text }
+        var result = text
+        for match in matches.reversed() {
+            guard let nameRange = Range(match.range(at: 1), in: result),
+                  let fullRange = Range(match.range, in: result) else { continue }
+            let name = String(result[nameRange])
+            let slug = MarkdownArchivePaths.slugForIndexEntry(name)
+            result.replaceSubrange(fullRange, with: "[\(name)](generated-wikilink://\(slug))")
+        }
+        return result
+    }
+}
+
+private struct SecondBrainDashboardView: View {
+    @ObservedObject var state: MeetingWindowState
+    var onBuildNextBatch: () -> Void
+    var onLint: () -> Void
+    var onOpenPage: (URL) -> Void
+    var onOpenPageInNewTab: (URL) -> Void
+
+    @State private var graph = SecondBrainGraph(nodes: [], edges: [])
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Label("2nd Brain", systemImage: "brain.head.profile")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("\(graph.nodes.count) pages · \(graph.edges.count) links")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onBuildNextBatch) {
+                    Label(state.isGeneratingMeetingWiki ? "Adding..." : "Add next 50", systemImage: "sparkles.rectangle.stack")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .controlSize(.small)
+                .disabled(state.isGeneratingMeetingWiki)
+
+                Button(action: rebuildGraph) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(action: onLint) {
+                    Label("Lint", systemImage: "checklist")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Graph")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(graph.nodes.count) nodes")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        SecondBrainGraphView(
+                            graph: graph,
+                            onOpenPage: onOpenPage,
+                            onOpenPageInNewTab: onOpenPageInNewTab
+                        )
+                        .frame(minHeight: 520)
+                    }
+
+                    hubsSection
+                }
+                .padding(18)
+            }
+        }
+        .onAppear(perform: rebuildGraph)
+        .onChange(of: state.generatedWikiFolders) { _, _ in rebuildGraph() }
+    }
+
+    @ViewBuilder
+    private var hubsSection: some View {
+        let hubs = graph.nodes.sorted { lhs, rhs in
+            if lhs.degree == rhs.degree { return lhs.title < rhs.title }
+            return lhs.degree > rhs.degree
+        }.prefix(12)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Hubs")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+            if hubs.isEmpty {
+                Text("No 2nd Brain pages yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 8)], spacing: 8) {
+                    ForEach(Array(hubs)) { node in
+                        Button(action: { onOpenPageInNewTab(node.url) }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: node.icon)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(node.isHub ? .orange : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(node.title)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .lineLimit(1)
+                                    Text("\(node.degree) links · \(node.folderTitle)")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(8)
+                            .background(Color.secondary.opacity(0.07))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func rebuildGraph() {
+        state.loadGeneratedWikiFolders()
+        graph = SecondBrainGraph.build(from: state.generatedWikiFolders)
+    }
+}
+
+private struct SecondBrainGraphView: View {
+    let graph: SecondBrainGraph
+    var onOpenPage: (URL) -> Void
+    var onOpenPageInNewTab: (URL) -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let positions = graph.positions(in: proxy.size)
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.62))
+
+                if graph.nodes.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                        Text("No 2nd Brain graph yet")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Add meetings to the 2nd Brain to create pages and links.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                ForEach(graph.edges) { edge in
+                    if let start = positions[edge.sourceID], let end = positions[edge.targetID] {
+                        Path { path in
+                            path.move(to: start)
+                            path.addLine(to: end)
+                        }
+                        .stroke(Color.secondary.opacity(0.18), lineWidth: edge.weight > 1 ? 1.4 : 0.8)
+                    }
+                }
+
+                ForEach(graph.nodes) { node in
+                    let point = positions[node.id] ?? CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    SecondBrainGraphNodeView(node: node)
+                        .position(point)
+                        .onTapGesture { onOpenPageInNewTab(node.url) }
+                        .contextMenu {
+                            Button("Open") { onOpenPage(node.url) }
+                            Button("Open in New Tab") { onOpenPageInNewTab(node.url) }
+                            Button("Show in Finder") {
+                                NSWorkspace.shared.selectFile(
+                                    node.url.path,
+                                    inFileViewerRootedAtPath: node.url.deletingLastPathComponent().path
+                                )
+                            }
+                        }
+                }
+            }
+        }
+    }
+}
+
+private struct SecondBrainGraphNodeView: View {
+    let node: SecondBrainGraph.Node
+    @State private var isHovering = false
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ZStack {
+                Circle()
+                    .fill(node.isHub ? Color.orange.opacity(0.25) : Color.secondary.opacity(0.12))
+                Circle()
+                    .stroke(node.isHub ? Color.orange.opacity(0.9) : Color.secondary.opacity(0.35), lineWidth: node.isHub ? 2 : 1)
+                Image(systemName: node.icon)
+                    .font(.system(size: max(10, node.radius * 0.42), weight: .semibold))
+                    .foregroundStyle(node.isHub ? .orange : .secondary)
+            }
+            .frame(width: node.radius * 2, height: node.radius * 2)
+
+            Text(node.title)
+                .font(.system(size: 10, weight: node.isHub ? .semibold : .regular))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 110)
+            Text("\(node.degree)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .overlay(alignment: .top) {
+            if isHovering {
+                nodeHoverLabel
+                    .offset(y: -74)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .zIndex(10)
+            }
+        }
+        .onHover { hovering in
+            isHovering = hovering
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .help("\(node.title) · \(node.folderTitle) · \(node.degree) links")
+    }
+
+    private var nodeHoverLabel: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(node.title)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+            Text("\(node.type.replacingOccurrences(of: "_", with: " ").capitalized) · \(node.folderTitle)")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text("\(node.degree) links")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(width: 190, alignment: .leading)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 5)
+    }
+}
+
+private struct SecondBrainGraph: Equatable {
+    struct Node: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let type: String
+        let folderTitle: String
+        let url: URL
+        let degree: Int
+        let index: Int
+        let isHub: Bool
+
+        var icon: String {
+            switch type {
+            case "meeting_overview": return "rectangle.stack.badge.person.crop"
+            case "person": return "person.crop.circle"
+            case "company": return "building.2"
+            case "concept": return "lightbulb"
+            default: return "doc.text"
+            }
+        }
+
+        var radius: CGFloat {
+            CGFloat(min(34, max(15, 15 + degree * 2)))
+        }
+    }
+
+    struct Edge: Identifiable, Equatable {
+        let sourceID: String
+        let targetID: String
+        let weight: Int
+        var id: String { "\(sourceID)->\(targetID)" }
+    }
+
+    let nodes: [Node]
+    let edges: [Edge]
+
+    static func build(from folders: [GeneratedWikiSidebarFolder]) -> SecondBrainGraph {
+        var pages: [(item: GeneratedWikiSidebarItem, folderTitle: String, page: GeneratedWikiPage)] = []
+        for folder in folders {
+            for item in folder.items {
+                guard let page = try? GeneratedWikiPaths.readPage(from: item.fileURL) else { continue }
+                pages.append((item, folder.title, page))
+            }
+        }
+
+        var bySlug: [String: GeneratedWikiSidebarItem] = [:]
+        for entry in pages {
+            bySlug[entry.item.fileURL.deletingPathExtension().lastPathComponent] = entry.item
+            bySlug[MarkdownArchivePaths.slugForIndexEntry(entry.item.title)] = entry.item
+            bySlug[MarkdownArchivePaths.slugForIndexEntry(entry.page.title)] = entry.item
+        }
+
+        var edgeWeights: [String: Int] = [:]
+        var degrees: [String: Int] = [:]
+        for entry in pages {
+            let sourceID = entry.item.fileURL.path
+            for link in wikilinks(in: entry.page.body) {
+                let slug = MarkdownArchivePaths.slugForIndexEntry(link)
+                guard let target = bySlug[slug], target.fileURL.path != sourceID else { continue }
+                let key = "\(sourceID)\u{1F}\(target.fileURL.path)"
+                edgeWeights[key, default: 0] += 1
+            }
+        }
+
+        let edges = edgeWeights.map { key, weight -> Edge in
+            let parts = key.components(separatedBy: "\u{1F}")
+            let source = parts.first ?? key
+            let target = parts.dropFirst().first ?? key
+            degrees[source, default: 0] += weight
+            degrees[target, default: 0] += weight
+            return Edge(sourceID: source, targetID: target, weight: weight)
+        }
+
+        let maxDegree = degrees.values.max() ?? 0
+        let hubThreshold = max(3, Int(ceil(Double(maxDegree) * 0.6)))
+        let nodes = pages.enumerated().map { index, entry in
+            let degree = degrees[entry.item.fileURL.path, default: 0]
+            return Node(
+                id: entry.item.fileURL.path,
+                title: entry.item.title,
+                type: entry.item.type,
+                folderTitle: entry.folderTitle,
+                url: entry.item.fileURL,
+                degree: degree,
+                index: index,
+                isHub: degree >= hubThreshold && degree > 0
+            )
+        }.sorted { lhs, rhs in
+            if lhs.isHub != rhs.isHub { return lhs.isHub && !rhs.isHub }
+            if lhs.degree != rhs.degree { return lhs.degree > rhs.degree }
+            return lhs.title < rhs.title
+        }
+
+        return SecondBrainGraph(nodes: nodes, edges: edges.sorted { $0.id < $1.id })
+    }
+
+    func positions(in size: CGSize) -> [String: CGPoint] {
+        guard !nodes.isEmpty else { return [:] }
+        let width = max(size.width, 320)
+        let height = max(size.height, 320)
+        let center = CGPoint(x: width / 2, y: height / 2)
+        let hubs = nodes.filter(\.isHub)
+        let others = nodes.filter { !$0.isHub }
+        var out: [String: CGPoint] = [:]
+
+        if hubs.isEmpty {
+            place(nodes: Array(nodes.prefix(1)), radius: 0, center: center, phase: 0, into: &out)
+            place(nodes: Array(nodes.dropFirst()), radius: min(width, height) * 0.38, center: center, phase: -CGFloat.pi / 2, into: &out)
+        } else {
+            place(nodes: hubs, radius: min(width, height) * 0.18, center: center, phase: -CGFloat.pi / 2, into: &out)
+            place(nodes: others, radius: min(width, height) * 0.39, center: center, phase: -CGFloat.pi / 2, into: &out)
+        }
+        return out
+    }
+
+    private func place(nodes: [Node], radius: CGFloat, center: CGPoint, phase: CGFloat, into out: inout [String: CGPoint]) {
+        guard !nodes.isEmpty else { return }
+        if nodes.count == 1 || radius == 0 {
+            out[nodes[0].id] = center
+            return
+        }
+        for (idx, node) in nodes.enumerated() {
+            let angle = phase + CGFloat(idx) / CGFloat(nodes.count) * CGFloat.pi * 2
+            out[node.id] = CGPoint(
+                x: center.x + cos(angle) * radius,
+                y: center.y + sin(angle) * radius
+            )
+        }
+    }
+
+    private static func wikilinks(in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: #"\[\[([^\]]+)\]\]"#) else { return [] }
+        let ns = text as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard match.numberOfRanges > 1 else { return nil }
+            let raw = ns.substring(with: match.range(at: 1))
+            let display = raw.components(separatedBy: "|").first ?? raw
+            let trimmed = display.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+    }
+}
+
+private struct AirtableTablePreviewView: View {
+    let table: AirtableTablePreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "tablecells")
+                    .foregroundStyle(.orange)
+                Text(table.name)
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Text("\(table.rows.count) records")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+
+            ScrollView([.horizontal, .vertical]) {
+                Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                    GridRow {
+                        ForEach(Array(table.headers.enumerated()), id: \.offset) { _, header in
+                            Text(header.isEmpty ? "Untitled" : header)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .frame(minWidth: 140, maxWidth: 240, alignment: .leading)
+                                .padding(8)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                        }
+                    }
+
+                    ForEach(Array(table.rows.prefix(500).enumerated()), id: \.offset) { _, row in
+                        GridRow {
+                            ForEach(table.headers.indices, id: \.self) { index in
+                                Text(index < row.count ? row[index] : "")
+                                    .font(.caption)
+                                    .lineLimit(3)
+                                    .frame(minWidth: 140, maxWidth: 240, alignment: .leading)
+                                    .padding(8)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 18)
             }
         }
     }
@@ -2365,6 +4337,22 @@ private struct ActiveTabRecordingIndicator: View {
 
 // MARK: - Content View for a Single Tab
 
+private enum MeetingContentTab: Hashable {
+    case article
+    case notes
+    case transcript
+    case summary
+
+    var label: String {
+        switch self {
+        case .article: return "Article"
+        case .notes: return "Notes"
+        case .transcript: return "Transcript"
+        case .summary: return "Summary"
+        }
+    }
+}
+
 struct MeetingTabContentView: View {
     @ObservedObject var tab: OpenMeetingTab
     @ObservedObject var transcript: MeetingTranscript
@@ -2381,6 +4369,8 @@ struct MeetingTabContentView: View {
     @State private var currentMatchIndex: Int = 0
     @State private var matchCount: Int = 0
     @State private var showSummaryPrompt = false
+    @State private var speakerLabelDrafts: [String: String] = [:]
+    @State private var speakerReviewError: String?
     @AppStorage("meetingSummaryPrompt") private var summaryPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
     @AppStorage("selectedCleanupModelKind") private var selectedModelKind: String = LocalCleanupModelKind.qwen35_0_8b_q4_k_m.rawValue
     @FocusState private var searchFocused: Bool
@@ -2457,8 +4447,21 @@ struct MeetingTabContentView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    ActiveTabRecordingIndicator(tab: tab)
-                        .padding(.top, 4)
+                    HStack(spacing: 10) {
+                        Button(action: {
+                            generateWiki()
+                        }) {
+                            Label(state.isGeneratingMeetingWiki ? "Adding…" : "Add to Brain", systemImage: "sparkles.rectangle.stack")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(tab.fileURL == nil || tab.isRecording || state.isGeneratingMeetingWiki)
+                        .help(tab.fileURL == nil ? "Save this meeting before adding it to the 2nd Brain" : "Create or update generated 2nd Brain pages for this meeting")
+
+                        ActiveTabRecordingIndicator(tab: tab)
+                    }
+                    .padding(.top, 4)
                 }
             }
             .padding(.horizontal, 48)
@@ -2520,6 +4523,14 @@ struct MeetingTabContentView: View {
                 return nil
             }
         }
+    }
+
+    private func generateWiki() {
+        guard let fileURL = tab.fileURL else {
+            return
+        }
+        state.saveActiveTab()
+        state.pendingGenerateWikiURL = fileURL
     }
 
     // MARK: - Date subtitle
@@ -2742,8 +4753,20 @@ struct MeetingTabContentView: View {
         return tab.transcript.segments.filter { $0.text.localizedCaseInsensitiveContains(searchText) }
     }
 
+    private var speakerReviewItems: [MeetingSpeakerReviewItem] {
+        guard !tab.isRecording else {
+            return []
+        }
+        return state.onLoadSpeakerReviewItems?(tab.transcript) ?? []
+    }
+
     private var transcriptContent: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if !speakerReviewItems.isEmpty, searchText.isEmpty {
+                speakerReviewSection
+                    .padding(.bottom, 8)
+            }
+
             if tab.transcript.segments.isEmpty {
                 if tab.isRecording {
                     HStack(spacing: 8) {
@@ -2767,6 +4790,67 @@ struct MeetingTabContentView: View {
                     Text("Listening...").font(.caption).foregroundColor(.secondary)
                 }.padding(.top, 4)
             }
+        }
+    }
+
+    private var speakerReviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "person.wave.2")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.orange)
+                Text("Speakers")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(action: { state.onOpenSettings?() }) {
+                    Label("Voice Library", systemImage: "person.crop.circle.badge.checkmark")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if let speakerReviewError {
+                Text(speakerReviewError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            ForEach(speakerReviewItems) { item in
+                SpeakerReviewRow(
+                    item: item,
+                    draftName: Binding(
+                        get: { speakerLabelDrafts[item.id] ?? item.displayName },
+                        set: { speakerLabelDrafts[item.id] = $0 }
+                    ),
+                    onSave: {
+                        commitSpeakerLabel(item)
+                    }
+                )
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func commitSpeakerLabel(_ item: MeetingSpeakerReviewItem) {
+        let draftName = (speakerLabelDrafts[item.id] ?? item.displayName)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draftName.isEmpty, draftName != item.displayName else {
+            return
+        }
+
+        do {
+            try state.onUpdateSpeakerLabel?(tab.transcript, item.displayName, draftName)
+            speakerReviewError = nil
+            speakerLabelDrafts.removeValue(forKey: item.id)
+            state.saveActiveTab()
+        } catch {
+            speakerReviewError = "Could not save speaker label."
         }
     }
 
@@ -2848,7 +4932,7 @@ struct MeetingTabContentView: View {
                         Text("Model")
                             .font(.caption).foregroundColor(.secondary)
                         Picker("", selection: $selectedModelKind) {
-                            ForEach(TextCleanupManager.cleanupModels, id: \.kind) { model in
+                            ForEach(TextCleanupManager.cleanupGenerationModels, id: \.kind) { model in
                                 Text(model.displayName).tag(model.kind.rawValue)
                             }
                         }
@@ -2951,39 +5035,68 @@ struct MeetingTabContentView: View {
     }
 }
 
-// MARK: - Content Tab Enum
-
-enum MeetingContentTab: String, CaseIterable {
-    case article, notes, transcript, summary
-    var label: String {
-        switch self {
-        case .article: "📰 Article"
-        case .notes: "📝 Notes"
-        case .transcript: "📜 Transcript"
-        case .summary: "✨ Summary"
-        }
-    }
-}
-
 // MARK: - Sidebar
 
 struct MeetingSidebarView: View {
     @ObservedObject var state: MeetingWindowState
     @State private var searchText = ""
+    @State private var expandedLibraryFolders: Set<String> = []
+    @State private var expandedWikiFolders: Set<String> = []
+    @State private var expandedAirtableFolders: Set<String> = []
 
-    private var filteredGroups: [(date: String, entries: [MeetingHistoryEntry])] {
-        guard !searchText.isEmpty else { return state.historyGroups }
-        let query = searchText.lowercased()
-        return state.historyGroups.compactMap { group in
-            let filtered = group.entries.filter { $0.name.lowercased().contains(query) }
-            return filtered.isEmpty ? nil : (date: group.date, entries: filtered)
+    private var meetingGroups: [(date: String, entries: [MeetingHistoryEntry])] {
+        let groups = state.historyGroups.compactMap { group in
+            let entries = group.entries.filter { !$0.isAirtable }
+            return entries.isEmpty ? nil : (date: group.date, entries: entries)
         }
+        guard !searchText.isEmpty else { return groups }
+        let query = searchText.lowercased()
+        return groups.compactMap { group in
+            let entries = group.entries.filter { $0.name.lowercased().contains(query) }
+            return entries.isEmpty ? nil : (date: group.date, entries: entries)
+        }
+    }
+
+    private var airtableGroups: [(date: String, entries: [MeetingHistoryEntry])] {
+        let groups = state.historyGroups.compactMap { group in
+            let entries = group.entries.filter { $0.isAirtable }
+            return entries.isEmpty ? nil : (date: group.date, entries: entries)
+        }
+        guard !searchText.isEmpty else { return groups }
+        let query = searchText.lowercased()
+        return groups.compactMap { group in
+            let entries = group.entries.filter { $0.name.lowercased().contains(query) || group.date.lowercased().contains(query) }
+            return entries.isEmpty ? nil : (date: group.date, entries: entries)
+        }
+    }
+
+    private var filteredWikiFolders: [GeneratedWikiSidebarFolder] {
+        guard !searchText.isEmpty else { return state.generatedWikiFolders }
+        let query = searchText.lowercased()
+        return state.generatedWikiFolders.compactMap { folder in
+            let items = folder.items.filter { $0.title.lowercased().contains(query) }
+            if items.isEmpty && !folder.title.lowercased().contains(query) { return nil }
+            return GeneratedWikiSidebarFolder(
+                slug: folder.slug,
+                title: folder.title,
+                iconSystemName: folder.iconSystemName,
+                items: items.isEmpty ? folder.items : items
+            )
+        }
+    }
+
+    private var wikiPageCount: Int {
+        filteredWikiFolders.reduce(0) { $0 + $1.items.count }
+    }
+
+    private var airtableItemCount: Int {
+        airtableGroups.reduce(0) { $0 + $1.entries.count }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Meetings")
+                Text("Library")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(.secondary)
                 Spacer()
@@ -3007,7 +5120,7 @@ struct MeetingSidebarView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
-                TextField("Search meetings", text: $searchText)
+                TextField("Search library", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11))
                 if !searchText.isEmpty {
@@ -3029,14 +5142,25 @@ struct MeetingSidebarView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     indexesSection
+                    generatedWikiSection
+                    airtableSection
 
-                    if filteredGroups.isEmpty {
-                        Text(searchText.isEmpty ? "No past meetings" : "No matches")
+                    if meetingGroups.isEmpty && airtableGroups.isEmpty && filteredWikiFolders.allSatisfy({ $0.items.isEmpty }) && !searchText.isEmpty {
+                        Text(searchText.isEmpty ? "No past meetings or 2nd Brain pages" : "No matches")
                             .font(.caption).foregroundColor(.secondary)
                             .padding(.horizontal, 16).padding(.top, 8)
                     }
 
-                    ForEach(filteredGroups, id: \.date) { group in
+                    if !meetingGroups.isEmpty {
+                        Text("Meetings")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                            .padding(.bottom, 2)
+                    }
+
+                    ForEach(meetingGroups, id: \.date) { group in
                         Text(group.date)
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.tertiary)
@@ -3080,6 +5204,9 @@ struct MeetingSidebarView: View {
             .frame(maxHeight: .infinity)
         }
         .background(Color(nsColor: .controlBackgroundColor))
+        .onAppear {
+            state.loadGeneratedWikiFolders()
+        }
     }
 
     private func deleteEntry(_ entry: MeetingHistoryEntry) {
@@ -3101,13 +5228,297 @@ struct MeetingSidebarView: View {
         NSWorkspace.shared.open(dir)
     }
 
+    private func openWikiFolder() {
+        NSWorkspace.shared.open(state.generatedWikiRootForDisplay())
+    }
+
+    private func openAirtableFolder() {
+        NSWorkspace.shared.open(state.saveDirectory.appendingPathComponent("Airtable", isDirectory: true))
+    }
+
     @ViewBuilder
     private var indexesSection: some View {
         ForEach(IndexKind.allCases) { kind in
-            if let items = state.indexItems[kind], !items.isEmpty {
+            if let items = state.indexItems[kind] {
                 indexFolderRow(kind: kind, count: items.count)
             }
         }
+        if !state.wikiProposals.isEmpty {
+            wikiSuggestionRow
+        }
+        newWikiRow
+    }
+
+    @ViewBuilder
+    private var generatedWikiSection: some View {
+        if !filteredWikiFolders.isEmpty {
+            topLevelFolderRow(
+                id: "wiki",
+                title: "2nd Brain",
+                icon: "books.vertical",
+                count: wikiPageCount,
+                primaryAction: { state.openSecondBrain() },
+                openAction: openWikiFolder
+            )
+            if expandedLibraryFolders.contains("wiki") || !searchText.isEmpty {
+                ForEach(filteredWikiFolders) { folder in
+                    generatedWikiFolderRow(folder)
+                    if expandedWikiFolders.contains(folder.slug) || !searchText.isEmpty {
+                        ForEach(folder.items) { item in
+                            generatedWikiItemRow(item)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var airtableSection: some View {
+        if searchText.isEmpty || !airtableGroups.isEmpty {
+            topLevelFolderRow(
+                id: "airtable",
+                title: "Airtable",
+                icon: "tablecells",
+                count: airtableItemCount,
+                openAction: openAirtableFolder
+            )
+            if expandedLibraryFolders.contains("airtable") {
+                if airtableGroups.isEmpty {
+                    Text("No Airtable imports")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 34)
+                        .padding(.trailing, 12)
+                        .padding(.vertical, 4)
+                }
+            ForEach(airtableGroups, id: \.date) { group in
+                airtableFolderRow(group)
+                if expandedAirtableFolders.contains(group.date) {
+                    ForEach(group.entries) { entry in
+                        airtableItemRow(entry)
+                    }
+                }
+            }
+            }
+        }
+    }
+
+    private func topLevelFolderRow(id: String, title: String, icon: String, count: Int, primaryAction: (() -> Void)? = nil, openAction: @escaping () -> Void) -> some View {
+        Button(action: {
+            if let primaryAction {
+                primaryAction()
+            }
+            if expandedLibraryFolders.contains(id) {
+                expandedLibraryFolders.remove(id)
+            } else {
+                expandedLibraryFolders.insert(id)
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: expandedLibraryFolders.contains(id) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 10)
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text("(\(count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: openAction) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show \(title) source folder in Finder")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Show in Finder", action: openAction)
+        }
+        .padding(.top, 8)
+    }
+
+    private func generatedWikiFolderRow(_ folder: GeneratedWikiSidebarFolder) -> some View {
+        Button(action: {
+            if expandedWikiFolders.contains(folder.slug) {
+                expandedWikiFolders.remove(folder.slug)
+            } else {
+                expandedWikiFolders.insert(folder.slug)
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: expandedWikiFolders.contains(folder.slug) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 10)
+                Image(systemName: folder.iconSystemName)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text(folder.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text("(\(folder.items.count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 12)
+    }
+
+    private func generatedWikiItemRow(_ item: GeneratedWikiSidebarItem) -> some View {
+        let isOpen = state.indexTabs.contains { tab in
+            if case let .generatedWikiPage(page) = tab.content { return page.url == item.fileURL }
+            return false
+        }
+        return Button(action: { state.openGeneratedWikiPage(item.fileURL) }) {
+            HStack(spacing: 6) {
+                Image(systemName: item.type == "meeting_overview" ? "doc.richtext" : "doc.text")
+                    .font(.system(size: 10))
+                    .foregroundColor(isOpen ? .orange : .secondary)
+                Text(item.title)
+                    .font(.system(size: 12))
+                    .foregroundColor(isOpen ? .orange : .primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.leading, 34)
+            .padding(.trailing, 12)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 12)
+        .contextMenu {
+            Button("Show in Finder") {
+                NSWorkspace.shared.selectFile(
+                    item.fileURL.path,
+                    inFileViewerRootedAtPath: item.fileURL.deletingLastPathComponent().path
+                )
+            }
+        }
+    }
+
+    private func airtableFolderRow(_ group: (date: String, entries: [MeetingHistoryEntry])) -> some View {
+        let title = group.date.replacingOccurrences(of: "Airtable: ", with: "")
+        return Button(action: {
+            if expandedAirtableFolders.contains(group.date) {
+                expandedAirtableFolders.remove(group.date)
+            } else {
+                expandedAirtableFolders.insert(group.date)
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: expandedAirtableFolders.contains(group.date) ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 10)
+                Image(systemName: "tray.full")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text("(\(group.entries.count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func airtableItemRow(_ entry: MeetingHistoryEntry) -> some View {
+        Button(action: { state.openFile(entry.fileURL) }) {
+            HStack(spacing: 6) {
+                Image(systemName: "tablecells")
+                    .font(.system(size: 10))
+                    .foregroundColor(.green.opacity(0.75))
+                Text(entry.name)
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.leading, 34)
+            .padding(.trailing, 12)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Show in Finder") {
+                NSWorkspace.shared.selectFile(
+                    entry.fileURL.path,
+                    inFileViewerRootedAtPath: entry.fileURL.deletingLastPathComponent().path
+                )
+            }
+        }
+    }
+
+    /// Surfaces pending model-proposed wikis; clicking opens the approval sheet.
+    private var wikiSuggestionRow: some View {
+        Button(action: { state.showNewWikiSheet = true }) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                Text(state.wikiProposals.count == 1
+                     ? "Suggested 2nd Brain: \(state.wikiProposals[0].spec.displayName)"
+                     : "\(state.wikiProposals.count) suggested 2nd Brains")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.orange)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
+    }
+
+    private var newWikiRow: some View {
+        Button(action: { state.showNewWikiSheet = true }) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text("New 2nd Brain…")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
     }
 
     private func indexFolderRow(kind: IndexKind, count: Int) -> some View {
@@ -3151,7 +5562,7 @@ private struct MissingAPIKeyView: View {
                 Text("Claude API key required")
                     .font(.system(size: 16, weight: .semibold))
             }
-            Text("Index building uses Claude (Anthropic API). Add your API key in Settings → Meeting Transcript → Cross-Meeting Q&A.")
+            Text("Index building uses Claude (Anthropic API). Add your API key in Settings → Meeting Transcript → Cloud API.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             HStack {
@@ -3257,6 +5668,30 @@ private struct ConsentDialogView: View {
 
 // MARK: - Helper Views
 
+/// Small inline button that copies text to the clipboard and briefly shows a
+/// confirmation. Manages its own transient "Copied!" state, so it can be reused
+/// across multiple rows (e.g. one per Q&A turn) without shared state. The text
+/// is supplied as a closure so it's evaluated lazily at click time.
+private struct CopyButton: View {
+    let text: () -> String
+    var label: String = "Copy"
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text(), forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        }) {
+            Label(copied ? "Copied!" : label, systemImage: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11))
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.borderless)
+    }
+}
+
 private struct SummarySectionHeader: View {
     let title: String
     var body: some View {
@@ -3326,6 +5761,80 @@ struct TranscriptSegmentRow: View {
         case .me: return .orange
         case .remote: return .blue
         }
+    }
+}
+
+private struct SpeakerReviewRow: View {
+    let item: MeetingSpeakerReviewItem
+    @Binding var draftName: String
+    let onSave: () -> Void
+
+    private var normalizedDraftName: String {
+        draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSave: Bool {
+        !normalizedDraftName.isEmpty && normalizedDraftName != item.displayName
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                TextField("Speaker name", text: $draftName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .frame(minWidth: 160, maxWidth: 240)
+                    .onSubmit {
+                        if canSave {
+                            onSave()
+                        }
+                    }
+
+                Text(statusText)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(item.isVoicePrintBacked ? .green : .secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(item.isVoicePrintBacked ? Color.green.opacity(0.12) : Color.secondary.opacity(0.1))
+                    )
+
+                Text("\(item.segmentCount) \(item.segmentCount == 1 ? "turn" : "turns")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button(action: onSave) {
+                    Label("Save", systemImage: "checkmark")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!canSave)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(item.firstTimestamp)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 42, alignment: .trailing)
+                Text(item.sampleText.isEmpty ? "No transcript sample available." : item.sampleText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var statusText: String {
+        if item.isMe {
+            return "You"
+        }
+        return item.isVoicePrintBacked ? "Voice print" : "Transcript label"
     }
 }
 

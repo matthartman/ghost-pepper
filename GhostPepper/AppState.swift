@@ -69,15 +69,21 @@ class AppState: ObservableObject {
     @AppStorage("speechModel") var speechModel: String = SpeechModelCatalog.defaultModelID
     @AppStorage("preferredLanguage") var preferredLanguage: String = "auto"
     @AppStorage("pepperChatHost") var pepperChatHost: String = "https://api.zo.computer"
-    @AppStorage("pepperChatApiKey") var pepperChatApiKey: String = ""
+    @Published var pepperChatApiKey: String = "" {
+        didSet { _ = KeychainHelper.set(pepperChatApiKey, for: Self.pepperChatApiKeychainKey) }
+    }
     @AppStorage("pepperChatEnabled") var pepperChatEnabled: Bool = false {
         didSet {
             hotkeyMonitor.updateBindings(shortcutBindings)
         }
     }
     @AppStorage("pepperChatIncludeScreenContext") var pepperChatIncludeScreenContext: Bool = true
-    @AppStorage("trelloApiKey") var trelloApiKey: String = ""
-    @AppStorage("trelloToken") var trelloToken: String = ""
+    @Published var trelloApiKey: String = "" {
+        didSet { _ = KeychainHelper.set(trelloApiKey, for: Self.trelloApiKeyKeychainKey) }
+    }
+    @Published var trelloToken: String = "" {
+        didSet { _ = KeychainHelper.set(trelloToken, for: Self.trelloTokenKeychainKey) }
+    }
     @AppStorage("trelloDefaultListId") var trelloDefaultListId: String = ""
     @Published var trelloBoards: [TrelloBoard] = []
     @AppStorage("meetingTranscriptEnabled") var meetingTranscriptEnabled: Bool = false
@@ -107,8 +113,17 @@ class AppState: ObservableObject {
             )
         }
     }
+    @Published var selectedWikiModelKind: LocalCleanupModelKind {
+        didSet {
+            cleanupSettingsDefaults.set(
+                selectedWikiModelKind.rawValue,
+                forKey: Self.selectedWikiModelDefaultsKey
+            )
+            localWikiEngineCache = nil
+        }
+    }
 
-    let modelManager = ModelManager()
+    let modelManager: ModelManager
     let audioRecorder: AudioRecorder
     let transcriber: SpeechTranscriber
     let textPaster: TextPaster
@@ -162,6 +177,8 @@ class AppState: ObservableObject {
     private var activePerformanceTrace: PerformanceTrace?
     private var activeCleanupAttempted = false
     private var pipelineOwner: PipelineOwner?
+    private var speechAnalyzerReloadsInFlight = 0
+    private var pendingMeetingSessionStarts = 0
     private let cleanupSettingsDefaults: UserDefaults
     private let inputMonitoringChecker: () -> Bool
     private let inputMonitoringPrompter: () -> Void
@@ -173,9 +190,14 @@ class AppState: ObservableObject {
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
     private static let postPasteLearningEnabledDefaultsKey = "postPasteLearningEnabled"
     private static let ignoreOtherSpeakersDefaultsKey = "ignoreOtherSpeakers"
+    private static let selectedWikiModelDefaultsKey = "selectedWikiModelKind"
     private static let playSoundsDefaultsKey = "playSounds"
     private static let pepperChatEnabledDefaultsKey = "pepperChatEnabled"
+    private static let pepperChatApiKeychainKey = "pepperChatApiKey"
+    private static let trelloApiKeyKeychainKey = "trelloApiKey"
+    private static let trelloTokenKeychainKey = "trelloToken"
     private static let archivedRecordingSampleRate = 16_000.0
+    private static let speechAnalyzerReloadPollIntervalNanoseconds: UInt64 = 10_000_000
     // History shows one decimal place, so shorter recordings render as 0.0s noise.
     private static let minimumArchivedRecordingSampleCount = 800
     private static let emptyTranscriptionCancelThresholdSampleCount = 8_000 // ~0.5 seconds — show "no sound" hint for almost all failed recordings
@@ -208,6 +230,7 @@ class AppState: ObservableObject {
         hotkeyMonitor: HotkeyMonitoring = HotkeyMonitor(bindings: AppState.defaultShortcutBindings),
         chordBindingStore: ChordBindingStore = ChordBindingStore(),
         cleanupSettingsDefaults: UserDefaults = .standard,
+        modelManager: ModelManager? = nil,
         textCleanupManager: TextCleanupManager? = nil,
         frontmostWindowOCRService: FrontmostWindowOCRService = FrontmostWindowOCRService(),
         cleanupPromptBuilder: CleanupPromptBuilder = CleanupPromptBuilder(),
@@ -227,6 +250,7 @@ class AppState: ObservableObject {
         self.hotkeyMonitor = hotkeyMonitor
         self.chordBindingStore = chordBindingStore
         self.cleanupSettingsDefaults = cleanupSettingsDefaults
+        self.modelManager = modelManager ?? ModelManager()
         self.audioRecorder = audioRecorder
         self.textPaster = textPaster
         self.debugLogStore = debugLogStore
@@ -276,13 +300,34 @@ class AppState: ObservableObject {
         self.frontmostWindowContextEnabled = storedFrontmostWindowContextEnabled
         self.postPasteLearningEnabled = storedPostPasteLearningEnabled
         self.ignoreOtherSpeakers = storedIgnoreOtherSpeakers
+        let storedWikiModelKind = LocalCleanupModelKind(
+            rawValue: cleanupSettingsDefaults.string(forKey: Self.selectedWikiModelDefaultsKey) ?? ""
+        )
+        self.selectedWikiModelKind = storedWikiModelKind == .gemma4_12b_it_optiq_4bit_mlx
+            ? .wikiDefault
+            : (storedWikiModelKind ?? .wikiDefault)
         if cleanupSettingsDefaults.object(forKey: Self.playSoundsDefaultsKey) == nil {
             self.playSounds = true
         } else {
             self.playSounds = cleanupSettingsDefaults.bool(forKey: Self.playSoundsDefaultsKey)
         }
+        let migratedPepperChatApiKey = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.pepperChatApiKeychainKey,
+            keychainKey: Self.pepperChatApiKeychainKey
+        ) ?? ""
+        let migratedTrelloApiKey = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.trelloApiKeyKeychainKey,
+            keychainKey: Self.trelloApiKeyKeychainKey
+        ) ?? ""
+        let migratedTrelloToken = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.trelloTokenKeychainKey,
+            keychainKey: Self.trelloTokenKeychainKey
+        ) ?? ""
+        self.pepperChatApiKey = migratedPepperChatApiKey
+        self.trelloApiKey = migratedTrelloApiKey
+        self.trelloToken = migratedTrelloToken
         if UserDefaults.standard.object(forKey: Self.pepperChatEnabledDefaultsKey) == nil {
-            pepperChatEnabled = !(UserDefaults.standard.string(forKey: "pepperChatApiKey") ?? "").isEmpty
+            pepperChatEnabled = !migratedPepperChatApiKey.isEmpty
         }
         // One-time migration: enable meeting transcription for existing users on update
         if UserDefaults.standard.object(forKey: "meetingTranscriptEnabled") == nil,
@@ -296,7 +341,7 @@ class AppState: ObservableObject {
            UserDefaults.standard.object(forKey: "selectedCleanupModelKind") != nil {
             showWhatsNew = true
         }
-        self.transcriber = SpeechTranscriber(modelManager: modelManager)
+        self.transcriber = SpeechTranscriber(modelManager: self.modelManager)
         self.textCleaner = TextCleaner(
             cleanupManager: self.textCleanupManager,
             correctionStore: self.correctionStore
@@ -716,10 +761,27 @@ class AppState: ObservableObject {
         SpeechModelCatalog.model(named: speechModel)?.supportsSpeakerFiltering == true
     }
 
+    private var canStartSpeechAnalyzerConsumer: Bool {
+        guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
+            return true
+        }
+
+        return status == .ready
+            && modelManager.isReady
+            && modelManager.modelName == speechModel
+            && speechAnalyzerReloadsInFlight == 0
+    }
+
     private func startRecording() async {
         // If the selected speech model isn't ready, show loading message
-        guard status == .ready else {
-            if status == .loading {
+        guard status == .ready,
+              modelManager.isReady,
+              modelManager.modelName == speechModel,
+              speechAnalyzerReloadsInFlight == 0 else {
+            if status == .loading
+                || !modelManager.isReady
+                || modelManager.modelName != speechModel
+                || speechAnalyzerReloadsInFlight > 0 {
                 overlay.show(message: .modelLoading)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     self?.overlay.dismiss()
@@ -1066,6 +1128,16 @@ class AppState: ObservableObject {
         controller.onGenerateSummary = { [weak self] transcript in
             Task { await self?.generateMeetingSummary(for: transcript) }
         }
+        controller.onLoadSpeakerReviewItems = { [weak self] transcript in
+            self?.meetingSpeakerReviewItems(for: transcript) ?? []
+        }
+        controller.onUpdateSpeakerLabel = { [weak self] transcript, currentDisplayName, newDisplayName in
+            try self?.updateMeetingSpeakerLabel(
+                transcript: transcript,
+                currentDisplayName: currentDisplayName,
+                newDisplayName: newDisplayName
+            )
+        }
         controller.onAskQuestion = { [weak self] question, history in
             AsyncThrowingStream { continuation in
                 guard let self else {
@@ -1073,42 +1145,222 @@ class AppState: ObservableObject {
                     return
                 }
                 self.usageStats.record(.qaQuestion)
-                let backend = AgentBackend.resolveFromDefaults()
+                let lintOnlyPrefix = "__2ND_BRAIN_LINT_ONLY__\n"
+                let isWikiLintOnly = question.hasPrefix(lintOnlyPrefix)
+                let effectiveQuestion = isWikiLintOnly
+                    ? String(question.dropFirst(lintOnlyPrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    : question
                 let archiveRoot = MeetingTranscriptSettings.effectiveSaveDirectory()
-                let provider: LLMProvider
-                let maxIterations: Int
-                switch backend {
-                case .claude(let model):
-                    guard let key = KeychainHelper.get(AnthropicProvider.keychainKey), !key.isEmpty else {
-                        Task { @MainActor in self.showSettings(section: .meetingTranscript) }
-                        continuation.yield(.error("Add your Claude API key to continue — Settings opened."))
-                        continuation.finish()
-                        return
-                    }
-                    provider = AnthropicProvider(model: model, apiKey: key)
-                    maxIterations = 15
-                case .local(let kind):
-                    provider = LocalLLMProvider(cleanupManager: self.textCleanupManager, modelKind: kind)
-                    maxIterations = 10
+                guard let modelKind = self.localQAModelKind() else {
+                    continuation.yield(.error("Download a wired local model in Settings → Models to use 2nd Brain Q&A. Qwen 3.5 4B Q4_K_M is the best current default."))
+                    continuation.finish()
+                    return
                 }
-                let agent = MeetingQAAgent(provider: provider, backend: backend, archiveRoot: archiveRoot, maxIterations: maxIterations)
-                // Build the conversation: every prior (Q, A) becomes alternating
-                // user/assistant messages, then the new question is appended.
-                var messages: [LLMMessage] = []
-                for turn in history {
-                    messages.append(LLMMessage(role: .user, content: [.text(turn.question)]))
-                    messages.append(LLMMessage(role: .assistant, content: [.text(turn.answer)]))
-                }
-                messages.append(LLMMessage(role: .user, content: [.text(question)]))
+                let backend = AgentBackend.local(modelKind)
+                let provider = LocalLLMProvider(cleanupManager: self.textCleanupManager, modelKind: modelKind)
+                let search = WikiSearchService(archiveRoot: archiveRoot)
                 let task = Task {
                     do {
-                        for try await event in agent.ask(messages: messages) {
-                            continuation.yield(event)
+                        continuation.yield(.status(isWikiLintOnly ? "Linting generated 2nd Brain pages…" : "Routing through local 2nd Brain…"))
+                        let wikiHits = isWikiLintOnly
+                            ? try search.allWikiPages(limit: 80)
+                            : try search.searchWiki(query: effectiveQuestion, limit: 8)
+                        let wikiTraceID = "wiki_route_\(Int(Date().timeIntervalSince1970 * 1000))"
+                        continuation.yield(.toolCall(
+                            id: wikiTraceID,
+                            name: isWikiLintOnly ? "wiki_lint_scope" : "wiki_route",
+                            inputSummary: isWikiLintOnly ? "scope=wikis/ only" : "query=\"\(effectiveQuestion)\"",
+                            fullInput: isWikiLintOnly
+                                ? ["scope": "wikis/", "limit": 80, "original_meetings": "excluded"]
+                                : ["query": effectiveQuestion, "limit": 8]
+                        ))
+                        continuation.yield(.toolResult(
+                            id: wikiTraceID,
+                            summary: wikiHits.isEmpty ? "No generated 2nd Brain pages" : "\(wikiHits.count) generated 2nd Brain pages",
+                            fullOutput: search.formattedTrace(for: wikiHits),
+                            isError: false
+                        ))
+
+                        if isWikiLintOnly {
+                            guard !wikiHits.isEmpty else {
+                                continuation.yield(.text("I couldn't find any generated 2nd Brain pages under `wikis/` to lint."))
+                                continuation.yield(.usage(.local(
+                                    modelDisplayName: backend.shortDisplayName,
+                                    inputTokens: 0,
+                                    outputTokens: 18
+                                )))
+                                continuation.finish()
+                                return
+                            }
+
+                            continuation.yield(.status("Reviewing generated 2nd Brain pages only…"))
+                            let context = search.formattedContext(for: wikiHits, characterLimit: 24_000)
+                            let system = Self.wikiLintSystemPrompt(archiveRoot: archiveRoot, modelName: backend.shortDisplayName)
+                            let user = Self.wikiLintUserPrompt(question: effectiveQuestion, context: context)
+                            let inputTokens = max(1, (system.count + user.count) / 4)
+                            var output = ""
+                            var lastReportedOutputTokens = 0
+                            continuation.yield(.usage(.local(
+                                modelDisplayName: backend.shortDisplayName,
+                                inputTokens: inputTokens,
+                                outputTokens: 0
+                            )))
+                            for try await event in provider.complete(
+                                system: system,
+                                messages: [LLMMessage(role: .user, content: [.text(user)])],
+                                tools: []
+                            ) {
+                                if Task.isCancelled { break }
+                                switch event {
+                                case .textDelta(let delta):
+                                    output += delta
+                                    continuation.yield(.text(delta))
+                                    let outputTokens = max(1, output.count / 4)
+                                    if outputTokens - lastReportedOutputTokens >= 8 {
+                                        lastReportedOutputTokens = outputTokens
+                                        continuation.yield(.usage(.local(
+                                            modelDisplayName: backend.shortDisplayName,
+                                            inputTokens: inputTokens,
+                                            outputTokens: outputTokens
+                                        )))
+                                    }
+                                case .toolUse:
+                                    break
+                                case .stop:
+                                    let outputTokens = max(1, output.count / 4)
+                                    continuation.yield(.usage(.local(
+                                        modelDisplayName: backend.shortDisplayName,
+                                        inputTokens: inputTokens,
+                                        outputTokens: outputTokens
+                                    )))
+                                }
+                            }
+                            if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                let fallback = "I reviewed generated 2nd Brain pages only, but the local model did not produce a lint report. Check the trace for the `wikis/` pages included."
+                                continuation.yield(.text(fallback))
+                                continuation.yield(.usage(.local(
+                                    modelDisplayName: backend.shortDisplayName,
+                                    inputTokens: inputTokens,
+                                    outputTokens: max(1, fallback.count / 4)
+                                )))
+                            }
+                            continuation.finish()
+                            return
+                        }
+
+                        let sourcePaths = search.sourceMeetingPaths(from: wikiHits)
+                        let sourceTraceID = "source_links_\(Int(Date().timeIntervalSince1970 * 1000))"
+                        continuation.yield(.toolCall(
+                            id: sourceTraceID,
+                            name: "source_links",
+                            inputSummary: "\(sourcePaths.count) candidate source meetings",
+                            fullInput: ["wiki_hits": wikiHits.map(\.relativePath)]
+                        ))
+                        continuation.yield(.toolResult(
+                            id: sourceTraceID,
+                            summary: sourcePaths.isEmpty ? "No source meetings from 2nd Brain" : "\(sourcePaths.count) source meetings",
+                            fullOutput: sourcePaths.sorted().joined(separator: "\n"),
+                            isError: false
+                        ))
+
+                        continuation.yield(.status("Reading original meeting chunks…"))
+                        let sourceQuery = search.sourceSeedQuery(question: effectiveQuestion, wikiHits: wikiHits)
+                        var sourceHits = try search.searchMeetings(
+                            query: sourceQuery,
+                            sourcePaths: sourcePaths.isEmpty ? nil : sourcePaths,
+                            limit: 8
+                        )
+                        var sourceSearchScope = sourcePaths.isEmpty ? "all source meetings" : "\(sourcePaths.count) 2nd Brain-linked source meetings"
+                        if sourceHits.isEmpty, !sourcePaths.isEmpty {
+                            sourceHits = try search.searchMeetings(query: sourceQuery, sourcePaths: nil, limit: 8)
+                            sourceSearchScope = "all source meetings after linked-source miss"
+                        }
+                        let readTraceID = "source_search_\(Int(Date().timeIntervalSince1970 * 1000))"
+                        continuation.yield(.toolCall(
+                            id: readTraceID,
+                            name: "source_search",
+                            inputSummary: sourceSearchScope,
+                                fullInput: ["query": sourceQuery, "scope": sourceSearchScope]
+                        ))
+                        continuation.yield(.toolResult(
+                            id: readTraceID,
+                            summary: sourceHits.isEmpty ? "No source chunks" : "\(sourceHits.count) source chunks",
+                            fullOutput: search.formattedTrace(for: sourceHits),
+                            isError: false
+                        ))
+
+                        let answerHits = sourceHits.isEmpty ? wikiHits : sourceHits
+                        guard !answerHits.isEmpty else {
+                            continuation.yield(.text("I couldn't find anything relevant in the local 2nd Brain or original meeting files for that query."))
+                            continuation.yield(.usage(.local(
+                                modelDisplayName: backend.shortDisplayName,
+                                inputTokens: 0,
+                                outputTokens: 18
+                            )))
+                            continuation.finish()
+                            return
+                        }
+
+                        continuation.yield(.status(sourceHits.isEmpty ? "Answering from 2nd Brain context…" : "Answering from original meeting sources…"))
+                        let context = search.formattedContext(for: answerHits)
+                        let system = Self.wikiQASystemPrompt(archiveRoot: archiveRoot, modelName: backend.shortDisplayName)
+                        let user = Self.wikiQAUserPrompt(
+                            question: effectiveQuestion,
+                            history: history,
+                            context: context,
+                            usedOriginalSources: !sourceHits.isEmpty
+                        )
+                        let inputTokens = max(1, (system.count + user.count) / 4)
+                        var output = ""
+                        var lastReportedOutputTokens = 0
+                        continuation.yield(.usage(.local(
+                            modelDisplayName: backend.shortDisplayName,
+                            inputTokens: inputTokens,
+                            outputTokens: 0
+                        )))
+                        for try await event in provider.complete(
+                            system: system,
+                            messages: [LLMMessage(role: .user, content: [.text(user)])],
+                            tools: []
+                        ) {
+                            if Task.isCancelled { break }
+                            switch event {
+                            case .textDelta(let delta):
+                                output += delta
+                                continuation.yield(.text(delta))
+                                let outputTokens = max(1, output.count / 4)
+                                if outputTokens - lastReportedOutputTokens >= 8 {
+                                    lastReportedOutputTokens = outputTokens
+                                    continuation.yield(.usage(.local(
+                                        modelDisplayName: backend.shortDisplayName,
+                                        inputTokens: inputTokens,
+                                        outputTokens: outputTokens
+                                    )))
+                                }
+                            case .toolUse:
+                                break
+                            case .stop:
+                                let outputTokens = max(1, output.count / 4)
+                                continuation.yield(.usage(.local(
+                                    modelDisplayName: backend.shortDisplayName,
+                                    inputTokens: inputTokens,
+                                    outputTokens: outputTokens
+                                )))
+                            }
+                        }
+                        if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            let fallback = Self.wikiQAFallbackAnswer(question: effectiveQuestion, hits: answerHits)
+                            continuation.yield(.text(fallback))
+                            continuation.yield(.usage(.local(
+                                modelDisplayName: backend.shortDisplayName,
+                                inputTokens: inputTokens,
+                                outputTokens: max(1, fallback.count / 4)
+                            )))
                         }
                         continuation.finish()
                     } catch {
                         self.debugLogStore.record(category: .model, message: "Agentic Q&A error: \(error)")
-                        continuation.yield(.error("Claude API error: \(error.localizedDescription)"))
+                        continuation.yield(.error("Local 2nd Brain Q&A error: \(error.localizedDescription)"))
                         continuation.finish()
                     }
                 }
@@ -1117,6 +1369,26 @@ class AppState: ObservableObject {
         }
         controller.onMakeIndexBuilder = { [weak self] kind in
             self?.makeIndexBuilder(for: kind)
+        }
+        controller.onGenerateWikiProposals = { [weak self] in
+            guard let self else { return [] }
+            let proposals = try await self.makeWikiKindProposer().propose()
+            WikiKindStore.shared.saveProposals(proposals)
+            return proposals
+        }
+        controller.onApproveWikiKind = { [weak self] spec in
+            self?.approveWikiKind(spec)
+        }
+        controller.onGenerateMeetingWiki = { [weak self] meetingURL, onProgress in
+            guard let self else {
+                throw CancellationError()
+            }
+            let engine = GeneratedWikiEngine(
+                cleanupManager: self.textCleanupManager,
+                archiveRoot: MeetingTranscriptSettings.effectiveSaveDirectory(),
+                modelKind: self.wikiModelKind()
+            )
+            return try await engine.generate(for: meetingURL, onProgress: onProgress)
         }
         controller.cleanupManager = textCleanupManager
         controller.modelManager = modelManager
@@ -1197,6 +1469,10 @@ class AppState: ObservableObject {
 
     func beginPepperChatRecording() {
         guard pepperChatEnabled, !pepperChatApiKey.isEmpty else { return }
+        guard canStartSpeechAnalyzerConsumer else {
+            debugLogStore.record(category: .hotkey, message: "Context Bundler start skipped because the SpeechAnalyzer model is loading.")
+            return
+        }
         // Clear previous state so new recording takes over
         pepperChatSession.isReviewingContext = false
         pepperChatSession.capturedCommand = nil
@@ -1305,6 +1581,10 @@ class AppState: ObservableObject {
     /// Creates a new MeetingSession, starts recording, and returns it.
     /// Called by the window state when the user clicks "+" or auto-detection triggers.
     func createMeetingSession(name: String, detectedMeeting: DetectedMeeting? = nil) -> MeetingSession? {
+        guard canStartSpeechAnalyzerConsumer else {
+            debugLogStore.record(category: .model, message: "Meeting transcription start skipped because the SpeechAnalyzer model is loading.")
+            return nil
+        }
         guard PermissionChecker.hasScreenRecordingPermission() else {
             PermissionChecker.requestScreenRecordingPermission()
             return nil
@@ -1315,7 +1595,14 @@ class AppState: ObservableObject {
             meetingName: name,
             detectedMeeting: detectedMeeting,
             transcriber: transcriber,
-            saveDirectory: saveDir
+            saveDirectory: saveDir,
+            remoteSpeakerTagger: { [weak self] sessionID, audioBuffer in
+                guard let self else { return nil }
+                return await self.remoteSpeakerTaggedTranscript(
+                    sessionID: sessionID,
+                    audioBuffer: audioBuffer
+                )
+            }
         )
         session.onAutoStopRequested = { [weak self] session in
             Task {
@@ -1324,17 +1611,32 @@ class AppState: ObservableObject {
         }
         activeMeetingSession = session
 
+        pendingMeetingSessionStarts += 1
         Task { @MainActor in
+            defer {
+                if pendingMeetingSessionStarts > 0 {
+                    pendingMeetingSessionStarts -= 1
+                }
+            }
             do {
                 try await session.start()
+                guard session.isActive else {
+                    if activeMeetingSession === session {
+                        activeMeetingSession = nil
+                    }
+                    return
+                }
                 // Count the attempt — usage-report semantics value "how often
                 // does the user try to use this?" over "did the file save."
                 // Captures abandoned/cancelled recordings too.
                 usageStats.record(.meetingRecord)
                 debugLogStore.record(category: .model, message: "Meeting transcription started: \(name)")
             } catch {
+                await session.stop()
                 debugLogStore.record(category: .model, message: "Meeting transcription failed to start: \(error.localizedDescription)")
-                activeMeetingSession = nil
+                if activeMeetingSession === session {
+                    activeMeetingSession = nil
+                }
             }
         }
 
@@ -1435,58 +1737,441 @@ class AppState: ObservableObject {
         }
     }
 
+    private func remoteSpeakerTaggedTranscript(
+        sessionID: UUID,
+        audioBuffer: [Float]
+    ) async -> SpeakerTaggedTranscript? {
+        guard let result = await modelManager.transcribeWithSpeakerTagging(audioBuffer: audioBuffer),
+              let speakerTaggedTranscript = result.speakerTaggedTranscript else {
+            return nil
+        }
+
+        let resolvedProfiles = await resolveTranscriptionLabSpeakerProfiles(
+            entryID: sessionID,
+            audioBuffer: audioBuffer,
+            diarizationSummary: result.diarizationSummary,
+            speakerTaggedTranscript: speakerTaggedTranscript
+        )
+        let profiles = postCallSpeakerProfiles(
+            resolvedProfiles,
+            for: speakerTaggedTranscript
+        )
+        guard profiles.isEmpty == false else {
+            return speakerTaggedTranscript
+        }
+
+        let profilesBySpeakerID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.speakerID, $0) })
+        return SpeakerTaggedTranscript(
+            segments: speakerTaggedTranscript.segments.map { segment in
+                guard let profile = profilesBySpeakerID[segment.speakerID] else {
+                    return segment
+                }
+
+                return SpeakerTaggedTranscript.Segment(
+                    speakerID: segment.speakerID,
+                    startTime: segment.startTime,
+                    endTime: segment.endTime,
+                    text: segment.text,
+                    attribution: SpeakerTaggedTranscript.Attribution(
+                        speakerID: segment.speakerID,
+                        recognizedVoiceID: profile.recognizedVoiceID,
+                        displayName: profile.displayName,
+                        confidence: segment.attribution.confidence,
+                        evidenceDuration: segment.attribution.evidenceDuration,
+                        source: segment.attribution.source
+                    )
+                )
+            }
+        )
+    }
+
+    private func postCallSpeakerProfiles(
+        _ profiles: [TranscriptionLabSpeakerProfile],
+        for speakerTaggedTranscript: SpeakerTaggedTranscript
+    ) -> [TranscriptionLabSpeakerProfile] {
+        let speakerDisplayNames = Self.fallbackSpeakerDisplayNames(for: speakerTaggedTranscript)
+        return profiles.map { profile in
+            guard let fallbackName = speakerDisplayNames[profile.speakerID],
+                  Self.isPlaceholderSpeakerDisplayName(profile.displayName, speakerID: profile.speakerID) else {
+                return profile
+            }
+
+            var updatedProfile = profile
+            updatedProfile.displayName = fallbackName
+            try? transcriptionLabSpeakerProfileStore.upsert(updatedProfile)
+            return updatedProfile
+        }
+    }
+
+    private static func fallbackSpeakerDisplayNames(
+        for speakerTaggedTranscript: SpeakerTaggedTranscript
+    ) -> [String: String] {
+        var orderedSpeakerIDs: [String] = []
+        for segment in speakerTaggedTranscript.segments where !orderedSpeakerIDs.contains(segment.speakerID) {
+            orderedSpeakerIDs.append(segment.speakerID)
+        }
+
+        return Dictionary(
+            uniqueKeysWithValues: orderedSpeakerIDs.enumerated().map { offset, speakerID in
+                (speakerID, "Speaker \(offset + 1)")
+            }
+        )
+    }
+
+    private static func isPlaceholderSpeakerDisplayName(_ displayName: String, speakerID: String) -> Bool {
+        let normalized = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ||
+            normalized == speakerID ||
+            normalized.hasPrefix("Recognized Voice ")
+    }
+
+    private static func truncatedSpeakerEvidence(_ text: String) -> String {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > 220 else {
+            return normalized
+        }
+
+        let endIndex = normalized.index(normalized.startIndex, offsetBy: 220)
+        return String(normalized[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
     // MARK: - Index updates
 
-    private var peopleIndexBuilder: (model: ClaudeAPIModel, builder: IndexBuilder)?
+    private var claudeIndexBuilder: (model: ClaudeAPIModel, builder: IndexBuilder)?
+    private var localWikiEngineCache: (model: LocalCleanupModelKind, saveDirPath: String, engine: LocalWikiEngine)?
 
-    /// Lazily constructs the per-kind index builder, returning nil if the
-    /// Claude API key isn't configured (incremental updates skip silently in
-    /// that case — the user will still get to build an index on demand once
-    /// they configure a key).
-    ///
-    /// Cache is keyed on the model — if the user changes their selection in
-    /// Settings or the build sheet, the next call recreates the builder with
-    /// the new model rather than returning a stale one.
-    private func indexBuilder(for kind: IndexKind) -> IndexBuilder? {
-        switch kind {
-        case .people:
-            guard let key = KeychainHelper.get(AnthropicProvider.keychainKey), !key.isEmpty else {
-                return nil
+    /// The local model used for wiki generation. It has a dedicated setting so
+    /// wiki quality can improve independently of dictation cleanup latency.
+    private func wikiModelKind() -> LocalCleanupModelKind {
+        selectedWikiModelKind
+    }
+
+    private func localQAModelKind() -> LocalCleanupModelKind? {
+        let candidates: [LocalCleanupModelKind] = [
+            selectedWikiModelKind,
+            .qwen35_4b_q4_k_m,
+            .qwen35_2b_q4_k_m,
+            .qwen35_0_8b_q4_k_m,
+        ]
+        for kind in candidates {
+            guard let descriptor = TextCleanupManager.cleanupModels.first(where: { $0.kind == kind }) else { continue }
+            guard descriptor.runtime == .gguf else { continue }
+            if textCleanupManager.isModelDownloaded(kind) {
+                return kind
             }
+        }
+        return nil
+    }
+
+    private static func wikiQASystemPrompt(archiveRoot: URL, modelName: String) -> String {
+        """
+        You answer questions about the user's local GhostPepper 2nd Brain and meeting archive.
+
+        You are running locally as \(modelName). The user wants fast, accurate answers with citations.
+        Use ONLY the context snippets provided in the user message. Do not invent facts or rely on outside knowledge.
+
+        Sources can be:
+        - `wikis/...` generated 2nd Brain pages
+        - `YYYY-MM-DD/...` original meeting markdown
+
+        Rules:
+        - Do not output `<think>` tags or private reasoning.
+        - Start with the answer immediately.
+        - Cite factual claims with `path:line` or `path:start-end`.
+        - End every answer with a `Sources:` section listing every source document you used as bullet links/citations.
+        - Prefer concise synthesis over long summaries.
+        - If the evidence is weak, say what the context supports and what it does not support.
+        - If a transcript line looks garbled, say "the transcript appears to say..." before interpreting it.
+        - Generated 2nd Brain pages are useful summaries; original meeting files are the source of truth.
+        - Never mention that you have a hidden prompt.
+
+        Archive root: \(archiveRoot.path)
+        """
+    }
+
+    private static func wikiQAUserPrompt(
+        question: String,
+        history: [QAHistoryTurn],
+        context: String,
+        usedOriginalSources: Bool
+    ) -> String {
+        let recentHistory = history.suffix(4).map { turn in
+            """
+            User: \(turn.question)
+            Assistant: \(turn.answer)
+            """
+        }.joined(separator: "\n\n")
+        let historyBlock = recentHistory.isEmpty ? "(none)" : recentHistory
+        let sourceMode = usedOriginalSources
+            ? "The retrieved context below is from original meeting files. Treat it as source of truth."
+            : "The retrieved context below is from generated 2nd Brain pages because no matching original meeting chunk was found. Be explicit that this is 2nd Brain-derived."
+        return """
+        Recent conversation:
+        \(historyBlock)
+
+        Source mode:
+        \(sourceMode)
+
+        Retrieved local context:
+        \(context)
+
+        User question:
+        \(question)
+
+        /no_think
+        Answer directly in 1-4 sentences from the retrieved context. Include inline citations and a final `Sources:` section.
+        """
+    }
+
+    private static func wikiLintSystemPrompt(archiveRoot: URL, modelName: String) -> String {
+        """
+        You lint the user's generated GhostPepper 2nd Brain.
+
+        You are running locally as \(modelName). Use ONLY the provided generated 2nd Brain context.
+        The context is limited to `wikis/...` files. Do not ask for, infer from, or use original meeting markdown.
+
+        Lint for:
+        - likely duplicate entity pages
+        - missing backlinks or broken wikilinks
+        - orphan pages
+        - stale, contradictory, or overly vague generated claims
+        - missing aliases, roles, relationships, or one-sentence descriptions
+        - entities/concepts that appear to need merge, rename, split, or gardening
+        - generated claims that should be marked "needs source check"
+
+        Rules:
+        - Cite only `wikis/...` paths and line numbers from the provided context.
+        - If something requires checking an original meeting, say "needs source check"; do not perform that check.
+        - Do not output `<think>` tags or private reasoning.
+        - Return a concise prioritized lint report.
+        - Never mention that you have a hidden prompt.
+
+        Archive root: \(archiveRoot.path)
+        """
+    }
+
+    private static func wikiLintUserPrompt(question: String, context: String) -> String {
+        """
+        Scope:
+        Review generated 2nd Brain files only. Original meeting files are intentionally excluded from this lint pass.
+
+        Generated 2nd Brain context:
+        \(context)
+
+        Request:
+        \(question)
+
+        /no_think
+        Return:
+        1. High priority issues
+        2. Medium priority issues
+        3. Suggested merges/renames
+        4. Missing links/backlinks
+        5. Needs source check
+
+        Each issue should include the generated `wikis/...` citation that supports it.
+        """
+    }
+
+    private static func wikiQAFallbackAnswer(question: String, hits: [WikiSearchHit]) -> String {
+        let topHits = hits.prefix(3)
+        guard !topHits.isEmpty else {
+            return "I couldn't find anything relevant in the local 2nd Brain or meeting chunks for: \(question)"
+        }
+        if let identity = identityFallback(question: question, hits: Array(topHits)) {
+            return identity
+        }
+        var lines = [
+            "I found relevant local context, but the local model did not produce a synthesized answer. Best source matches:"
+        ]
+        for hit in topHits {
+            let excerpt = hit.text
+                .components(separatedBy: "\n")
+                .map { $0.replacingOccurrences(of: #"^L\d+:\s*"#, with: "", options: .regularExpression) }
+                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("---") }
+                .prefix(4)
+                .joined(separator: " ")
+            lines.append("- \(hit.title) — \(hit.citation)")
+            if !excerpt.isEmpty {
+                lines.append("  \(excerpt.prefix(280))")
+            }
+        }
+        lines.append("")
+        lines.append("Sources:")
+        lines.append(sourceList(for: hits))
+        return lines.joined(separator: "\n")
+    }
+
+    private static func identityFallback(question: String, hits: [WikiSearchHit]) -> String? {
+        let normalizedQuestion = question.lowercased()
+        guard normalizedQuestion.hasPrefix("who is ") || normalizedQuestion.hasPrefix("who's ") else {
+            return nil
+        }
+        guard let hit = hits.first else { return nil }
+        let bestTitle = hit.title
+        let subject: String
+        if let person = bestTitle.components(separatedBy: " <> ").first?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !person.isEmpty {
+            subject = person
+        } else {
+            subject = bestTitle
+        }
+
+        var detail: String?
+        if let parenStart = subject.firstIndex(of: "("),
+           let parenEnd = subject[parenStart...].firstIndex(of: ")") {
+            detail = String(subject[subject.index(after: parenStart)..<parenEnd])
+        }
+
+        if let detail, !detail.isEmpty {
+            return """
+            \(subject) appears to be associated with \(detail), based on the matched meeting/source title \(hit.citation).
+
+            Sources:
+            \(sourceList(for: hits))
+            """
+        }
+        return """
+        \(subject) is the person most strongly matched in the local 2nd Brain/source search. The strongest source is \(hit.citation).
+
+        Sources:
+        \(sourceList(for: hits))
+        """
+    }
+
+    private static func sourceList(for hits: [WikiSearchHit]) -> String {
+        var seen = Set<String>()
+        var lines: [String] = []
+        for hit in hits {
+            let key = hit.relativePath
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            lines.append("- \(hit.citation)")
+        }
+        return lines.isEmpty ? "- (none)" : lines.joined(separator: "\n")
+    }
+
+    private func displayName(forWikiModel model: LocalCleanupModelKind) -> String {
+        TextCleanupManager.cleanupModels.first(where: { $0.kind == model })?.displayName ?? model.rawValue
+    }
+
+    private func localWikiEngine() -> LocalWikiEngine {
+        let model = wikiModelKind()
+        let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
+        if let cached = localWikiEngineCache, cached.model == model, cached.saveDirPath == saveDir.path {
+            return cached.engine
+        }
+        let engine = LocalWikiEngine(cleanupManager: textCleanupManager, saveDir: saveDir, modelKind: model)
+        localWikiEngineCache = (model, saveDir.path, engine)
+        return engine
+    }
+
+    func makeWikiKindProposer() -> WikiKindProposer {
+        WikiKindProposer(
+            cleanupManager: textCleanupManager,
+            saveDir: MeetingTranscriptSettings.effectiveSaveDirectory(),
+            modelKind: wikiModelKind()
+        )
+    }
+
+    /// Resolves the index builder for a kind, backend-aware:
+    /// - Agent backend = Claude AND an API key exists → the Claude-driven
+    ///   `IndexBuilder` (higher narrative quality, costs tokens).
+    /// - Otherwise → the token-free `LocalWikiEngine`.
+    ///
+    /// The Claude builder cache is keyed on the model — if the user changes
+    /// their selection in Settings or the build sheet, the next call
+    /// recreates the builder rather than returning a stale one.
+    private func indexBuilder(for kind: IndexKind) -> (any IndexBuilding)? {
+        if case .claude = AgentBackend.resolveFromDefaults(),
+           let key = KeychainHelper.get(AnthropicProvider.keychainKey), !key.isEmpty {
             let model = ClaudeAPIModel(rawValue: self.claudeAPIModel) ?? .sonnet
-            if let existing = peopleIndexBuilder, existing.model == model {
+            if let existing = claudeIndexBuilder, existing.model == model {
                 return existing.builder
             }
             let provider = AnthropicProvider(model: model, apiKey: key)
             let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
             let builder = IndexBuilder(provider: provider, model: model, saveDir: saveDir)
-            peopleIndexBuilder = (model, builder)
+            claudeIndexBuilder = (model, builder)
             return builder
         }
+        return localWikiEngine()
     }
 
-    /// Re-resolves the index builder when the API key or model changes.
+    /// Re-resolves the index builders when the API key or model changes.
     func resetIndexBuilders() {
-        peopleIndexBuilder = nil
+        claudeIndexBuilder = nil
+        localWikiEngineCache = nil
     }
 
     /// Public entry point used by the UI's "New Index" button.
-    func makeIndexBuilder(for kind: IndexKind) -> IndexBuilder? {
+    func makeIndexBuilder(for kind: IndexKind) -> (any IndexBuilding)? {
         indexBuilder(for: kind)
     }
 
-    private func triggerIndexUpdates(for meetingURL: URL) {
-        // Only run incremental updates if there's a People index already on disk.
-        // The builder itself also checks this, but skipping here avoids spinning
-        // up a provider for nothing.
-        let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
-        let peopleRoot = MarkdownArchivePaths.indexRoot(in: saveDir, kind: .people)
-        guard FileManager.default.fileExists(atPath: peopleRoot.path) else { return }
-        guard let builder = indexBuilder(for: .people) else {
-            debugLogStore.record(category: .model, message: "Skipping People index update: no Claude API key configured")
+    /// Approves a proposed (or manually defined) wiki kind: registers it,
+    /// then backfills its pages from the existing meeting cards in the
+    /// background.
+    func approveWikiKind(_ spec: WikiKindSpec) {
+        do {
+            try WikiKindStore.shared.addKind(spec)
+        } catch {
+            debugLogStore.record(category: .model, message: "Couldn't add wiki kind '\(spec.displayName)': \(error.localizedDescription)")
             return
         }
-        builder.updateForMeeting(meetingURL, kind: .people)
+        let kind = IndexKind(rawValue: MarkdownArchivePaths.slugForIndexEntry(spec.slug.isEmpty ? spec.displayName : spec.slug))
+        let engine = localWikiEngine()
+        Task { @MainActor in
+            do {
+                for try await event in engine.buildFullIndex(kind: kind) {
+                    if case .error(let message) = event {
+                        self.debugLogStore.record(category: .model, message: "Wiki backfill (\(kind.rawValue)): \(message)")
+                    }
+                }
+            } catch {
+                self.debugLogStore.record(category: .model, message: "Wiki backfill (\(kind.rawValue)) failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func triggerIndexUpdates(for meetingURL: URL) {
+        // Run incremental updates for every wiki whose index exists on disk.
+        let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
+        for kind in IndexKind.allCases {
+            let root = MarkdownArchivePaths.indexRoot(in: saveDir, kind: kind)
+            guard FileManager.default.fileExists(atPath: root.path) else { continue }
+            guard let builder = indexBuilder(for: kind) else { continue }
+            builder.updateForMeeting(meetingURL, kind: kind)
+        }
+        // Keep the qmd search index fresh (no-op when qmd isn't installed).
+        QMDService(archiveRoot: saveDir).noteArchiveChanged()
+        maybeGenerateWikiProposals()
+    }
+
+    /// Once enough meeting cards exist, occasionally ask the local model to
+    /// propose new wiki kinds. Proposals surface in the sidebar for approval;
+    /// nothing is created without the user saying yes.
+    private func maybeGenerateWikiProposals() {
+        let defaults = UserDefaults.standard
+        let lastKey = "wikiProposalsLastGeneratedAt"
+        let last = defaults.object(forKey: lastKey) as? Date
+        if let last, Date().timeIntervalSince(last) < 7 * 24 * 3600 { return }
+        guard WikiKindStore.shared.proposals.isEmpty else { return }
+        let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
+        guard MeetingCardStore.allCards(in: saveDir).count >= WikiKindProposer.minimumCards else { return }
+
+        defaults.set(Date(), forKey: lastKey)
+        let proposer = makeWikiKindProposer()
+        Task { @MainActor in
+            do {
+                let proposals = try await proposer.propose()
+                if !proposals.isEmpty {
+                    WikiKindStore.shared.saveProposals(proposals)
+                }
+            } catch {
+                self.debugLogStore.record(category: .model, message: "Wiki proposal generation failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private var shortcutBindings: [ChordAction: KeyChord] {
@@ -1719,6 +2404,73 @@ class AppState: ObservableObject {
 
     func upsertTranscriptionLabSpeakerProfile(_ profile: TranscriptionLabSpeakerProfile) throws {
         try transcriptionLabSpeakerProfileStore.upsert(profile)
+    }
+
+    func meetingSpeakerReviewItems(for transcript: MeetingTranscript) -> [MeetingSpeakerReviewItem] {
+        let localProfiles = (try? transcriptionLabSpeakerProfileStore.loadProfiles(for: transcript.sessionID)) ?? []
+        let localProfilesByDisplayName = Dictionary(
+            grouping: localProfiles,
+            by: { $0.displayName.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+        let namedRemoteSegments = transcript.segments.filter { segment in
+            if case .remote(let name) = segment.speaker {
+                return name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
+            return false
+        }
+        let grouped = Dictionary(grouping: namedRemoteSegments, by: \.speaker.displayName)
+
+        return grouped.compactMap { displayName, segments in
+            guard let first = segments.min(by: { $0.startTime < $1.startTime }) else {
+                return nil
+            }
+            let profile = localProfilesByDisplayName[displayName]?.first
+            let sampleText = segments
+                .sorted { $0.startTime < $1.startTime }
+                .prefix(3)
+                .map(\.text)
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return MeetingSpeakerReviewItem(
+                id: displayName,
+                displayName: displayName,
+                segmentCount: segments.count,
+                firstTimestamp: first.formattedTimestamp,
+                sampleText: Self.truncatedSpeakerEvidence(sampleText),
+                recognizedVoiceID: profile?.recognizedVoiceID,
+                isVoicePrintBacked: profile?.recognizedVoiceID != nil,
+                isMe: profile?.isMe ?? false
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.firstTimestamp == rhs.firstTimestamp {
+                return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+            }
+            return lhs.firstTimestamp < rhs.firstTimestamp
+        }
+    }
+
+    func updateMeetingSpeakerLabel(
+        transcript: MeetingTranscript,
+        currentDisplayName: String,
+        newDisplayName: String
+    ) throws {
+        let normalizedCurrentName = currentDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedNewName = newDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCurrentName.isEmpty, !normalizedNewName.isEmpty else {
+            return
+        }
+
+        var localProfiles = try transcriptionLabSpeakerProfileStore.loadProfiles(for: transcript.sessionID)
+        if let profileIndex = localProfiles.firstIndex(where: {
+            $0.displayName.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedCurrentName
+        }) {
+            localProfiles[profileIndex].displayName = normalizedNewName
+            try transcriptionLabSpeakerProfileStore.upsert(localProfiles[profileIndex])
+            _ = try updateGlobalVoiceProfile(from: localProfiles[profileIndex])
+        }
+
+        transcript.replaceSpeakerDisplayName(normalizedCurrentName, with: normalizedNewName)
     }
 
     func updateGlobalVoiceProfile(
@@ -2091,7 +2843,8 @@ class AppState: ObservableObject {
     }
 
     func loadSpeechModel(name: String) async {
-        await modelManager.loadModel(name: name)
+        let language = preferredLanguage == "auto" ? nil : preferredLanguage
+        await modelManager.loadModel(name: name, language: language)
         let nextPresentation = Self.nextSpeechModelPresentation(
             managerState: modelManager.state,
             managerError: modelManager.error,
@@ -2100,6 +2853,72 @@ class AppState: ObservableObject {
         )
         status = nextPresentation.status
         errorMessage = nextPresentation.errorMessage
+    }
+
+    func reloadSpeechAnalyzerForPreferredLanguageIfNeeded() async {
+        guard SpeechModelCatalog.model(named: speechModel)?.backend == .speechAnalyzer else {
+            return
+        }
+
+        speechAnalyzerReloadsInFlight += 1
+        let reloadGeneration = speechAnalyzerReloadsInFlight
+        defer {
+            speechAnalyzerReloadsInFlight = max(speechAnalyzerReloadsInFlight - 1, 0)
+            if speechAnalyzerReloadsInFlight == 0,
+               reloadGeneration > 0,
+               !isSpeechAnalyzerSessionActive,
+               status == .loading,
+               modelManager.isReady {
+                status = .ready
+            }
+        }
+
+        await waitForSpeechAnalyzerSessionToBecomeIdle()
+        guard !Task.isCancelled else { return }
+
+        if status == .ready, !isSpeechAnalyzerSessionActive {
+            status = .loading
+        }
+
+        while modelManager.state == .loading {
+            guard !Task.isCancelled else { return }
+            do {
+                try await Task.sleep(nanoseconds: Self.speechAnalyzerReloadPollIntervalNanoseconds)
+            } catch {
+                return
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        await loadSpeechModel(name: speechModel)
+        if speechAnalyzerReloadsInFlight > 1, !Task.isCancelled {
+            status = .loading
+        }
+    }
+
+    private var isSpeechAnalyzerSessionActive: Bool {
+        isRecording
+            || isTranscribing
+            || status == .recording
+            || status == .transcribing
+            || pipelineOwner != nil
+            || pendingMeetingSessionStarts > 0
+            || activeMeetingSession?.isStarting == true
+            || activeMeetingSession?.isActive == true
+            || activeMeetingSession?.isDraining == true
+            || pepperChatSession.isRecording
+            || pepperChatSession.isTranscribing
+    }
+
+    private func waitForSpeechAnalyzerSessionToBecomeIdle() async {
+        while isSpeechAnalyzerSessionActive {
+            guard !Task.isCancelled else { return }
+            do {
+                try await Task.sleep(nanoseconds: Self.speechAnalyzerReloadPollIntervalNanoseconds)
+            } catch {
+                return
+            }
+        }
     }
 
     static func nextSpeechModelPresentation(
@@ -2118,9 +2937,14 @@ class AppState: ObservableObject {
             )
         case .ready:
             let shouldClearSpeechModelError = currentErrorMessage?.hasPrefix(speechModelErrorPrefix) == true
-            let nextStatus: AppStatus = shouldClearSpeechModelError && currentStatus == .error
-                ? .ready
-                : currentStatus
+            let nextStatus: AppStatus
+            if currentStatus == .loading {
+                nextStatus = .ready
+            } else if shouldClearSpeechModelError && currentStatus == .error {
+                nextStatus = .ready
+            } else {
+                nextStatus = currentStatus
+            }
             return (
                 nextStatus,
                 shouldClearSpeechModelError ? nil : currentErrorMessage

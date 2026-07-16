@@ -1,18 +1,20 @@
 import SwiftUI
 
-/// Cmd+K command palette. Live-filters across People (index entries),
-/// Meetings (recorded / imported markdown), and Notes (quick-note files).
-/// ↑/↓ moves the highlight; Enter opens the highlighted result; Esc dismisses.
+/// Cmd+K command palette. Live-filters across generated wiki entities, People
+/// (index entries), Meetings (recorded / imported markdown), and Notes
+/// (quick-note files). ↑/↓ moves the highlight; Enter opens the highlighted
+/// result or asks the local wiki when no exact destination is selected.
 struct CommandKSearchSheet: View {
     @ObservedObject var state: MeetingWindowState
     @Binding var isPresented: Bool
     /// When provided, selecting a result calls this instead of opening the
     /// item as a tab. Used by the Q&A `@`-mention picker to attach context.
     var onAttach: ((CommandKHaystackEntry) -> Void)? = nil
+    var onAskQuestion: ((String) -> Void)? = nil
 
     @State private var query: String = ""
     @State private var selectedIndex: Int = 0
-    @State private var results: CommandKResults = CommandKResults(people: [], meetings: [], notes: [])
+    @State private var results: CommandKResults = CommandKResults(wiki: [], people: [], meetings: [], notes: [], askQuestion: nil)
     @State private var flatItems: [CommandKItem] = []
     /// Pre-flattened, pre-lowercased haystack snapshotted when the sheet
     /// opens — keeps each keystroke O(N) on raw strings instead of
@@ -33,6 +35,7 @@ struct CommandKSearchSheet: View {
         }
         .frame(width: 620)
         .onAppear {
+            state.loadGeneratedWikiFolders()
             fieldFocused = true
             haystack = CommandKHaystackEntry.snapshot(from: state)
             recomputeResults()
@@ -58,7 +61,7 @@ struct CommandKSearchSheet: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
-            TextField(onAttach == nil ? "Search people, meetings, notes…" : "Attach context: search people, meetings, notes…", text: $query)
+            TextField(onAttach == nil ? "Search 2nd Brain, people, meetings, notes…" : "Attach context: search 2nd Brain, people, meetings, notes…", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .focused($fieldFocused)
@@ -106,7 +109,7 @@ struct CommandKSearchSheet: View {
                 Image(systemName: query.isEmpty ? "magnifyingglass" : "questionmark.circle")
                     .font(.system(size: 28))
                     .foregroundStyle(.secondary)
-                Text(query.isEmpty ? "Type to search across people, meetings, and notes."
+                Text(query.isEmpty ? "Type to search across 2nd Brain, people, meetings, and notes."
                                    : "No matches for \"\(query)\"")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
@@ -117,9 +120,13 @@ struct CommandKSearchSheet: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
+                        section(title: "2nd Brain", icon: "books.vertical", items: results.wiki)
                         section(title: "People", icon: "person.3", items: results.people)
                         section(title: "Meetings", icon: "doc.text", items: results.meetings)
                         section(title: "Notes", icon: "note.text", items: results.notes)
+                        if let ask = results.askQuestion {
+                            section(title: "Ask", icon: "sparkle.magnifyingglass", items: [ask])
+                        }
                     }
                     .padding(.vertical, 6)
                 }
@@ -192,6 +199,8 @@ struct CommandKSearchSheet: View {
     private func activate(_ item: CommandKItem) {
         if let onAttach, let entry = haystack.first(where: { $0.id == item.id }) {
             onAttach(entry)
+        } else if item.isAskQuestion {
+            onAskQuestion?(query.trimmingCharacters(in: .whitespacesAndNewlines))
         } else {
             item.activate(state)
         }
@@ -199,16 +208,26 @@ struct CommandKSearchSheet: View {
     }
 
     private func activateSelected() {
-        guard !flatItems.isEmpty else { return }
+        if flatItems.isEmpty {
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, onAttach == nil else { return }
+            onAskQuestion?(trimmed)
+            isPresented = false
+            return
+        }
         let idx = clampedIndex
         guard flatItems.indices.contains(idx) else { return }
         activate(flatItems[idx])
     }
 
     private func recomputeResults() {
-        let r = CommandKResults.compute(haystack: haystack, query: query)
+        let r = CommandKResults.compute(
+            haystack: haystack,
+            query: query,
+            includeAskQuestion: onAttach == nil && onAskQuestion != nil
+        )
         results = r
-        flatItems = r.people + r.meetings + r.notes
+        flatItems = r.wiki + r.people + r.meetings + r.notes + (r.askQuestion.map { [$0] } ?? [])
     }
 }
 
@@ -220,6 +239,7 @@ struct CommandKSearchSheet: View {
 /// or dictionary traversal until we materialize the (small) result set.
 struct CommandKHaystackEntry {
     enum Kind {
+        case wiki(GeneratedWikiSidebarItem, folderTitle: String)
         case person(IndexKind, IndexHistoryItem)
         case meeting(MeetingHistoryEntry, dateFolder: String)
         case note(MeetingHistoryEntry, dateFolder: String)
@@ -227,6 +247,7 @@ struct CommandKHaystackEntry {
     let title: String
     let titleLower: String
     let subtitle: String?
+    let contentLower: String
     let dateFolderLower: String
     let id: String
     let kind: Kind
@@ -236,12 +257,31 @@ struct CommandKHaystackEntry {
         var out: [CommandKHaystackEntry] = []
         out.reserveCapacity(256)
 
+        for folder in state.generatedWikiFolders {
+            for item in folder.items {
+                let page = try? GeneratedWikiPaths.readPage(from: item.fileURL)
+                out.append(CommandKHaystackEntry(
+                    title: item.title,
+                    titleLower: item.title.lowercased(),
+                    subtitle: folder.title,
+                    contentLower: [page?.body, page?.sourceMeetingPath, item.type]
+                        .compactMap { $0 }
+                        .joined(separator: "\n")
+                        .lowercased(),
+                    dateFolderLower: "",
+                    id: "wiki-\(item.fileURL.path)",
+                    kind: .wiki(item, folderTitle: folder.title)
+                ))
+            }
+        }
+
         for (kind, items) in state.indexItems {
             for item in items {
                 out.append(CommandKHaystackEntry(
                     title: item.canonicalName,
                     titleLower: item.canonicalName.lowercased(),
                     subtitle: kind.displayName,
+                    contentLower: "",
                     dateFolderLower: "",
                     id: "person-\(kind.rawValue)-\(item.slug)",
                     kind: .person(kind, item)
@@ -257,6 +297,7 @@ struct CommandKHaystackEntry {
                     title: entry.name,
                     titleLower: entry.name.lowercased(),
                     subtitle: group.date,
+                    contentLower: "",
                     dateFolderLower: dateLower,
                     id: "file-\(entry.fileURL.path)",
                     kind: isNote ? .note(entry, dateFolder: group.date) : .meeting(entry, dateFolder: group.date)
@@ -274,15 +315,18 @@ struct CommandKItem: Identifiable {
     let id: String
     let title: String
     let subtitle: String?
+    var isAskQuestion: Bool = false
     let activate: (MeetingWindowState) -> Void
 }
 
 struct CommandKResults {
+    var wiki: [CommandKItem]
     var people: [CommandKItem]
     var meetings: [CommandKItem]
     var notes: [CommandKItem]
+    var askQuestion: CommandKItem?
 
-    var totalCount: Int { people.count + meetings.count + notes.count }
+    var totalCount: Int { wiki.count + people.count + meetings.count + notes.count + (askQuestion == nil ? 0 : 1) }
 
     private static let perSectionLimit = 12
 
@@ -290,22 +334,32 @@ struct CommandKResults {
     /// CommandKItem closures for items that pass the filter, so the per-
     /// keystroke cost is dominated by string contains, not closure setup.
     @MainActor
-    static func compute(haystack: [CommandKHaystackEntry], query: String) -> CommandKResults {
+    static func compute(haystack: [CommandKHaystackEntry], query: String, includeAskQuestion: Bool = false) -> CommandKResults {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else {
-            return .init(people: [], meetings: [], notes: [])
+            return .init(wiki: [], people: [], meetings: [], notes: [], askQuestion: nil)
         }
 
+        var wiki: [CommandKItem] = []
         var people: [CommandKItem] = []
         var meetings: [CommandKItem] = []
         var notes: [CommandKItem] = []
 
         for entry in haystack {
             let titleHit = entry.titleLower.contains(needle)
+            let contentHit = !entry.contentLower.isEmpty && entry.contentLower.contains(needle)
             let dateHit = !entry.dateFolderLower.isEmpty && entry.dateFolderLower.contains(needle)
-            guard titleHit || dateHit else { continue }
+            guard titleHit || contentHit || dateHit else { continue }
 
             switch entry.kind {
+            case .wiki(let item, _):
+                if wiki.count >= perSectionLimit { continue }
+                wiki.append(CommandKItem(
+                    id: entry.id,
+                    title: entry.title,
+                    subtitle: entry.subtitle,
+                    activate: { st in st.openGeneratedWikiPage(item.fileURL) }
+                ))
             case .person(let kind, let item):
                 if people.count >= perSectionLimit { continue }
                 people.append(CommandKItem(
@@ -333,7 +387,16 @@ struct CommandKResults {
             }
         }
 
+        let askQuestion = includeAskQuestion ? CommandKItem(
+            id: "ask-\(needle)",
+            title: "Ask local 2nd Brain: \(query.trimmingCharacters(in: .whitespacesAndNewlines))",
+            subtitle: "Runs in the Q&A bar with trace, sources, and token usage",
+            isAskQuestion: true,
+            activate: { _ in }
+        ) : nil
+
+        wiki.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         people.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        return .init(people: people, meetings: meetings, notes: notes)
+        return .init(wiki: wiki, people: people, meetings: meetings, notes: notes, askQuestion: askQuestion)
     }
 }

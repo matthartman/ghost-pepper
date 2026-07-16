@@ -16,10 +16,10 @@ final class MeetingWindowHeuristicsTests: XCTestCase {
     func testBestMeetingTitlePrefersNamedZoomMeetingOverUtilityWindows() {
         XCTAssertEqual(
             MeetingWindowHeuristics.bestMeetingTitle(
-                in: ["Settings", "Zoom Meeting", "Matt's Weekly Standup - Zoom"],
+                in: ["Settings", "Zoom Meeting", "Team Weekly Standup - Zoom"],
                 appName: "Zoom"
             ),
-            "Matt's Weekly Standup"
+            "Team Weekly Standup"
         )
     }
 

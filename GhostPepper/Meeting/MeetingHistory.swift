@@ -2,13 +2,24 @@ import Foundation
 
 /// A past meeting found on disk.
 struct MeetingHistoryEntry: Identifiable, Hashable {
+    enum SourceKind: Hashable {
+        case meeting
+        case granola
+        case airtable(baseName: String)
+    }
+
     let id: URL
     let name: String
     let dateFolder: String
     let fileURL: URL
-    let isGranola: Bool
+    let sourceKind: SourceKind
 
     var displayDate: String { dateFolder }
+    var isGranola: Bool { sourceKind == .granola }
+    var isAirtable: Bool {
+        if case .airtable = sourceKind { return true }
+        return false
+    }
 }
 
 /// Scans the meeting save directory for past transcript markdown files.
@@ -54,7 +65,7 @@ enum MeetingHistory {
                     name: displayName,
                     dateFolder: dateFolder,
                     fileURL: file,
-                    isGranola: isGranola
+                    sourceKind: isGranola ? .granola : .meeting
                 )
             }
 
@@ -63,6 +74,39 @@ enum MeetingHistory {
             }
         }
 
+        groups.append(contentsOf: loadAirtableEntries(from: baseDirectory))
+        return groups
+    }
+
+    private static func loadAirtableEntries(from baseDirectory: URL) -> [(date: String, entries: [MeetingHistoryEntry])] {
+        let airtableRoot = baseDirectory.appendingPathComponent("Airtable")
+        let fm = FileManager.default
+        guard let bases = try? fm.contentsOfDirectory(
+            at: airtableRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var groups: [(date: String, entries: [MeetingHistoryEntry])] = []
+        for base in bases.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }) {
+            guard (try? base.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            guard let files = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
+            let csvFiles = files
+                .filter { $0.pathExtension.lowercased() == "csv" }
+                .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+            let entries = csvFiles.map { file in
+                MeetingHistoryEntry(
+                    id: file,
+                    name: file.deletingPathExtension().lastPathComponent,
+                    dateFolder: "Airtable: \(base.lastPathComponent)",
+                    fileURL: file,
+                    sourceKind: .airtable(baseName: base.lastPathComponent)
+                )
+            }
+            if !entries.isEmpty {
+                groups.append((date: "Airtable: \(base.lastPathComponent)", entries: entries))
+            }
+        }
         return groups
     }
 

@@ -25,8 +25,15 @@ struct TrelloBackend {
     func fetchBoardsAndLists() async throws -> [TrelloBoard] {
         guard isConfigured else { throw TrelloError.notConfigured }
 
-        let url = URL(string: "https://api.trello.com/1/members/me/boards?key=\(apiKey)&token=\(token)&fields=name&lists=open&list_fields=name")!
-        let (data, response) = try await URLSession.shared.data(from: url)
+        var components = URLComponents(string: "https://api.trello.com/1/members/me/boards")!
+        components.queryItems = [
+            URLQueryItem(name: "fields", value: "name"),
+            URLQueryItem(name: "lists", value: "open"),
+            URLQueryItem(name: "list_fields", value: "name"),
+        ]
+        var request = URLRequest(url: components.url!)
+        applyAuthorization(to: &request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw TrelloError.apiError(String(data: data, encoding: .utf8) ?? "Failed to fetch boards")
         }
@@ -81,8 +88,6 @@ struct TrelloBackend {
 
         var urlComponents = URLComponents(string: "https://api.trello.com/1/cards")!
         urlComponents.queryItems = [
-            URLQueryItem(name: "key", value: apiKey),
-            URLQueryItem(name: "token", value: token),
             URLQueryItem(name: "idList", value: listId),
             URLQueryItem(name: "name", value: name),
             URLQueryItem(name: "desc", value: description),
@@ -91,6 +96,7 @@ struct TrelloBackend {
         var request = URLRequest(url: urlComponents.url!)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
+        applyAuthorization(to: &request)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
@@ -115,10 +121,11 @@ struct TrelloBackend {
     /// Attach a file to an existing Trello card.
     private func attachFile(to cardId: String, fileURL: URL) async throws {
         let boundary = UUID().uuidString
-        var request = URLRequest(url: URL(string: "https://api.trello.com/1/cards/\(cardId)/attachments?key=\(apiKey)&token=\(token)")!)
+        var request = URLRequest(url: URL(string: "https://api.trello.com/1/cards/\(cardId)/attachments")!)
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 60
+        applyAuthorization(to: &request)
 
         let fileName = fileURL.lastPathComponent
         let fileData = try Data(contentsOf: fileURL)
@@ -137,6 +144,15 @@ struct TrelloBackend {
             // Attachment failed but card was created — don't throw
             return
         }
+    }
+
+    private func applyAuthorization(to request: inout URLRequest) {
+        let escapedKey = apiKey.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedToken = token.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        request.setValue(
+            "OAuth oauth_consumer_key=\"\(escapedKey)\", oauth_token=\"\(escapedToken)\"",
+            forHTTPHeaderField: "Authorization"
+        )
     }
 }
 

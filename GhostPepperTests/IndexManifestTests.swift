@@ -74,8 +74,8 @@ final class IndexManifestTests: XCTestCase {
             to: MarkdownArchivePaths.entryURL(in: saveDir, kind: .people, slug: "john-smith")
         )
         try IndexEntryFile.write(
-            IndexEntry(kind: .people, canonicalName: "Lara Chen", aliases: [], sourceMeetings: [], lastUpdated: Date(), body: ""),
-            to: MarkdownArchivePaths.entryURL(in: saveDir, kind: .people, slug: "lara-chen")
+            IndexEntry(kind: .people, canonicalName: "Jordan Pike", aliases: [], sourceMeetings: [], lastUpdated: Date(), body: ""),
+            to: MarkdownArchivePaths.entryURL(in: saveDir, kind: .people, slug: "jordan-pike")
         )
         // Manifest file should be ignored even though it lives in the same dir.
         let manifestPlaceholder = MarkdownArchivePaths.manifestURL(in: saveDir, kind: .people)
@@ -83,7 +83,7 @@ final class IndexManifestTests: XCTestCase {
 
         let snapshot = IndexManifest.aliasSnapshot(in: saveDir, kind: .people)
         XCTAssertEqual(snapshot["John Smith"], ["John", "JS"])
-        XCTAssertEqual(snapshot["Lara Chen"], [])
+        XCTAssertEqual(snapshot["Jordan Pike"], [])
         XCTAssertEqual(snapshot.count, 2, "manifest file should be skipped")
     }
 }

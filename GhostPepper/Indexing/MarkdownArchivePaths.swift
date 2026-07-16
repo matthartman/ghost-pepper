@@ -21,7 +21,7 @@ enum MarkdownArchivePaths {
 
     /// File-safe slug for an index entry's canonical name. Lowercased,
     /// non-alphanumeric collapsed to dashes, trimmed, capped at 60 chars.
-    /// "John Smith" → "john-smith"; "Lara Chen (eng)" → "lara-chen-eng".
+    /// "John Smith" → "john-smith"; "Jordan Pike (eng)" → "jordan-pike-eng".
     static func slugForIndexEntry(_ canonicalName: String) -> String {
         let lowered = canonicalName.lowercased()
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-"))

@@ -73,6 +73,9 @@ struct ModelsSidebarView: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
+                .onChange(of: selectedSpeechModelID) { _, modelID in
+                    onDownloadSpeechModel(modelID)
+                }
             }
 
             FunctionRow(
@@ -107,35 +110,22 @@ struct ModelsSidebarView: View {
                 available: cleanupModel.map { TextCleanupManager.isModelDownloaded($0.kind) } ?? false
             )
 
-            FunctionRowPicker(
+            FunctionRow(
                 icon: "cpu",
-                title: "Agent (Q&A · indexing)",
-                location: agentBackendIsLocal ? .local : .cloud,
-                isEmpty: !agentBackendIsLocal && !hasClaudeKey,
-                emptyMessage: "Add an API key in Settings → Cross-Meeting Q&A"
-            ) {
-                Picker("", selection: $selectedAgentBackendRaw) {
-                    Section("Cloud") {
-                        ForEach(ClaudeAPIModel.allCases) { model in
-                            Text(model.shortDisplayName).tag("claude:\(model.rawValue)")
-                        }
-                    }
-                    Section("Local") {
-                        ForEach(LocalCleanupModelKind.allCases) { kind in
-                            Text(localAgentLabel(for: kind)).tag("local:\(kind.rawValue)")
-                        }
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-            }
+                title: "2nd Brain Q&A",
+                modelLabel: wikiQAModel?.displayName ?? "Qwen 3.5 4B Q4_K_M (auto)",
+                location: .local,
+                available: wikiQAModel != nil
+            )
         }
     }
 
-    /// Speech models the user has actually downloaded — only these can drive
-    /// speech-to-text, so the picker is filtered to them.
+    /// Speech models that are ready to drive speech-to-text. System-managed
+    /// assets are usable before a locale-specific download is requested.
     private var downloadedSpeechModels: [SpeechModelDescriptor] {
-        SpeechModelCatalog.availableModels.filter { ModelManager.isCached($0) }
+        SpeechModelCatalog.availableModels.filter {
+            $0.isSystemManaged || ModelManager.isCached($0)
+        }
     }
 
     /// Cleanup models the user has actually downloaded.
@@ -148,7 +138,7 @@ struct ModelsSidebarView: View {
     private var localModelsSection: some View {
         section(title: "Local models") {
             ForEach(SpeechModelCatalog.availableModels, id: \.id) { model in
-                let downloaded = ModelManager.isCached(model)
+                let downloaded = model.isSystemManaged || ModelManager.isCached(model)
                 let isActive = model.id == selectedSpeechModelID
                 LocalModelRow(
                     title: model.pickerTitle,
@@ -156,9 +146,13 @@ struct ModelsSidebarView: View {
                     capabilities: capabilities(for: model),
                     isDownloaded: downloaded,
                     isActive: isActive,
-                    progress: speechRowProgress(for: model.id, downloaded: downloaded),
-                    onDownload: downloaded ? nil : { onDownloadSpeechModel(model.id) },
-                    onDelete: (downloaded && !isActive) ? { modelManager.deleteCachedModel(model) } : nil
+                    progress: speechRowProgress(for: model, downloaded: downloaded),
+                    onDownload: (!model.isSystemManaged && !downloaded)
+                        ? { onDownloadSpeechModel(model.id) }
+                        : nil,
+                    onDelete: (!model.isSystemManaged && downloaded && !isActive)
+                        ? { modelManager.deleteCachedModel(model) }
+                        : nil
                 )
             }
             ForEach(TextCleanupManager.cleanupModels, id: \.kind) { desc in
@@ -168,7 +162,9 @@ struct ModelsSidebarView: View {
                 LocalModelRow(
                     title: desc.displayName,
                     subtitle: desc.sizeDescription,
-                    capabilities: ["cleanup", "meeting summary"],
+                    capabilities: desc.kind == .gemma4_12b_it_optiq_4bit_mlx
+                        ? ["2nd Brain", "MLX"]
+                        : ["cleanup", "meeting summary"],
                     isDownloaded: downloaded,
                     isActive: isActive,
                     progress: progress,
@@ -189,10 +185,13 @@ struct ModelsSidebarView: View {
     /// Inline progress for a speech-model row. The speech `ModelManager` only
     /// tracks one in-flight download/load at a time and tags it via
     /// `modelName`, so only the matching row reports a non-nil value.
-    private func speechRowProgress(for modelID: String, downloaded: Bool) -> RowProgress? {
-        guard modelManager.modelName == modelID else { return nil }
+    private func speechRowProgress(for model: SpeechModelDescriptor, downloaded: Bool) -> RowProgress? {
+        guard modelManager.modelName == model.id else { return nil }
         switch modelManager.state {
         case .loading:
+            if model.isSystemManaged {
+                return .downloading(modelManager.downloadProgress)
+            }
             return downloaded ? .loading : .downloading(modelManager.downloadProgress)
         case .idle, .ready, .error:
             return nil
@@ -233,14 +232,14 @@ struct ModelsSidebarView: View {
                 LocalModelRow(
                     title: model.shortDisplayName,
                     subtitle: model.rawValue,
-                    capabilities: ["agent (Q&A · indexing)"],
+                    capabilities: ["optional cloud indexing"],
                     isDownloaded: hasClaudeKey,
                     isActive: hasClaudeKey && agentBackend == .claude(model)
                 )
             }
 
             if !hasClaudeKey {
-                Text("Add a key in Settings → Meeting Transcript → Cross-Meeting Q&A.")
+                Text("Add a key in Settings → Meeting Transcript → Cloud API.")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
@@ -273,6 +272,17 @@ struct ModelsSidebarView: View {
         TextCleanupManager.cleanupModels.first { $0.kind.rawValue == selectedCleanupModelKindRaw }
     }
 
+    private var wikiQAModel: CleanupModelDescriptor? {
+        let preferred: [LocalCleanupModelKind] = [
+            .qwen35_4b_q4_k_m,
+            .qwen35_2b_q4_k_m,
+            .qwen35_0_8b_q4_k_m,
+        ]
+        return preferred.compactMap { kind in
+            TextCleanupManager.cleanupModels.first { $0.kind == kind && TextCleanupManager.isModelDownloaded(kind) }
+        }.first
+    }
+
     private var claudeModel: ClaudeAPIModel {
         ClaudeAPIModel(rawValue: selectedClaudeModelRaw) ?? .sonnet
     }
@@ -296,6 +306,7 @@ struct ModelsSidebarView: View {
         case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B (local)"
         case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B (local)"
         case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B (local)"
+        case .gemma4_12b_it_optiq_4bit_mlx: return "Gemma 4 12B MLX (local)"
         }
     }
 

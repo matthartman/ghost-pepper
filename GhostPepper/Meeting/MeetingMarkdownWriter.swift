@@ -246,88 +246,233 @@ struct MeetingMarkdownWriter {
         transcript.importedFrom = importedFrom
         transcript.sourceURL = sourceURL
 
-        // Parse transcript lines: **[00:00] Me:** text
-        for line in transcriptLines {
-            guard line.hasPrefix("**[") else { continue }
-            // Extract timestamp
-            guard let closeBracket = line.range(of: "]") else { continue }
-            let timestamp = String(line[line.index(line.startIndex, offsetBy: 3)..<closeBracket.lowerBound])
-            let parts = timestamp.split(separator: ":")
-            let seconds: TimeInterval
-            if parts.count == 3 {
-                let h = Double(parts[0]) ?? 0
-                let m = Double(parts[1]) ?? 0
-                let s = Double(parts[2]) ?? 0
-                seconds = h * 3600 + m * 60 + s
-            } else if parts.count == 2 {
-                let m = Double(parts[0]) ?? 0
-                let s = Double(parts[1]) ?? 0
-                seconds = m * 60 + s
-            } else {
-                seconds = 0
-            }
+        transcript.segments = parseTranscriptSegments(from: transcriptLines)
 
-            // Extract speaker and text: "Me:** text  " or "Others:** text  "
-            let afterBracket = String(line[closeBracket.upperBound...])
-            let speakerText = afterBracket.trimmingCharacters(in: .whitespaces)
-            guard speakerText.hasPrefix(" ") || speakerText.hasPrefix("") else { continue }
-            let cleaned = speakerText.hasPrefix(" ") ? String(speakerText.dropFirst()) : speakerText
+        return transcript
+    }
 
-            let speaker: SpeakerLabel
-            let text: String
-            if cleaned.hasPrefix("Me:**") {
-                speaker = .me
-                text = String(cleaned.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-            } else if cleaned.hasPrefix("Others:**") {
-                speaker = .remote(name: nil)
-                text = String(cleaned.dropFirst(9)).trimmingCharacters(in: .whitespaces)
-            } else if let colonStar = cleaned.range(of: ":**") {
-                let name = String(cleaned[..<colonStar.lowerBound])
-                speaker = .remote(name: name)
-                text = String(cleaned[colonStar.upperBound...]).trimmingCharacters(in: .whitespaces)
-            } else {
+    private struct ParsedSpeakerLine {
+        let speaker: SpeakerLabel
+        let startTime: TimeInterval?
+        let text: String
+    }
+
+    /// Parse Ghost Pepper, Granola, and pasted transcript speaker turns.
+    /// Supports timestamped lines, bold speaker labels, plain `Speaker: text`
+    /// lines, and wrapped continuation lines after a speaker turn.
+    private static func parseTranscriptSegments(from lines: [String]) -> [TranscriptSegment] {
+        var segments: [TranscriptSegment] = []
+        var sawSpeakerLine = false
+
+        for line in lines {
+            let trimmed = trimMarkdownLineBreak(from: line.trimmingCharacters(in: .whitespaces))
+            guard !trimmed.isEmpty else { continue }
+
+            if let parsed = parseSpeakerLine(trimmed) {
+                sawSpeakerLine = true
+                let startTime = parsed.startTime ?? Double(segments.count) * 5
+                segments.append(
+                    TranscriptSegment(
+                        id: UUID(),
+                        speaker: parsed.speaker,
+                        startTime: startTime,
+                        endTime: startTime + (parsed.startTime == nil ? 5 : 30),
+                        text: parsed.text
+                    )
+                )
                 continue
             }
 
-            let segment = TranscriptSegment(
-                id: UUID(),
-                speaker: speaker,
-                startTime: seconds,
-                endTime: seconds + 30,
-                text: text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "  $", with: "", options: .regularExpression)
-            )
-            transcript.segments.append(segment)
-        }
-
-        // Fallback: parse Granola-format transcripts (plain text or **Speaker:** text, no timestamps)
-        if transcript.segments.isEmpty && !transcriptLines.isEmpty {
-            for (i, line) in transcriptLines.enumerated() {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.isEmpty { continue }
-
-                let speaker: SpeakerLabel
-                let text: String
-                if trimmed.hasPrefix("**"), let colonStar = trimmed.range(of: ":**") {
-                    let name = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<colonStar.lowerBound])
-                    speaker = .remote(name: name)
-                    text = String(trimmed[colonStar.upperBound...]).trimmingCharacters(in: .whitespaces)
-                } else {
-                    speaker = .remote(name: nil)
-                    text = trimmed
-                }
-
-                let segment = TranscriptSegment(
-                    id: UUID(),
-                    speaker: speaker,
-                    startTime: Double(i) * 5,
-                    endTime: Double(i) * 5 + 5,
-                    text: text
+            if sawSpeakerLine, !segments.isEmpty {
+                let separator = segments[segments.count - 1].text.isEmpty ? "" : "\n"
+                segments[segments.count - 1].text += separator + trimmed
+            } else {
+                let startTime = Double(segments.count) * 5
+                segments.append(
+                    TranscriptSegment(
+                        id: UUID(),
+                        speaker: .remote(name: nil),
+                        startTime: startTime,
+                        endTime: startTime + 5,
+                        text: trimmed
+                    )
                 )
-                transcript.segments.append(segment)
             }
         }
 
-        return transcript
+        return segments
+    }
+
+    private static func parseSpeakerLine(_ line: String) -> ParsedSpeakerLine? {
+        let withoutListMarker = stripListMarker(from: line)
+        if let (startTime, remainder) = parseTimestampPrefix(from: withoutListMarker),
+           let speakerText = parseSpeakerAndText(from: remainder, allowsPlainColon: true) {
+            return ParsedSpeakerLine(
+                speaker: speakerLabel(from: speakerText.speakerName),
+                startTime: startTime,
+                text: speakerText.text
+            )
+        }
+
+        if let speakerText = parseSpeakerAndText(
+            from: withoutListMarker,
+            allowsPlainColon: false
+        ) {
+            return ParsedSpeakerLine(
+                speaker: speakerLabel(from: speakerText.speakerName),
+                startTime: nil,
+                text: speakerText.text
+            )
+        }
+
+        if let speakerText = parseSpeakerAndText(
+            from: withoutListMarker,
+            allowsPlainColon: true
+        ) {
+            return ParsedSpeakerLine(
+                speaker: speakerLabel(from: speakerText.speakerName),
+                startTime: nil,
+                text: speakerText.text
+            )
+        }
+
+        return nil
+    }
+
+    private static func parseTimestampPrefix(from line: String) -> (TimeInterval, String)? {
+        let timestampStartOffset: String.Index
+        if line.hasPrefix("**[") {
+            timestampStartOffset = line.index(line.startIndex, offsetBy: 3)
+        } else if line.hasPrefix("[") {
+            timestampStartOffset = line.index(after: line.startIndex)
+        } else {
+            return nil
+        }
+
+        guard let closeBracket = line[timestampStartOffset...].firstIndex(of: "]") else {
+            return nil
+        }
+        let timestamp = String(line[timestampStartOffset..<closeBracket])
+        guard let seconds = parseTimestamp(timestamp) else {
+            return nil
+        }
+        let remainder = String(line[closeBracket...].dropFirst())
+            .trimmingCharacters(in: .whitespaces)
+        return (seconds, remainder)
+    }
+
+    private static func parseTimestamp(_ timestamp: String) -> TimeInterval? {
+        let parts = timestamp.split(separator: ":")
+        if parts.count == 3 {
+            guard let hours = Double(parts[0]),
+                  let minutes = Double(parts[1]),
+                  let seconds = Double(parts[2]) else {
+                return nil
+            }
+            return hours * 3600 + minutes * 60 + seconds
+        }
+        if parts.count == 2 {
+            guard let minutes = Double(parts[0]),
+                  let seconds = Double(parts[1]) else {
+                return nil
+            }
+            return minutes * 60 + seconds
+        }
+        return nil
+    }
+
+    private static func parseSpeakerAndText(
+        from line: String,
+        allowsPlainColon: Bool
+    ) -> (speakerName: String, text: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("**") {
+            let withoutOpeningBold = String(trimmed.dropFirst(2))
+            guard let marker = withoutOpeningBold.range(of: ":**") else {
+                return nil
+            }
+            let speakerName = String(withoutOpeningBold[..<marker.lowerBound])
+            let text = String(withoutOpeningBold[marker.upperBound...])
+            return normalizedSpeakerAndText(speakerName: speakerName, text: text)
+        }
+
+        if let marker = trimmed.range(of: ":**") {
+            let speakerName = String(trimmed[..<marker.lowerBound])
+            let text = String(trimmed[marker.upperBound...])
+            return normalizedSpeakerAndText(speakerName: speakerName, text: text)
+        }
+
+        guard allowsPlainColon,
+              let marker = trimmed.firstIndex(of: ":") else {
+            return nil
+        }
+        let speakerName = String(trimmed[..<marker])
+        let text = String(trimmed[trimmed.index(after: marker)...])
+        guard isPlausibleSpeakerName(speakerName) else {
+            return nil
+        }
+        return normalizedSpeakerAndText(speakerName: speakerName, text: text)
+    }
+
+    private static func normalizedSpeakerAndText(
+        speakerName: String,
+        text: String
+    ) -> (speakerName: String, text: String)? {
+        let cleanedSpeaker = speakerName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "*"))
+        let cleanedText = trimMarkdownLineBreak(from: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !cleanedSpeaker.isEmpty, !cleanedText.isEmpty else {
+            return nil
+        }
+        return (cleanedSpeaker, cleanedText)
+    }
+
+    private static func speakerLabel(from name: String) -> SpeakerLabel {
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = cleaned.lowercased()
+        if lowercased == "me" || lowercased == "you" {
+            return .me
+        }
+        if lowercased == "others" || lowercased == "other" {
+            return .remote(name: nil)
+        }
+        return .remote(name: cleaned)
+    }
+
+    private static func stripListMarker(from line: String) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+            return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
+    }
+
+    private static func trimMarkdownLineBreak(from text: String) -> String {
+        text.replacingOccurrences(
+            of: #"\s{2,}$"#,
+            with: "",
+            options: .regularExpression
+        )
+    }
+
+    private static func isPlausibleSpeakerName(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 80 else {
+            return false
+        }
+        if trimmed.contains(where: { character in
+            character.isNewline || "{}[]()<>/\\|".contains(character)
+        }) {
+            return false
+        }
+        let words = trimmed.split(separator: " ")
+        guard words.count <= 6 else {
+            return false
+        }
+        return words.contains { word in
+            word.contains { $0.isLetter || $0.isNumber }
+        }
     }
 
     // MARK: - Helpers

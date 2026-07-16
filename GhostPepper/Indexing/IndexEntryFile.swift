@@ -97,9 +97,13 @@ enum IndexEntryFile {
             i += 1
         }
 
-        guard let indexTypeRaw, let kind = IndexKind(rawValue: indexTypeRaw) else {
+        guard let indexTypeRaw, !indexTypeRaw.isEmpty else {
             throw ParseError.unknownIndexType(indexTypeRaw ?? "<missing>")
         }
+        // IndexKind is registry-backed now, so any non-empty slug parses —
+        // entries from since-removed custom wikis still render via the
+        // fallback spec.
+        let kind = IndexKind(rawValue: indexTypeRaw)
         guard let canonicalName, !canonicalName.isEmpty else {
             throw ParseError.malformedFrontmatter("canonical_name missing")
         }

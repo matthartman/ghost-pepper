@@ -26,7 +26,7 @@ final class MarkdownArchivePathsTests: XCTestCase {
     }
 
     func testSlugifyStripsPunctuation() {
-        XCTAssertEqual(MarkdownArchivePaths.slugForIndexEntry("Lara Chen (eng)"), "lara-chen-eng")
+        XCTAssertEqual(MarkdownArchivePaths.slugForIndexEntry("Jordan Pike (eng)"), "jordan-pike-eng")
     }
 
     func testSlugifyCollapsesRepeatedDashes() {

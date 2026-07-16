@@ -19,10 +19,14 @@ final class MeetingQAAgent {
         provider: LLMProvider,
         backend: AgentBackend,
         archiveRoot: URL,
-        maxIterations: Int = 15
+        maxIterations: Int = 15,
+        searchService: QMDService? = nil
     ) {
         let tools = MeetingQATools(root: archiveRoot)
-        let handlers: [String: AgentToolHandler] = [
+        // The hybrid search tool appears only when qmd is installed; the
+        // agent falls back to pure grep otherwise.
+        let search: QMDService? = (searchService?.isAvailable == true) ? searchService : nil
+        var handlers: [String: AgentToolHandler] = [
             "grep": { input in
                 let pattern = (input["pattern"] as? String) ?? ""
                 let path = input["path"] as? String
@@ -41,16 +45,24 @@ final class MeetingQAAgent {
                 return try await tools.listDir(path: path)
             },
         ]
+        if let search {
+            handlers["search"] = { input in
+                let query = (input["query"] as? String) ?? ""
+                let limit = (input["k"] as? Int) ?? 8
+                return try await search.search(query: query, limit: limit)
+            }
+        }
         self.init(
             provider: provider,
             backend: backend,
             systemPrompt: MeetingQASystemPrompt.build(
                 archiveRootPath: archiveRoot.path,
                 backend: backend,
-                maxIterations: maxIterations
+                maxIterations: maxIterations,
+                hasSemanticSearch: search != nil
             ),
             toolHandlers: handlers,
-            toolDefinitions: Self.qaToolDefinitions(),
+            toolDefinitions: Self.qaToolDefinitions(includeSearch: search != nil),
             summarizeInput: Self.summarizeQAInput,
             summarizeOutput: Self.summarizeQAOutput,
             maxIterations: maxIterations
@@ -248,6 +260,9 @@ final class MeetingQAAgent {
         case "list_dir":
             let path = (input["path"] as? String) ?? ""
             return path.isEmpty ? "(root)" : path
+        case "search":
+            let query = (input["query"] as? String) ?? ""
+            return "query=\"\(query)\""
         default:
             return ""
         }
@@ -261,7 +276,7 @@ final class MeetingQAAgent {
         return "\(lineCount) lines"
     }
 
-    static func qaToolDefinitions() -> [LLMTool] {
+    static func qaToolDefinitions(includeSearch: Bool = false) -> [LLMTool] {
         let grep = LLMTool(
             name: "grep",
             description: "Search the meeting archive for a regex pattern. Returns each match with 2 lines of context before and after, so you usually have enough to answer without a follow-up read_file. Match groups are separated by `--`. Lines marked with `:` are matches; lines marked with `-` are surrounding context. Prefer this over read_file when looking for names, dates, or specific phrases — it's much cheaper than reading whole files.",
@@ -300,6 +315,21 @@ final class MeetingQAAgent {
                 "required": ["path"],
             ]
         )
-        return [grep, readFile, listDir]
+        var tools = [grep, readFile, listDir]
+        if includeSearch {
+            tools.insert(LLMTool(
+                name: "search",
+                description: "Hybrid semantic + keyword search over the meeting archive (local, via qmd). Use this FIRST for conceptual or discovery questions where the transcript may not contain the question's exact words (e.g. 'companies building environment capture for robotics training'). Returns ranked excerpts with path:line citations, formatted like grep output. Prefer grep only for exact names, dates, or quoted strings.",
+                inputSchema: [
+                    "type": "object",
+                    "properties": [
+                        "query": ["type": "string", "description": "Natural-language description of what you're looking for. Full phrases work better than keywords."],
+                        "k": ["type": "integer", "default": 8, "maximum": 20, "description": "How many results to return."],
+                    ] as [String: Any],
+                    "required": ["query"],
+                ]
+            ), at: 0)
+        }
+        return tools
     }
 }

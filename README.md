@@ -119,14 +119,14 @@ Ghost Pepper requires Accessibility permission, which normally needs admin acces
 
 | Field | Value |
 |---|---|
-| Bundle ID | `com.github.matthartman.ghostpepper` |
-| Team ID | `BBVMGXR9AY` |
+| Bundle ID | Use the signed app's bundle identifier |
+| Team ID | Use the signing team's Apple Developer team ID |
 | Permission | Accessibility (`com.apple.security.accessibility`) |
 
 ---
 
 <div align="center">
 
-Matt invests at [factorialcap.com](https://factorialcap.com) — reach out on [X/Twitter](https://x.com/matthartman) if you're a technical founder building something newly technically possible.
+Questions or deployment issues: open an issue or use your team's internal support channel.
 
 </div>

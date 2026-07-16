@@ -9,7 +9,8 @@ enum MeetingQASystemPrompt {
     static func build(
         archiveRootPath: String,
         backend: AgentBackend,
-        maxIterations: Int
+        maxIterations: Int,
+        hasSemanticSearch: Bool = false
     ) -> String {
         return """
         You are the meeting Q&A assistant for the user's personal meeting archive. \
@@ -51,7 +52,7 @@ enum MeetingQASystemPrompt {
         4. Use list_dir to discover meetings on a specific date or to find date-named folders.
         5. Stop searching when you have enough to answer. Don't read every file.
 
-        # When your first search returns one or more hits
+        \(semanticSearchAddendum(hasSemanticSearch: hasSemanticSearch))# When your first search returns one or more hits
 
         Grep results now include 2 lines of context before and after each match \
         (lines starting with `-` are context; lines with `:` are matches). For \
@@ -97,7 +98,7 @@ enum MeetingQASystemPrompt {
         Examples of artifacts you should interpret, not take literally:
         - "He's not a Quinn Adler for 10 years" almost certainly means \
           "He's known Quinn for 10 years."
-        - "Robin" addressed in a "Dana <> Matt" meeting is most likely Dana being \
+        - "Speaker One" addressed in a "Speaker One <> Speaker Two" meeting is most likely Speaker One being \
           addressed informally — note the discrepancy in your answer.
         - Names with similar phonemes are often the same person across files.
 
@@ -120,6 +121,28 @@ enum MeetingQASystemPrompt {
         accordingly. Front-load grep calls (cheap, narrow the search), then \
         read selectively.
         \(localAddendum(backend: backend))
+        """
+    }
+
+    private static func semanticSearchAddendum(hasSemanticSearch: Bool) -> String {
+        guard hasSemanticSearch else { return "" }
+        return """
+        # Semantic search (search tool)
+
+        You also have a `search` tool backed by a local hybrid engine \
+        (keyword + semantic). Routing rule:
+
+        - **Conceptual / discovery questions** ("who was building X", "what \
+          companies work on Y") → use `search` FIRST. The relevant transcript \
+          may share none of the question's words; semantic search bridges that.
+        - **Exact strings** (names, dates, quoted phrases) → `grep` is \
+          cheaper and more precise.
+        - `search` results carry `path:line` citations exactly like grep \
+          output — cite them directly, or confirm with a small read_file.
+        - If `search` returns nothing useful, fall back to grep with 2-3 \
+          distinctive keywords before concluding "not found".
+
+
         """
     }
 

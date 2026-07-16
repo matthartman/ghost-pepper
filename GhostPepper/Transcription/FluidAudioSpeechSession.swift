@@ -4,6 +4,7 @@ final class FluidAudioSpeechSession {
     private struct TaggedSpanGroup {
         let speakerID: String
         let span: DiarizationSummary.MergedSpan
+        let evidenceDuration: TimeInterval
     }
 
     struct FinalizationResult {
@@ -243,7 +244,13 @@ final class FluidAudioSpeechSession {
                     speakerID: taggedSpanGroup.speakerID,
                     startTime: taggedSpanGroup.span.startTime,
                     endTime: taggedSpanGroup.span.endTime,
-                    text: transcript
+                    text: transcript,
+                    attribution: SpeakerTaggedTranscript.Attribution(
+                        speakerID: taggedSpanGroup.speakerID,
+                        confidence: speakerAttributionConfidence(for: taggedSpanGroup),
+                        evidenceDuration: taggedSpanGroup.evidenceDuration,
+                        source: .diarization
+                    )
                 )
             )
         }
@@ -315,7 +322,8 @@ final class FluidAudioSpeechSession {
                     span: DiarizationSummary.MergedSpan(
                         startTime: lastSpanGroup.span.startTime,
                         endTime: max(lastSpanGroup.span.endTime, span.endTime)
-                    )
+                    ),
+                    evidenceDuration: lastSpanGroup.evidenceDuration + span.duration
                 )
             } else {
                 mergedSpanGroups.append(
@@ -324,13 +332,22 @@ final class FluidAudioSpeechSession {
                         span: DiarizationSummary.MergedSpan(
                             startTime: span.startTime,
                             endTime: span.endTime
-                        )
+                        ),
+                        evidenceDuration: span.duration
                     )
                 )
             }
         }
 
         return mergedSpanGroups
+    }
+
+    private func speakerAttributionConfidence(for spanGroup: TaggedSpanGroup) -> Double {
+        guard spanGroup.span.duration > 0 else {
+            return 0
+        }
+
+        return spanGroup.evidenceDuration / spanGroup.span.duration
     }
 
     private func mergeKeptSpans(in spans: [DiarizationSummary.Span]) -> [DiarizationSummary.MergedSpan] {

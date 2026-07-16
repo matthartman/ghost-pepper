@@ -20,7 +20,7 @@ final class IndexEntryFileTests: XCTestCase {
             aliases: ["John", "John S.", "jsmith@example.com"],
             sourceMeetings: ["2026-04-28/standup.md", "2026-04-26/q2-planning.md"],
             lastUpdated: Date(timeIntervalSince1970: 1714320000),
-            body: "John leads the platform team. Often pairs with [[Lara Chen]].\n"
+            body: "John leads the platform team. Often pairs with [[Jordan Pike]].\n"
         )
         let url = tempDir.appendingPathComponent("john-smith.md")
         try IndexEntryFile.write(original, to: url)
@@ -40,13 +40,13 @@ final class IndexEntryFileTests: XCTestCase {
     func testRoundTripPreservesWikilinksInBody() throws {
         let entry = IndexEntry(
             kind: .people,
-            canonicalName: "Lara Chen",
+            canonicalName: "Jordan Pike",
             aliases: [],
             sourceMeetings: [],
             lastUpdated: Date(),
             body: "Mentioned alongside [[John Smith]] and [[Marcus Lee]]."
         )
-        let url = tempDir.appendingPathComponent("lara-chen.md")
+        let url = tempDir.appendingPathComponent("jordan-pike.md")
         try IndexEntryFile.write(entry, to: url)
         let loaded = try IndexEntryFile.read(from: url)
         XCTAssertTrue(loaded.body.contains("[[John Smith]]"))

@@ -47,6 +47,17 @@ struct TranscriptSegment: Codable, Identifiable {
     }
 }
 
+struct MeetingSpeakerReviewItem: Equatable, Identifiable {
+    let id: String
+    let displayName: String
+    let segmentCount: Int
+    let firstTimestamp: String
+    let sampleText: String
+    let recognizedVoiceID: UUID?
+    let isVoicePrintBacked: Bool
+    let isMe: Bool
+}
+
 /// Observable model for a meeting transcript with notes and metadata.
 @MainActor
 final class MeetingTranscript: ObservableObject {
@@ -82,6 +93,28 @@ final class MeetingTranscript: ObservableObject {
 
     func appendSegment(_ segment: TranscriptSegment) {
         segments.append(segment)
+    }
+
+    func replaceSpeakerDisplayName(_ currentName: String, with newName: String) {
+        let normalizedCurrentName = currentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedNewName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCurrentName.isEmpty, !normalizedNewName.isEmpty else {
+            return
+        }
+
+        segments = segments.map { segment in
+            guard segment.speaker.displayName == normalizedCurrentName else {
+                return segment
+            }
+
+            return TranscriptSegment(
+                id: segment.id,
+                speaker: segment.speaker == .me ? .me : .remote(name: normalizedNewName),
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                text: segment.text
+            )
+        }
     }
 
     /// Duration of the meeting so far, in seconds.

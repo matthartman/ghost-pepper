@@ -27,34 +27,38 @@ final class GranolaImporter: ObservableObject {
     }
 
     @Published var state: ImportState = .idle
-    @Published var granolaApiKey: String = UserDefaults.standard.string(forKey: "granolaApiKey") ?? "" {
-        didSet { UserDefaults.standard.set(granolaApiKey, forKey: "granolaApiKey") }
+    static let granolaApiKeyKeychainKey = "granolaApiKey"
+    @Published var granolaApiKey: String = KeychainHelper.migrateUserDefaultsString(
+        defaultsKey: GranolaImporter.granolaApiKeyKeychainKey,
+        keychainKey: GranolaImporter.granolaApiKeyKeychainKey
+    ) ?? "" {
+        didSet { _ = KeychainHelper.set(granolaApiKey, for: Self.granolaApiKeyKeychainKey) }
     }
 
     nonisolated private static let cachePath = NSHomeDirectory() + "/Library/Application Support/Granola/cache-v6.json"
-    private static let debugLogPath = "/tmp/granola_import_debug.log"
     /// Suffix appended to every local-cache failure message so the user
     /// knows the API path is still a live option.
     private static let apiPivotHint = "Use the API-key path below — get a key from Granola Settings → API Key → Create new key."
 
-    private static func debugLog(_ msg: String) {
-        let line = "[\(Date())] \(msg)\n"
-        if let data = line.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: debugLogPath) {
-                if let handle = FileHandle(forWritingAtPath: debugLogPath) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
-                }
-            } else {
-                FileManager.default.createFile(atPath: debugLogPath, contents: data)
-            }
+    private static func debugLog(_ msg: @autoclosure () -> String) {
+        #if DEBUG
+        let message = msg()
+        if message.contains("HTTP") || message.contains("Total notes") {
+            print(message)
         }
+        #endif
     }
 
     /// Whether the Granola cache file exists on disk.
     static var isCacheAvailable: Bool {
         FileManager.default.fileExists(atPath: cachePath)
+    }
+
+    static var isInstalled: Bool {
+        [
+            "/Applications/Granola.app",
+            NSHomeDirectory() + "/Applications/Granola.app"
+        ].contains { FileManager.default.fileExists(atPath: $0) }
     }
 
     /// Count of valid Granola documents whose target markdown file does not yet exist
@@ -203,8 +207,7 @@ final class GranolaImporter: ObservableObject {
 
             guard let statusCode = httpResp?.statusCode, statusCode == 200,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                let body = String(data: data.prefix(500), encoding: .utf8) ?? ""
-                Self.debugLog("[GranolaImporter] API error body: \(body)")
+                Self.debugLog("[GranolaImporter] Failed notes list response: HTTP \(httpResp?.statusCode ?? -1), \(data.count) bytes")
                 state = .error("Failed to fetch notes from Granola API (HTTP \(httpResp?.statusCode ?? -1)).")
                 return 0
             }
@@ -223,18 +226,9 @@ final class GranolaImporter: ObservableObject {
 
         let total = allNotes.count
         Self.debugLog("[GranolaImporter] Total notes from API: \(total), saving to: \(directory.path)")
-        // Log first note's keys to understand API structure
+        // Log structural metadata only; note titles and values can contain private content.
         if let first = allNotes.first {
             Self.debugLog("[GranolaImporter] First note keys: \(first.keys.sorted())")
-            Self.debugLog("[GranolaImporter] First note title: \(first["title"] ?? "nil")")
-        }
-        // Find the clawdbot note specifically
-        for note in allNotes {
-            let t = (note["title"] as? String) ?? ""
-            if t.lowercased().contains("clawdbot") || t.lowercased().contains("tools for thinking") {
-                Self.debugLog("[GranolaImporter] FOUND clawdbot note: id=\(note["id"] ?? "nil") title=\(t)")
-                Self.debugLog("[GranolaImporter] clawdbot note keys: \(note.keys.sorted())")
-            }
         }
         var enriched = 0
 
@@ -278,24 +272,7 @@ final class GranolaImporter: ObservableObject {
                 continue
             }
 
-            if title.lowercased().contains("clawdbot") {
-                Self.debugLog("[GranolaImporter] clawdbot full note keys: \(fullNote.keys.sorted())")
-                for (k, v) in fullNote {
-                    let desc = "\(type(of: v)): \(String(describing: v).prefix(200))"
-                    Self.debugLog("[GranolaImporter] clawdbot.\(k) = \(desc)")
-                }
-            }
-
-            // Diagnostic: log every API response's top-level keys plus a
-            // truncated peek at each value. Users (specifically Matt) need
-            // this to find where Granola stashes user-typed panel notes.
-            // Once we know the field name, this can be removed or gated.
-            Self.debugLog("[GranolaImporter] API keys for \(title.prefix(60)): \(fullNote.keys.sorted())")
-            for (k, v) in fullNote.sorted(by: { $0.key < $1.key }) {
-                let typeDesc = String(describing: type(of: v))
-                let valuePeek = String(describing: v).prefix(160).replacingOccurrences(of: "\n", with: " ")
-                Self.debugLog("[GranolaImporter]   \(k) (\(typeDesc)): \(valuePeek)")
-            }
+            Self.debugLog("[GranolaImporter] API keys for note: \(fullNote.keys.sorted())")
 
             // Extract content from API response
             // API uses summary_markdown/summary_text (not "summary") and no separate notes/chapters fields
@@ -432,21 +409,267 @@ final class GranolaImporter: ObservableObject {
         return joined.isEmpty ? nil : joined
     }
 
-    private static func extractTranscript(from transcriptData: Any?) -> String {
+    nonisolated static func extractTranscript(from transcriptData: Any?) -> String {
         guard let data = transcriptData else { return "" }
 
-        if let list = data as? [[String: Any]] {
+        if let list = data as? [Any] {
             return list.compactMap { entry -> String? in
-                let speaker = (entry["speaker"] as? String) ?? (entry["name"] as? String) ?? ""
-                let text = (entry["text"] as? String) ?? (entry["content"] as? String) ?? ""
-                guard !text.isEmpty else { return nil }
-                return speaker.isEmpty ? text : "**\(speaker):** \(text)"
+                if let text = entry as? String {
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }
+                guard let dict = entry as? [String: Any] else {
+                    return nil
+                }
+                return formattedTranscriptEntry(from: dict)
             }.joined(separator: "\n\n")
         }
 
         if let str = data as? String { return str }
 
         return ""
+    }
+
+    nonisolated private static func formattedTranscriptEntry(from entry: [String: Any]) -> String? {
+        guard let text = transcriptText(from: entry) else {
+            return nil
+        }
+
+        let speaker = transcriptSpeaker(from: entry)
+        let timestamp = transcriptStartTime(from: entry).map(formatTranscriptTimestamp)
+        switch (timestamp, speaker) {
+        case (.some(let timestamp), .some(let speaker)):
+            return "**[\(timestamp)] \(speaker):** \(text)"
+        case (.some(let timestamp), .none):
+            return "[\(timestamp)] \(text)"
+        case (.none, .some(let speaker)):
+            return "**\(speaker):** \(text)"
+        case (.none, .none):
+            return text
+        }
+    }
+
+    nonisolated private static func transcriptText(from entry: [String: Any]) -> String? {
+        if let text = firstNonEmptyString(
+            in: entry,
+            keys: ["text", "content", "transcript", "utterance", "sentence"]
+        ) {
+            return text
+        }
+
+        if let words = entry["words"] as? [Any] {
+            let text = words.compactMap { word -> String? in
+                if let word = word as? String {
+                    return word
+                }
+                guard let dict = word as? [String: Any] else {
+                    return nil
+                }
+                return firstNonEmptyString(in: dict, keys: ["word", "text", "content"])
+            }.joined(separator: " ")
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty == false {
+                return trimmed
+            }
+        }
+
+        if let segments = entry["segments"] as? [Any] {
+            let text = segments.compactMap { segment -> String? in
+                if let string = segment as? String {
+                    return string
+                }
+                guard let dict = segment as? [String: Any] else {
+                    return nil
+                }
+                return transcriptText(from: dict)
+            }.joined(separator: " ")
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty == false {
+                return trimmed
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated private static func transcriptSpeaker(from entry: [String: Any]) -> String? {
+        if let speaker = firstNonEmptyString(
+            in: entry,
+            keys: [
+                "speaker",
+                "speaker_name",
+                "speakerName",
+                "speaker_label",
+                "speakerLabel",
+                "name",
+                "display_name",
+                "displayName",
+                "author"
+            ]
+        ) {
+            return sanitizedSpeakerName(speaker)
+        }
+
+        for key in ["speaker", "participant", "person", "user", "author"] {
+            if let dict = entry[key] as? [String: Any],
+               let name = personName(from: dict) {
+                return sanitizedSpeakerName(name)
+            }
+        }
+
+        if let speakerID = firstNonEmptyString(
+            in: entry,
+            keys: ["speaker_id", "speakerId", "participant_id", "participantId"]
+        ) {
+            return sanitizedSpeakerName(fallbackSpeakerName(from: speakerID))
+        }
+
+        return nil
+    }
+
+    nonisolated private static func personName(from dict: [String: Any]) -> String? {
+        if let name = firstNonEmptyString(
+            in: dict,
+            keys: ["name", "fullName", "full_name", "displayName", "display_name", "email"]
+        ) {
+            return name
+        }
+        if let nestedName = dict["name"] as? [String: Any] {
+            return firstNonEmptyString(in: nestedName, keys: ["fullName", "displayName", "value"])
+        }
+        return nil
+    }
+
+    nonisolated private static func transcriptStartTime(from entry: [String: Any]) -> TimeInterval? {
+        let keys = [
+            "start",
+            "start_time",
+            "startTime",
+            "start_seconds",
+            "startSeconds",
+            "timestamp",
+            "time",
+            "offset",
+            "offset_seconds",
+            "offsetSeconds"
+        ]
+        for key in keys {
+            guard let seconds = numericTimeInterval(entry[key]) else {
+                continue
+            }
+            return seconds
+        }
+
+        for key in ["start_ms", "startMs", "timestamp_ms", "timestampMs", "offset_ms", "offsetMs"] {
+            guard let milliseconds = numericTimeInterval(entry[key]) else {
+                continue
+            }
+            return milliseconds / 1000
+        }
+
+        return nil
+    }
+
+    nonisolated private static func numericTimeInterval(_ value: Any?) -> TimeInterval? {
+        switch value {
+        case let value as Double:
+            return normalizedTranscriptOffset(value)
+        case let value as Float:
+            return normalizedTranscriptOffset(Double(value))
+        case let value as Int:
+            return normalizedTranscriptOffset(Double(value))
+        case let value as NSNumber:
+            return normalizedTranscriptOffset(value.doubleValue)
+        case let value as String:
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let numericValue = Double(trimmed) {
+                return normalizedTranscriptOffset(numericValue)
+            }
+            return parseTimestampString(trimmed)
+        default:
+            return nil
+        }
+    }
+
+    nonisolated private static func normalizedTranscriptOffset(_ value: Double) -> TimeInterval? {
+        guard value.isFinite, value >= 0 else {
+            return nil
+        }
+        // Granola-like transcript offsets are usually seconds, but some APIs
+        // return milliseconds. Treat very large offsets as millisecond values.
+        if value > 24 * 60 * 60 {
+            return value / 1000
+        }
+        return value
+    }
+
+    nonisolated private static func parseTimestampString(_ value: String) -> TimeInterval? {
+        let parts = value.split(separator: ":")
+        if parts.count == 3,
+           let hours = Double(parts[0]),
+           let minutes = Double(parts[1]),
+           let seconds = Double(parts[2]) {
+            return hours * 3600 + minutes * 60 + seconds
+        }
+        if parts.count == 2,
+           let minutes = Double(parts[0]),
+           let seconds = Double(parts[1]) {
+            return minutes * 60 + seconds
+        }
+        return nil
+    }
+
+    nonisolated private static func formatTranscriptTimestamp(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded(.down)))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+
+    nonisolated private static func firstNonEmptyString(
+        in dict: [String: Any],
+        keys: [String]
+    ) -> String? {
+        for key in keys {
+            guard let value = dict[key] else {
+                continue
+            }
+            if let string = value as? String {
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty == false {
+                    return trimmed
+                }
+            } else if let number = value as? NSNumber {
+                return number.stringValue
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func sanitizedSpeakerName(_ name: String) -> String? {
+        let singleLine = name
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "**", with: "")
+        let trimmed = singleLine
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    nonisolated private static func fallbackSpeakerName(from speakerID: String) -> String {
+        let cleaned = speakerID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        if cleaned.lowercased().hasPrefix("speaker ") {
+            return cleaned
+        }
+        return "Speaker \(cleaned)"
     }
 
     private static func buildMarkdown(

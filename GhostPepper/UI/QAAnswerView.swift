@@ -218,7 +218,7 @@ enum QAAnswerCitations {
         // archive prefix (date folder, .indexes, or Reads) to avoid matching
         // unrelated `.md` mentions like URLs. Line spec supports single line
         // and ranges (e.g. :71-72).
-        let pathPattern = #"`?((?:\d{4}-\d{2}-\d{2}|\.indexes|Reads)/[^\s,()\[\]`]+\.md)`?(?::(\d+(?:-\d+)?))?"#
+        let pathPattern = #"`?((?:\d{4}-\d{2}-\d{2}|\.indexes|Reads|wikis)/[^\s,()\[\]`]+\.md)`?(?::(\d+(?:-\d+)?))?"#
         s = replaceMatches(in: s, pattern: pathPattern) { groups in
             let path = groups[1]
             let lineSpec = groups[2]
@@ -226,7 +226,8 @@ enum QAAnswerCitations {
             // Use the first number of a range (e.g. "71-72" → 71) for the
             // future line-jump feature; full spec stays in the label.
             let firstLine = lineSpec.split(separator: "-").first.map(String.init) ?? ""
-            let url = "gp://meeting/" + path + (firstLine.isEmpty ? "" : "?line=\(firstLine)")
+            let host = path.hasPrefix("wikis/") ? "wiki" : "meeting"
+            let url = "gp://\(host)/" + path + (firstLine.isEmpty ? "" : "?line=\(firstLine)")
             return "[\(label)](\(url))"
         }
         // Wikilinks: [[Name]]

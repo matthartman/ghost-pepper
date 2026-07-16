@@ -21,6 +21,7 @@ enum KeychainHelper {
 
         var attributes = query
         attributes[kSecValueData as String] = data
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
         let status = SecItemAdd(attributes as CFDictionary, nil)
         return status == errSecSuccess
@@ -50,5 +51,23 @@ enum KeychainHelper {
             kSecAttrAccount as String: key,
         ]
         SecItemDelete(query as CFDictionary)
+    }
+
+    @discardableResult
+    static func migrateUserDefaultsString(defaultsKey: String, keychainKey: String, defaults: UserDefaults = .standard) -> String? {
+        if let existing = get(keychainKey), !existing.isEmpty {
+            defaults.removeObject(forKey: defaultsKey)
+            return existing
+        }
+
+        guard let legacy = defaults.string(forKey: defaultsKey), !legacy.isEmpty else {
+            defaults.removeObject(forKey: defaultsKey)
+            return nil
+        }
+
+        if set(legacy, for: keychainKey) {
+            defaults.removeObject(forKey: defaultsKey)
+        }
+        return legacy
     }
 }

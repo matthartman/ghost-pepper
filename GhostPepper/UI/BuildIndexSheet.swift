@@ -4,7 +4,7 @@ import SwiftUI
 /// progress while the agent builds it. Closes on completion or cancel.
 struct BuildIndexSheet: View {
     let kind: IndexKind
-    let fetchBuilder: () -> IndexBuilder?
+    let fetchBuilder: () -> (any IndexBuilding)?
     let onClose: () -> Void
 
     @AppStorage("claudeAPIModel") private var storedModel: String = ClaudeAPIModel.sonnet.rawValue
@@ -97,25 +97,33 @@ struct BuildIndexSheet: View {
                 }
 
                 if !estimate.nothingToDo {
-                    HStack(spacing: 8) {
-                        Text("**\(estimate.unprocessedCount)** meetings to process using")
+                    if estimate.likelyHighUSD == 0 {
+                        Text("**\(estimate.unprocessedCount)** meetings to process on-device with \(estimate.modelDisplayName) — free.")
                             .font(.system(size: 13))
-                        Picker("", selection: $storedModel) {
-                            ForEach(ClaudeAPIModel.allCases) { model in
-                                Text(model.shortDisplayName).tag(model.rawValue)
+                        Text("Runs in the background on the local model. You can hit Stop at any time; the build resumes where it left off.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: 8) {
+                            Text("**\(estimate.unprocessedCount)** meetings to process using")
+                                .font(.system(size: 13))
+                            Picker("", selection: $storedModel) {
+                                ForEach(ClaudeAPIModel.allCases) { model in
+                                    Text(model.shortDisplayName).tag(model.rawValue)
+                                }
                             }
+                            .labelsHidden()
+                            .frame(maxWidth: 160)
                         }
-                        .labelsHidden()
-                        .frame(maxWidth: 160)
+
+                        let range = ClaudePricing.estimateBuildCostRange(model: selectedModel, meetingCount: estimate.unprocessedCount)
+                        Text("Likely cost: \(formatCost(range.low)) – \(formatCost(range.high))")
+                            .font(.system(size: 13, weight: .medium))
+
+                        Text("Estimate is order-of-magnitude; running cost is shown during the build, and you can hit Stop at any time.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
                     }
-
-                    let range = ClaudePricing.estimateBuildCostRange(model: selectedModel, meetingCount: estimate.unprocessedCount)
-                    Text("Likely cost: \(formatCost(range.low)) – \(formatCost(range.high))")
-                        .font(.system(size: 13, weight: .medium))
-
-                    Text("Estimate is order-of-magnitude; running cost is shown during the build, and you can hit Stop at any time.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
                 }
 
                 HStack {
@@ -236,7 +244,7 @@ struct BuildIndexSheet: View {
 
     private func runEstimate() async {
         guard let builder = fetchBuilder() else {
-            self.errorMessage = "Couldn't construct an index builder. Check your Claude API key in Settings."
+            self.errorMessage = "Couldn't construct an index builder. Check your backend settings (Claude API key, or local model download)."
             self.phase = .failed
             return
         }
@@ -257,7 +265,7 @@ struct BuildIndexSheet: View {
         // honored — AppState's builder cache invalidates when the model
         // setting changes.
         guard let activeBuilder = fetchBuilder() else {
-            errorMessage = "Couldn't construct an index builder. Check your Claude API key in Settings."
+            errorMessage = "Couldn't construct an index builder. Check your backend settings (Claude API key, or local model download)."
             phase = .failed
             return
         }

@@ -10,15 +10,15 @@ final class MeetingQAToolsTests: XCTestCase {
         try FileManager.default.createDirectory(at: rootDir.appendingPathComponent("2026-01-07"), withIntermediateDirectories: true)
         try """
         ---
-        title: "Dana <> Matt"
+        title: "Speaker One <> Speaker Two"
         date: "2025-01-29"
         ---
 
-        # Dana <> Matt
+        # Speaker One <> Speaker Two
 
         ## Summary
         Discussion about Quinn Adler and the fund.
-        """.write(to: rootDir.appendingPathComponent("2025-01-29/dana-matt.md"), atomically: true, encoding: .utf8)
+        """.write(to: rootDir.appendingPathComponent("2025-01-29/speaker-one-speaker-two.md"), atomically: true, encoding: .utf8)
 
         try """
         # team-standup
@@ -39,7 +39,7 @@ final class MeetingQAToolsTests: XCTestCase {
     func testGrepFindsMatchAcrossArchive() async throws {
         let tools = MeetingQATools(root: rootDir)
         let result = try await tools.grep(pattern: "Quinn", path: nil, caseInsensitive: true, maxResults: 50)
-        XCTAssertTrue(result.contains("2025-01-29/dana-matt.md:"), "Expected file:line match in output: \(result)")
+        XCTAssertTrue(result.contains("2025-01-29/speaker-one-speaker-two.md:"), "Expected file:line match in output: \(result)")
         XCTAssertTrue(result.contains("2026-01-07/team-standup.md:"), "Expected second-file match in output: \(result)")
     }
 
@@ -73,15 +73,15 @@ final class MeetingQAToolsTests: XCTestCase {
 
     func testReadFileReturnsRequestedSliceWithLineNumbers() async throws {
         let tools = MeetingQATools(root: rootDir)
-        let result = try await tools.readFile(path: "2025-01-29/dana-matt.md", offset: 1, limit: 200)
+        let result = try await tools.readFile(path: "2025-01-29/speaker-one-speaker-two.md", offset: 1, limit: 200)
         XCTAssertTrue(result.hasPrefix("1\t---\n"), "Expected line 1 prefix, got: \(result.prefix(30))")
-        XCTAssertTrue(result.contains("2\ttitle: \"Dana <> Matt\""), "Expected line 2: \(result)")
+        XCTAssertTrue(result.contains("2\ttitle: \"Speaker One <> Speaker Two\""), "Expected line 2: \(result)")
         XCTAssertTrue(result.contains("(End of file at line"), "Expected end-of-file footer: \(result)")
     }
 
     func testReadFileWithOffsetSkipsEarlierLines() async throws {
         let tools = MeetingQATools(root: rootDir)
-        let result = try await tools.readFile(path: "2025-01-29/dana-matt.md", offset: 5, limit: 1)
+        let result = try await tools.readFile(path: "2025-01-29/speaker-one-speaker-two.md", offset: 5, limit: 1)
         let firstLine = result.split(separator: "\n").first ?? ""
         XCTAssertTrue(firstLine.hasPrefix("5\t"), "Expected line 5 prefix, got: \(firstLine)")
     }
@@ -135,8 +135,8 @@ final class MeetingQAToolsTests: XCTestCase {
     func testListDirInsideDateFolder() async throws {
         let tools = MeetingQATools(root: rootDir)
         let result = try await tools.listDir(path: "2025-01-29")
-        XCTAssertTrue(result.contains("dana-matt.md"))
-        XCTAssertFalse(result.contains("dana-matt.md/"), "File should not have / suffix: \(result)")
+        XCTAssertTrue(result.contains("speaker-one-speaker-two.md"))
+        XCTAssertFalse(result.contains("speaker-one-speaker-two.md/"), "File should not have / suffix: \(result)")
     }
 
     func testListDirRejectsPathOutsideRoot() async {

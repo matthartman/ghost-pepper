@@ -5,38 +5,59 @@ import Foundation
 /// Owns DualStreamCapture + ChunkedTranscriptionPipeline + MeetingTranscript.
 @MainActor
 final class MeetingSession: ObservableObject {
+    typealias CaptureStartOverride = @MainActor () async throws -> Void
+    typealias RemoteSpeakerTagger = (_ sessionID: UUID, _ audioBuffer: [Float]) async -> SpeakerTaggedTranscript?
+
+    private struct SavedChunkRecord {
+        let url: URL
+        let source: AudioStreamSource
+        let chunkIndex: Int
+    }
+
     @Published var isActive = false
+    @Published private(set) var isStarting = false
+    @Published private(set) var isDraining = false
     @Published var fileURL: URL?
     @Published var noAudioDetected = false
+    @Published private(set) var isTaggingRemoteSpeakers = false
 
     @Published var transcript: MeetingTranscript
 
     var onAutoStopRequested: ((MeetingSession) -> Void)?
 
-    private let capture = DualStreamCapture()
+    private let capture: any MeetingAudioCapturing
     private var pipeline: ChunkedTranscriptionPipeline?
     private let transcriber: SpeechTranscriber
     private let saveDirectory: URL
     private let detectedMeetingAppName: String?
     private let detectedMeetingBundleIdentifier: String?
+    private let remoteSpeakerTagger: RemoteSpeakerTagger?
 
     /// How often to auto-save the markdown file (matches chunk interval).
     private var autoSaveTimer: Timer?
     private var silenceCheckTimer: Timer?
     private var meetingEndCheckTimer: Timer?
+    private var savedChunkRecords: [SavedChunkRecord] = []
     private var hasReceivedAudio = false
     private var hasAutoUpdatedTitle = false
     private var skipCalendarAutoMatch = false
     private let originalName: String
     private let ocrService: FrontmostWindowOCRService
+    private let captureStartOverride: CaptureStartOverride?
     private var inactiveMeetingPollCount = 0
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var stopWaiters: [CheckedContinuation<Void, Never>] = []
+    private var stopRequested = false
 
     init(
         meetingName: String,
         detectedMeeting: DetectedMeeting? = nil,
         transcriber: SpeechTranscriber,
         saveDirectory: URL,
-        ocrService: FrontmostWindowOCRService = FrontmostWindowOCRService()
+        ocrService: FrontmostWindowOCRService = FrontmostWindowOCRService(),
+        captureStartOverride: CaptureStartOverride? = nil,
+        remoteSpeakerTagger: RemoteSpeakerTagger? = nil,
+        capture: any MeetingAudioCapturing = DualStreamCapture()
     ) {
         self.transcript = MeetingTranscript(meetingName: meetingName)
         self.transcriber = transcriber
@@ -45,11 +66,21 @@ final class MeetingSession: ObservableObject {
         self.ocrService = ocrService
         self.detectedMeetingAppName = detectedMeeting?.appName
         self.detectedMeetingBundleIdentifier = detectedMeeting?.bundleIdentifier
+        self.captureStartOverride = captureStartOverride
+        self.remoteSpeakerTagger = remoteSpeakerTagger
+        self.capture = capture
     }
 
     /// Start dual-stream capture and chunked transcription.
     func start() async throws {
-        guard !isActive else { return }
+        guard !isActive, !isDraining, !isStarting, !stopRequested else { return }
+        isStarting = true
+        defer {
+            isStarting = false
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
 
         let chunkDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("GhostPepper")
@@ -75,6 +106,12 @@ final class MeetingSession: ObservableObject {
             self.autoSave()
         }
 
+        newPipeline.onChunkSaved = { [weak self] url, source in
+            Task { @MainActor [weak self] in
+                self?.recordSavedChunk(url: url, source: source)
+            }
+        }
+
         capture.onAudioChunk = { [weak self, weak newPipeline] chunk in
             newPipeline?.appendAudio(chunk)
             if let self = self, !self.hasReceivedAudio {
@@ -92,7 +129,11 @@ final class MeetingSession: ObservableObject {
 
         pipeline = newPipeline
 
-        try await capture.start()
+        if let captureStartOverride {
+            try await captureStartOverride()
+        } else {
+            try await capture.start()
+        }
         newPipeline.start()
         isActive = true
 
@@ -132,11 +173,37 @@ final class MeetingSession: ObservableObject {
 
     /// Stop capture, process remaining audio, finalize transcript.
     func stop() async {
-        guard isActive else { return }
-        isActive = false
+        if isDraining {
+            await withCheckedContinuation { continuation in
+                stopWaiters.append(continuation)
+            }
+            return
+        }
 
-        pipeline?.stop()
+        guard isActive || isStarting || pipeline != nil else {
+            stopRequested = true
+            return
+        }
+        if isStarting {
+            await withCheckedContinuation { continuation in
+                startWaiters.append(continuation)
+            }
+            guard !isDraining, isActive || pipeline != nil else { return }
+        }
+
+        isDraining = true
+        isActive = false
+        defer {
+            isDraining = false
+            let waiters = stopWaiters
+            stopWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+
         _ = await capture.stop()
+        await pipeline?.stop()
+
+        await applyRemoteSpeakerTaggingIfAvailable()
 
         transcript.endDate = Date()
 
@@ -153,6 +220,165 @@ final class MeetingSession: ObservableObject {
 
         print("MeetingSession: stopped '\(transcript.meetingName)' — \(transcript.segments.count) segments, \(transcript.formattedDuration)")
     }
+
+    private func recordSavedChunk(url: URL, source: AudioStreamSource) {
+        guard let chunkIndex = Self.chunkIndex(from: url) else {
+            return
+        }
+        savedChunkRecords.append(SavedChunkRecord(url: url, source: source, chunkIndex: chunkIndex))
+    }
+
+    private func applyRemoteSpeakerTaggingIfAvailable() async {
+        guard let remoteSpeakerTagger,
+              let systemAudioBuffer = timelineAlignedAudioBuffer(for: .system),
+              systemAudioBuffer.isEmpty == false else {
+            return
+        }
+
+        isTaggingRemoteSpeakers = true
+        defer { isTaggingRemoteSpeakers = false }
+
+        guard let speakerTaggedTranscript = await remoteSpeakerTagger(
+            transcript.sessionID,
+            systemAudioBuffer
+        ) else {
+            return
+        }
+
+        let updatedSegments = Self.transcriptSegments(
+            byApplyingRemoteSpeakerTags: speakerTaggedTranscript,
+            to: transcript.segments
+        )
+        guard Self.segmentsDiffer(updatedSegments, transcript.segments) else {
+            return
+        }
+
+        transcript.segments = updatedSegments
+        autoSave()
+    }
+
+    private func timelineAlignedAudioBuffer(for source: AudioStreamSource) -> [Float]? {
+        let records = savedChunkRecords
+            .filter { $0.source == source }
+            .sorted { lhs, rhs in
+                if lhs.chunkIndex == rhs.chunkIndex {
+                    return lhs.url.path < rhs.url.path
+                }
+                return lhs.chunkIndex < rhs.chunkIndex
+            }
+        guard records.isEmpty == false else {
+            return nil
+        }
+
+        var output: [Float] = []
+        for record in records {
+            guard let data = try? Data(contentsOf: record.url),
+                  let samples = try? AudioRecorder.deserializeArchivedAudioBuffer(from: data),
+                  samples.isEmpty == false else {
+                continue
+            }
+
+            let startIndex = max(0, Int((Double(record.chunkIndex) * Self.chunkInterval * Self.sampleRate).rounded(.down)))
+            if output.count < startIndex {
+                output.append(contentsOf: repeatElement(Float.zero, count: startIndex - output.count))
+            }
+            output.append(contentsOf: samples)
+        }
+
+        return output.isEmpty ? nil : output
+    }
+
+    static func transcriptSegments(
+        byApplyingRemoteSpeakerTags speakerTaggedTranscript: SpeakerTaggedTranscript,
+        to segments: [TranscriptSegment]
+    ) -> [TranscriptSegment] {
+        let taggedSegments = remoteTranscriptSegments(from: speakerTaggedTranscript)
+        guard taggedSegments.isEmpty == false else {
+            return segments
+        }
+
+        let nonGenericRemoteSegments = segments.filter { segment in
+            switch segment.speaker {
+            case .remote(let name):
+                return name != nil
+            case .me:
+                return true
+            }
+        }
+
+        return (nonGenericRemoteSegments + taggedSegments).sorted { lhs, rhs in
+            if lhs.startTime == rhs.startTime {
+                return lhs.endTime < rhs.endTime
+            }
+            return lhs.startTime < rhs.startTime
+        }
+    }
+
+    private static func remoteTranscriptSegments(from speakerTaggedTranscript: SpeakerTaggedTranscript) -> [TranscriptSegment] {
+        var speakerLabelsByID: [String: String] = [:]
+        var orderedSpeakerIDs: [String] = []
+
+        func fallbackLabel(for speakerID: String) -> String {
+            if let existing = speakerLabelsByID[speakerID] {
+                return existing
+            }
+            orderedSpeakerIDs.append(speakerID)
+            let label = "Speaker \(orderedSpeakerIDs.count)"
+            speakerLabelsByID[speakerID] = label
+            return label
+        }
+
+        return speakerTaggedTranscript.segments.compactMap { segment in
+            let text = SpeechTranscriber.removeArtifacts(from: segment.text)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.isEmpty == false else {
+                return nil
+            }
+
+            let displayName = usableDisplayName(from: segment.attribution.displayName)
+                ?? fallbackLabel(for: segment.speakerID)
+            return TranscriptSegment(
+                id: UUID(),
+                speaker: .remote(name: displayName),
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                text: text
+            )
+        }
+    }
+
+    private static func usableDisplayName(from displayName: String?) -> String? {
+        guard let displayName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              displayName.isEmpty == false else {
+            return nil
+        }
+        return displayName.hasPrefix("Recognized Voice ") ? nil : displayName
+    }
+
+    private static func segmentsDiffer(_ lhs: [TranscriptSegment], _ rhs: [TranscriptSegment]) -> Bool {
+        guard lhs.count == rhs.count else {
+            return true
+        }
+        return zip(lhs, rhs).contains { lhs, rhs in
+            lhs.speaker != rhs.speaker ||
+                abs(lhs.startTime - rhs.startTime) > 0.0001 ||
+                abs(lhs.endTime - rhs.endTime) > 0.0001 ||
+                lhs.text != rhs.text
+        }
+    }
+
+    private static func chunkIndex(from url: URL) -> Int? {
+        let name = url.deletingPathExtension().lastPathComponent
+        let parts = name.split(separator: "-")
+        guard parts.count >= 3,
+              parts[0] == "chunk" else {
+            return nil
+        }
+        return Int(parts[1])
+    }
+
+    private static let chunkInterval: TimeInterval = 30.0
+    private static let sampleRate: Double = 16_000
 
     /// Elapsed time since meeting started.
     var elapsed: TimeInterval {

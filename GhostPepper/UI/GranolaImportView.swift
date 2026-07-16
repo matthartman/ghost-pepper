@@ -156,6 +156,9 @@ struct GranolaImportView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 320)
 
+            Link("How to get an API key", destination: URL(string: "https://docs.granola.ai/introduction#obtaining-an-api-key")!)
+                .font(.caption)
+
             HStack(spacing: 12) {
                 Button("Fetch Notes & Transcripts") {
                     Task {
@@ -191,6 +194,9 @@ struct GranolaImportView: View {
             SecureField("Granola API key", text: $importer.granolaApiKey)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 320)
+
+            Link("How to get an API key", destination: URL(string: "https://docs.granola.ai/introduction#obtaining-an-api-key")!)
+                .font(.caption)
 
             Button("Fetch Transcripts") {
                 Task {

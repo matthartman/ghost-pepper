@@ -5,6 +5,7 @@ enum RuntimeModelStatus: Equatable {
     case loading
     case downloading(progress: Double?)
     case loaded
+    case systemManaged
 }
 
 struct RuntimeModelRow: Identifiable, Equatable {
@@ -13,6 +14,8 @@ struct RuntimeModelRow: Identifiable, Equatable {
     let sizeDescription: String
     let isSelected: Bool
     let status: RuntimeModelStatus
+    let allowsManualDownload: Bool
+    let allowsDeletion: Bool
 }
 
 enum RuntimeModelInventory {
@@ -24,6 +27,7 @@ enum RuntimeModelInventory {
         cachedSpeechModelNames: Set<String>,
         cleanupState: CleanupModelState,
         selectedCleanupModelKind: LocalCleanupModelKind,
+        selectedWikiModelKind: LocalCleanupModelKind? = nil,
         cachedCleanupKinds: Set<LocalCleanupModelKind>
     ) -> [RuntimeModelRow] {
         let speechRows = ModelManager.availableModels.map { model in
@@ -33,12 +37,14 @@ enum RuntimeModelInventory {
                 sizeDescription: model.sizeDescription,
                 isSelected: model.name == selectedSpeechModelName,
                 status: statusForSpeechModel(
-                    named: model.name,
+                    model: model,
                     activeSpeechModelName: activeSpeechModelName,
                     speechModelState: speechModelState,
                     speechDownloadProgress: speechDownloadProgress,
                     cachedSpeechModelNames: cachedSpeechModelNames
-                )
+                ),
+                allowsManualDownload: model.isSystemManaged == false,
+                allowsDeletion: model.isSystemManaged == false
             )
         }
 
@@ -47,12 +53,14 @@ enum RuntimeModelInventory {
                 id: "cleanup-\(model.fileName)",
                 name: model.displayName,
                 sizeDescription: model.sizeDescription,
-                isSelected: model.kind == selectedCleanupModelKind,
+                isSelected: model.kind == selectedCleanupModelKind || model.kind == selectedWikiModelKind,
                 status: statusForCleanupModel(
                     kind: model.kind,
                     cleanupState: cleanupState,
                     cachedCleanupKinds: cachedCleanupKinds
-                )
+                ),
+                allowsManualDownload: true,
+                allowsDeletion: true
             )
         }
 
@@ -70,26 +78,32 @@ enum RuntimeModelInventory {
             return "Downloading \(row.name) (\(pct)%)..."
         case .downloading(nil):
             return "Preparing \(row.name)..."
-        case .loading, .loaded, .notLoaded:
+        case .loading, .loaded, .notLoaded, .systemManaged:
             return nil
         }
     }
 
     private static func statusForSpeechModel(
-        named modelName: String,
+        model: SpeechModelDescriptor,
         activeSpeechModelName: String,
         speechModelState: ModelManagerState,
         speechDownloadProgress: Double?,
         cachedSpeechModelNames: Set<String>
     ) -> RuntimeModelStatus {
-        if speechModelState == .loading && modelName == activeSpeechModelName {
-            if cachedSpeechModelNames.contains(modelName) {
+        if speechModelState == .loading && model.name == activeSpeechModelName {
+            if model.isSystemManaged {
+                return .downloading(progress: speechDownloadProgress)
+            }
+            if cachedSpeechModelNames.contains(model.name) {
                 return .loading
             }
             return .downloading(progress: speechDownloadProgress)
         }
 
-        return cachedSpeechModelNames.contains(modelName) ? .loaded : .notLoaded
+        if model.isSystemManaged {
+            return .systemManaged
+        }
+        return cachedSpeechModelNames.contains(model.name) ? .loaded : .notLoaded
     }
 
     private static func statusForCleanupModel(

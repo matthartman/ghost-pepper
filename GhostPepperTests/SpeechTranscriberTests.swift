@@ -1,20 +1,21 @@
+import AVFAudio
 import XCTest
 @testable import GhostPepper
 
 @MainActor
 final class SpeechTranscriberTests: XCTestCase {
 
-    func testSpeechModelCatalogIncludesWhisperAndParakeetModels() {
+    func testSpeechModelCatalogIncludesModelsSupportedByTheCurrentOS() {
         let ids = SpeechModelCatalog.availableModels.map(\.id)
         let backends = SpeechModelCatalog.availableModels.map(\.backend)
 
-        let baseIDs = [
+        var expectedIDs = [
             "openai_whisper-tiny.en",
             "openai_whisper-small.en",
             "openai_whisper-small",
             "fluid_parakeet-v3",
         ]
-        let baseBackends: [SpeechBackendKind] = [
+        var expectedBackends: [SpeechBackendKind] = [
             .whisperKit,
             .whisperKit,
             .whisperKit,
@@ -22,14 +23,46 @@ final class SpeechTranscriberTests: XCTestCase {
         ]
 
         if #available(macOS 15, iOS 18, *) {
-            XCTAssertEqual(ids, baseIDs + ["fluid_qwen3-asr-0.6b-int8"])
-            XCTAssertEqual(backends, baseBackends + [.fluidAudio])
-        } else {
-            XCTAssertEqual(ids, baseIDs)
-            XCTAssertEqual(backends, baseBackends)
+            expectedIDs.append("fluid_qwen3-asr-0.6b-int8")
+            expectedBackends.append(.fluidAudio)
+        }
+        if #available(macOS 26, *) {
+            expectedIDs.append("apple_speech-analyzer")
+            expectedBackends.append(.speechAnalyzer)
         }
 
+        XCTAssertEqual(ids, expectedIDs)
+        XCTAssertEqual(backends, expectedBackends)
         XCTAssertEqual(SpeechModelCatalog.defaultModelID, "openai_whisper-small.en")
+    }
+
+    func testSpeechAnalyzerDescriptorIsSystemManagedAndDoesNotFilterSpeakers() {
+        let model = SpeechModelCatalog.speechAnalyzer
+
+        XCTAssertEqual(model.name, "apple_speech-analyzer")
+        XCTAssertEqual(model.backend, .speechAnalyzer)
+        XCTAssertEqual(model.pickerTitle, "Apple SpeechAnalyzer")
+        XCTAssertEqual(model.variantName, "System model")
+        XCTAssertEqual(model.sizeDescription, "Managed by macOS")
+        XCTAssertEqual(model.cachePathComponents, [])
+        XCTAssertNil(model.fluidAudioVariant)
+        XCTAssertTrue(model.isSystemManaged)
+        XCTAssertFalse(model.supportsSpeakerFiltering)
+        XCTAssertEqual(model.automaticLanguageLabel, "System language")
+
+        if #available(macOS 26, *) {
+            XCTAssertEqual(
+                SpeechModelCatalog.model(named: "apple_speech-analyzer"),
+                model
+            )
+        } else {
+            XCTAssertNil(SpeechModelCatalog.model(named: "apple_speech-analyzer"))
+        }
+
+        XCTAssertEqual(
+            SpeechModelCatalog.whisperSmallEnglish.automaticLanguageLabel,
+            "Auto-detect"
+        )
     }
 
     func testFluidAudioSpeechModelsSupportSpeakerFiltering() {
@@ -92,6 +125,46 @@ final class SpeechTranscriberTests: XCTestCase {
         }
     }
 
+    func testModelManagerQueuesLatestModelSelectionWhileAnotherModelLoads() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let firstLoadGate = PipelineTestGate()
+        var loadedNames: [String] = []
+        let manager = ModelManager(
+            modelName: SpeechModelCatalog.whisperSmallEnglish.id,
+            modelLoadOverride: { descriptor in
+                loadedNames.append(descriptor.name)
+                if loadedNames.count == 1 {
+                    await firstLoadGate.wait()
+                }
+            }
+        )
+
+        let initialLoad = Task { await manager.loadModel() }
+        for _ in 0..<100 where loadedNames.isEmpty {
+            await Task.yield()
+        }
+
+        let requestedModel = SpeechModelCatalog.speechAnalyzer.id
+        let queuedLoad = Task {
+            await manager.loadModel(name: requestedModel)
+        }
+        await Task.yield()
+        XCTAssertEqual(manager.modelName, SpeechModelCatalog.whisperSmallEnglish.id)
+
+        await firstLoadGate.release()
+        await initialLoad.value
+        await queuedLoad.value
+
+        XCTAssertEqual(loadedNames, [
+            SpeechModelCatalog.whisperSmallEnglish.id,
+            requestedModel,
+        ])
+        XCTAssertEqual(manager.modelName, requestedModel)
+        XCTAssertEqual(manager.state, .ready)
+    }
+
     // MARK: - SpeechTranscriber Tests
 
     func testTranscriberReportsNotReadyBeforeModelLoad() {
@@ -114,6 +187,44 @@ final class SpeechTranscriberTests: XCTestCase {
         let silence = [Float](repeating: 0.0, count: 16000)
         let result = await transcriber.transcribe(audioBuffer: silence)
         XCTAssertNil(result, "Should return nil when model is not loaded")
+    }
+
+    func testChunkedPipelineStopWaitsForPendingTranscription() async {
+        let transcriptionStarted = PipelineTestGate()
+        let releaseTranscription = PipelineTestGate()
+        let stopReturned = PipelineTestGate()
+        let pipeline = ChunkedTranscriptionPipeline(
+            transcribeChunk: { _ in
+                await transcriptionStarted.release()
+                await releaseTranscription.wait()
+                return "finished"
+            },
+            chunkDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("GhostPepperTests")
+                .appendingPathComponent(UUID().uuidString),
+            chunkInterval: 60
+        )
+
+        pipeline.start()
+        pipeline.appendAudio(
+            TaggedAudioChunk(source: .mic, samples: [1, 2, 3], timestamp: 0)
+        )
+
+        let stopTask = Task {
+            await pipeline.stop()
+            await stopReturned.release()
+        }
+
+        await transcriptionStarted.wait()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let returnedBeforeTranscriptionFinished = await stopReturned.isOpen
+        XCTAssertFalse(returnedBeforeTranscriptionFinished)
+
+        await releaseTranscription.release()
+        await stopTask.value
+
+        let returnedAfterTranscriptionFinished = await stopReturned.isOpen
+        XCTAssertTrue(returnedAfterTranscriptionFinished)
     }
 
     // MARK: - Qwen3-ASR ModelManager Tests
@@ -184,5 +295,160 @@ final class SpeechTranscriberTests: XCTestCase {
             "openai_whisper-small.en",
             "fluid_qwen3-asr-0.6b-int8",
         ])
+    }
+}
+
+private actor PipelineTestGate {
+    private var isReleased = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var isOpen: Bool { isReleased }
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        isReleased = true
+        let pendingWaiters = waiters
+        waiters.removeAll()
+        pendingWaiters.forEach { $0.resume() }
+    }
+}
+
+@MainActor
+final class AppleSpeechAnalyzerBackendTests: XCTestCase {
+    func testRequestedLocaleUsesExplicitLanguageOrCurrentLocale() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        XCTAssertEqual(
+            AppleSpeechAnalyzerBackend.requestedLocale(
+                languageCode: "es",
+                currentLocale: Locale(identifier: "fr_CA")
+            ).identifier,
+            "es"
+        )
+        XCTAssertEqual(
+            AppleSpeechAnalyzerBackend.requestedLocale(
+                languageCode: nil,
+                currentLocale: Locale(identifier: "fr_CA")
+            ).identifier,
+            "fr_CA"
+        )
+    }
+
+    func testAnalyzerBufferClipsFloatSamplesToValidPCMRange() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+
+        let buffer = try AppleSpeechAnalyzerBackend.makeAnalyzerBuffer(
+            audioBuffer: [-2, -0.5, 0, 0.5, 2],
+            format: format
+        )
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+
+        XCTAssertEqual(buffer.frameLength, 5)
+        XCTAssertEqual(Array(UnsafeBufferPointer(start: channel, count: 5)), [-1, -0.5, 0, 0.5, 1])
+    }
+
+    func testAnalyzerBufferSanitizesNonFiniteFloatSamples() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+
+        let buffer = try AppleSpeechAnalyzerBackend.makeAnalyzerBuffer(
+            audioBuffer: [.nan, .infinity, -.infinity],
+            format: format
+        )
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+
+        XCTAssertEqual(
+            Array(UnsafeBufferPointer(start: channel, count: 3)),
+            [0, 0, 0]
+        )
+    }
+
+    func testAnalyzerResultTextConcatenatesFragmentsWithoutInsertingSpaces() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        XCTAssertEqual(
+            AppleSpeechAnalyzerBackend.transcriptText(
+                from: ["Hello", ",", " world", "."]
+            ),
+            "Hello, world."
+        )
+    }
+
+    func testAnalyzerBufferConvertsToRequestedIntegerFormat() throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatInt16,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+
+        let buffer = try AppleSpeechAnalyzerBackend.makeAnalyzerBuffer(
+            audioBuffer: [-1, 0, 1],
+            format: format
+        )
+
+        XCTAssertEqual(buffer.format.commonFormat, .pcmFormatInt16)
+        XCTAssertEqual(buffer.format.sampleRate, 16_000)
+        XCTAssertEqual(buffer.format.channelCount, 1)
+        XCTAssertEqual(buffer.frameLength, 3)
+        let channel = try XCTUnwrap(buffer.int16ChannelData?[0])
+        let samples = Array(UnsafeBufferPointer(start: channel, count: 3))
+        XCTAssertLessThanOrEqual(abs(Int(samples[0]) - Int(Int16.min)), 1)
+        XCTAssertEqual(samples[1], 0)
+        XCTAssertLessThanOrEqual(abs(Int(samples[2]) - Int(Int16.max)), 1)
+    }
+
+    func testPrepareRejectsUnsupportedLocaleWithoutFallback() async throws {
+        guard #available(macOS 26, *) else {
+            throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")
+        }
+
+        do {
+            _ = try await AppleSpeechAnalyzerBackend.prepare(
+                languageCode: "zz_ZZ",
+                currentLocale: Locale(identifier: "en_US"),
+                supportedLocaleResolver: { _ in nil },
+                progressHandler: { _ in }
+            )
+            XCTFail("Expected an unsupported-locale error")
+        } catch let error as AppleSpeechAnalyzerError {
+            guard case .unsupportedLocale("zz_ZZ") = error else {
+                return XCTFail("Unexpected error: \(error.localizedDescription)")
+            }
+        }
     }
 }

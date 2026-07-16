@@ -1,11 +1,71 @@
 import Foundation
 
 struct SpeakerTaggedTranscript: Equatable, Sendable {
+    struct Attribution: Codable, Equatable, Sendable {
+        enum Source: String, Codable, Equatable, Sendable {
+            case diarization
+            case singleSpeakerFallback
+            case userAssignedIdentity
+        }
+
+        let speakerID: String
+        let recognizedVoiceID: UUID?
+        let displayName: String?
+        let confidence: Double
+        let evidenceDuration: TimeInterval
+        let source: Source
+
+        init(
+            speakerID: String,
+            recognizedVoiceID: UUID? = nil,
+            displayName: String? = nil,
+            confidence: Double,
+            evidenceDuration: TimeInterval,
+            source: Source
+        ) {
+            self.speakerID = speakerID
+            self.recognizedVoiceID = recognizedVoiceID
+            self.displayName = displayName
+            self.confidence = min(1, max(0, confidence))
+            self.evidenceDuration = max(0, evidenceDuration)
+            self.source = source
+        }
+
+        static func == (lhs: Attribution, rhs: Attribution) -> Bool {
+            lhs.speakerID == rhs.speakerID &&
+                lhs.recognizedVoiceID == rhs.recognizedVoiceID &&
+                lhs.displayName == rhs.displayName &&
+                abs(lhs.confidence - rhs.confidence) < 0.0001 &&
+                abs(lhs.evidenceDuration - rhs.evidenceDuration) < 0.0001 &&
+                lhs.source == rhs.source
+        }
+    }
+
     struct Segment: Equatable, Sendable {
         let speakerID: String
         let startTime: TimeInterval
         let endTime: TimeInterval
         let text: String
+        let attribution: Attribution
+
+        init(
+            speakerID: String,
+            startTime: TimeInterval,
+            endTime: TimeInterval,
+            text: String,
+            attribution: Attribution? = nil
+        ) {
+            self.speakerID = speakerID
+            self.startTime = startTime
+            self.endTime = endTime
+            self.text = text
+            self.attribution = attribution ?? Attribution(
+                speakerID: speakerID,
+                confidence: 1,
+                evidenceDuration: max(0, endTime - startTime),
+                source: .diarization
+            )
+        }
     }
 
     let segments: [Segment]
@@ -282,7 +342,13 @@ final class TranscriptionLabRunner {
                     speakerID: speakerID,
                     startTime: startTime,
                     endTime: endTime,
-                    text: normalizedFallbackTranscript
+                    text: normalizedFallbackTranscript,
+                    attribution: .init(
+                        speakerID: speakerID,
+                        confidence: 0.5,
+                        evidenceDuration: endTime - startTime,
+                        source: .singleSpeakerFallback
+                    )
                 )
             ]
         )

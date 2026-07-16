@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import LLM
 
@@ -56,11 +57,18 @@ enum LocalCleanupModelKind: String, CaseIterable, Equatable, Identifiable {
     case qwen35_2b_q4_k_m
     case qwen35_4b_q4_k_m
     case deepseek_r1_qwen_7b_q4_k_m
+    case gemma4_12b_it_optiq_4bit_mlx
 
     var id: String { rawValue }
 
     static var fast: LocalCleanupModelKind { .qwen35_2b_q4_k_m }
     static var full: LocalCleanupModelKind { .qwen35_4b_q4_k_m }
+    static var wikiDefault: LocalCleanupModelKind { .qwen35_4b_q4_k_m }
+}
+
+enum CleanupModelRuntime: Equatable {
+    case gguf
+    case mlxRepository(repoID: String)
 }
 
 struct CleanupModelDescriptor: Equatable {
@@ -69,8 +77,35 @@ struct CleanupModelDescriptor: Equatable {
     let sizeDescription: String
     let fileName: String
     let url: String
+    let expectedSHA256: String
+    let expectedByteCount: Int64
     let maxTokenCount: Int32
     let recommendation: CleanupModelRecommendation?
+    let runtime: CleanupModelRuntime
+
+    init(
+        kind: LocalCleanupModelKind,
+        displayName: String,
+        sizeDescription: String,
+        fileName: String,
+        url: String,
+        expectedSHA256: String,
+        expectedByteCount: Int64,
+        maxTokenCount: Int32,
+        recommendation: CleanupModelRecommendation?,
+        runtime: CleanupModelRuntime = .gguf
+    ) {
+        self.kind = kind
+        self.displayName = displayName
+        self.sizeDescription = sizeDescription
+        self.fileName = fileName
+        self.url = url
+        self.expectedSHA256 = expectedSHA256
+        self.expectedByteCount = expectedByteCount
+        self.maxTokenCount = maxTokenCount
+        self.recommendation = recommendation
+        self.runtime = runtime
+    }
 }
 
 actor CleanupProbeExecutionGate {
@@ -100,6 +135,15 @@ actor CleanupProbeExecutionGate {
 
 @MainActor
 final class TextCleanupManager: ObservableObject, TextCleaningManaging {
+    private struct HuggingFaceModelInfo: Decodable {
+        let siblings: [Sibling]
+
+        struct Sibling: Decodable {
+            let rfilename: String
+            let size: Int64?
+        }
+    }
+
     private struct PreparedPromptContext {
         let modelKind: LocalCleanupModelKind
         let plan: CleanupPromptPrefillPlan
@@ -123,8 +167,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         displayName: "Qwen 3.5 0.8B Q4_K_M (Very fast)",
         sizeDescription: "~535 MB",
         fileName: "Qwen3.5-0.8B-Q4_K_M.gguf",
-        url: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
-        maxTokenCount: 2048,
+        url: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf",
+        expectedSHA256: "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+        expectedByteCount: 532_517_120,
+        maxTokenCount: 4096,
         recommendation: .veryFast
     )
 
@@ -133,8 +179,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         displayName: "Qwen 3.5 2B Q4_K_M (Fast)",
         sizeDescription: "~1.3 GB",
         fileName: "Qwen3.5-2B-Q4_K_M.gguf",
-        url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
-        maxTokenCount: 2048,
+        url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
+        expectedSHA256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+        expectedByteCount: 1_280_835_840,
+        maxTokenCount: 4096,
         recommendation: .fast
     )
 
@@ -143,8 +191,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         displayName: "Qwen 3.5 4B Q4_K_M (Full)",
         sizeDescription: "~2.8 GB",
         fileName: "Qwen3.5-4B-Q4_K_M.gguf",
-        url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-        maxTokenCount: 4096,
+        url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
+        expectedSHA256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        expectedByteCount: 2_740_937_888,
+        maxTokenCount: 8192,
         recommendation: .full
     )
 
@@ -159,9 +209,24 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         displayName: "DeepSeek R1 Distill Qwen 7B Q4_K_M",
         sizeDescription: "~4.7 GB",
         fileName: "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
-        url: "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+        url: "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/361004151d4f4f6b446dc5e6d46fbf4422a80d5f/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
+        expectedSHA256: "731ece8d06dc7eda6f6572997feb9ee1258db0784827e642909d9b565641937b",
+        expectedByteCount: 4_683_073_504,
         maxTokenCount: 8192,
         recommendation: nil
+    )
+
+    static let gemma4WikiModel = CleanupModelDescriptor(
+        kind: .gemma4_12b_it_optiq_4bit_mlx,
+        displayName: "Gemma 4 12B Instruct OptiQ 4-bit MLX (Wiki)",
+        sizeDescription: "~9 GB",
+        fileName: "mlx-community--gemma-4-12B-it-OptiQ-4bit",
+        url: "https://huggingface.co/mlx-community/gemma-4-12B-it-OptiQ-4bit",
+        expectedSHA256: "",
+        expectedByteCount: 0,
+        maxTokenCount: 16_384,
+        recommendation: nil,
+        runtime: .mlxRepository(repoID: "mlx-community/gemma-4-12B-it-OptiQ-4bit")
     )
 
     static let cleanupModels = [
@@ -169,7 +234,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         recommendedFastModel,
         recommendedFullModel,
         deepseekR1Qwen7BModel,
+        gemma4WikiModel,
     ]
+    static let cleanupGenerationModels = cleanupModels.filter { $0.runtime == .gguf }
+    static let wikiGenerationModels = cleanupModels
     static let fastModel = recommendedFastModel
     static let fullModel = recommendedFullModel
 
@@ -202,6 +270,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     private static let selectedCleanupModelDefaultsKey = "selectedCleanupModelKind"
     private static let systemPromptSentinel = "<|ghost-pepper-system-prefill-split|>"
     private static let userInputSentinel = "<|ghost-pepper-user-prefill-split|>"
+    private static let repositoryDownloadMarkerFileName = ".ghostpepper-model-cache-complete"
 
     private let defaults: UserDefaults
     private let cleanupModelAvailabilityOverrides: [LocalCleanupModelKind: Bool]
@@ -271,7 +340,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     static func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
         guard let desc = cleanupModels.first(where: { $0.kind == kind }) else { return false }
         let path = modelsDirectory.appendingPathComponent(desc.fileName)
-        return FileManager.default.fileExists(atPath: path.path)
+        return isVerifiedModelFile(path, descriptor: desc)
     }
 
     func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
@@ -352,10 +421,18 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     /// and agent runs don't share KV-cache state.
     func streamCompletion(
         prompt: String,
-        modelKind: LocalCleanupModelKind? = nil
+        modelKind: LocalCleanupModelKind? = nil,
+        thinkingMode: ThinkingMode = .suppressed
     ) async throws -> AsyncStream<String> {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
         await loadModel(kind: requestedModelKind)
+        let requestedDescriptor = descriptor(for: requestedModelKind)
+
+        if case .mlxRepository = requestedDescriptor.runtime {
+            throw CleanupBackendError.unsupportedRuntime(
+                "\(requestedDescriptor.displayName) is downloaded/selectable, but MLX inference is not wired into Ghost Pepper yet. Choose a GGUF model such as Qwen 3.5 4B, or wire the MLX provider next."
+            )
+        }
 
         guard let llm = model(for: requestedModelKind) else {
             debugLogger?(
@@ -373,7 +450,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         let task = Task { @MainActor in
             let response = await llm.core.generateResponseStream(
                 from: prompt,
-                thinking: ThinkingMode.suppressed
+                thinking: thinkingMode
             )
             for await token in response {
                 if Task.isCancelled { break }
@@ -510,10 +587,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         try? FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
 
         for descriptor in Self.cleanupModels {
-            let path = modelPath(for: descriptor.fileName)
-            guard !FileManager.default.fileExists(atPath: path.path) else {
+            guard descriptor.runtime == .gguf else {
                 continue
             }
+            let path = modelPath(for: descriptor.fileName)
+            guard !Self.isVerifiedModelFile(path, descriptor: descriptor) else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: path)
 
             do {
                 try await downloadModel(kind: descriptor.kind, url: descriptor.url, to: path)
@@ -560,6 +641,11 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         let path = modelPath(for: descriptor.fileName)
         debugLogger?(.model, "Loading local cleanup model \(descriptor.displayName).")
 
+        if FileManager.default.fileExists(atPath: path.path), !Self.isVerifiedModelFile(path, descriptor: descriptor) {
+            try? FileManager.default.removeItem(at: path)
+            debugLogger?(.model, "Removed local cleanup model with failed integrity check: \(descriptor.displayName).")
+        }
+
         if !FileManager.default.fileExists(atPath: path.path) {
             do {
                 try await downloadModel(kind: kind, url: descriptor.url, to: path)
@@ -581,6 +667,13 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 }
                 return
             }
+        }
+
+        if case .mlxRepository = descriptor.runtime {
+            errorMessage = "Downloaded \(descriptor.displayName). MLX inference is not wired into Ghost Pepper yet."
+            state = .error
+            debugLogger?(.model, errorMessage ?? "MLX model downloaded but runtime unavailable.")
+            return
         }
 
         state = .loadingModel(kind: kind)
@@ -673,13 +766,19 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 return override ? descriptor.kind : nil
             }
 
-            return FileManager.default.fileExists(atPath: modelPath(for: descriptor.fileName).path)
+            return Self.isPlausibleCachedModelFile(modelPath(for: descriptor.fileName), descriptor: descriptor)
                 ? descriptor.kind
                 : nil
         })
     }
 
     private func downloadModel(kind: LocalCleanupModelKind, url urlString: String, to destination: URL) async throws {
+        let descriptor = descriptor(for: kind)
+        if case .mlxRepository(let repoID) = descriptor.runtime {
+            try await downloadHuggingFaceRepository(kind: kind, repoID: repoID, to: destination)
+            return
+        }
+
         guard let url = URL(string: urlString) else {
             throw URLError(.badURL)
         }
@@ -694,6 +793,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
         let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
         let (tempURL, _) = try await session.download(from: url)
+        guard Self.isVerifiedModelFile(tempURL, descriptor: descriptor) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw URLError(.cannotDecodeContentData)
+        }
         try FileManager.default.moveItem(at: tempURL, to: destination)
     }
 
@@ -802,7 +905,108 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             return true
         }
 
-        return FileManager.default.fileExists(atPath: modelPath(for: descriptor(for: modelKind).fileName).path)
+        let descriptor = descriptor(for: modelKind)
+        return Self.isVerifiedModelFile(modelPath(for: descriptor.fileName), descriptor: descriptor)
+    }
+
+    private static func isVerifiedModelFile(_ url: URL, descriptor: CleanupModelDescriptor) -> Bool {
+        if case .mlxRepository = descriptor.runtime {
+            return isVerifiedRepository(url)
+        }
+
+        guard isPlausibleCachedModelFile(url, descriptor: descriptor) else { return false }
+        return (try? sha256Hex(of: url)) == descriptor.expectedSHA256
+    }
+
+    private static func isPlausibleCachedModelFile(_ url: URL, descriptor: CleanupModelDescriptor) -> Bool {
+        if case .mlxRepository = descriptor.runtime {
+            return isVerifiedRepository(url)
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              Int64(values.fileSize ?? -1) == descriptor.expectedByteCount else {
+            return false
+        }
+        return true
+    }
+
+    private static func isVerifiedRepository(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+        return FileManager.default.fileExists(
+            atPath: url.appendingPathComponent(repositoryDownloadMarkerFileName).path
+        )
+    }
+
+    private func downloadHuggingFaceRepository(kind: LocalCleanupModelKind, repoID: String, to destination: URL) async throws {
+        guard let apiURL = URL(string: "https://huggingface.co/api/models/\(repoID)") else {
+            throw URLError(.badURL)
+        }
+
+        state = .downloading(kind: kind, progress: 0)
+        let (infoData, _) = try await URLSession.shared.data(from: apiURL)
+        let info = try JSONDecoder().decode(HuggingFaceModelInfo.self, from: infoData)
+        let files = info.siblings.filter { sibling in
+            !sibling.rfilename.hasPrefix(".") && !sibling.rfilename.hasSuffix(".md")
+        }
+
+        guard !files.isEmpty else {
+            throw URLError(.fileDoesNotExist)
+        }
+
+        let tempDirectory = modelsDirectory.appendingPathComponent("\(destination.lastPathComponent).download", isDirectory: true)
+        try? FileManager.default.removeItem(at: tempDirectory)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        do {
+            let knownTotalBytes = files.compactMap(\.size).reduce(Int64(0), +)
+            var completedBytes: Int64 = 0
+
+            for file in files {
+                try Task.checkCancellation()
+                guard let encodedFile = file.rfilename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                      let fileURL = URL(string: "https://huggingface.co/\(repoID)/resolve/main/\(encodedFile)") else {
+                    throw URLError(.badURL)
+                }
+                let localURL = tempDirectory.appendingPathComponent(file.rfilename)
+                try FileManager.default.createDirectory(
+                    at: localURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let (downloadedURL, _) = try await URLSession.shared.download(from: fileURL)
+                try? FileManager.default.removeItem(at: localURL)
+                try FileManager.default.moveItem(at: downloadedURL, to: localURL)
+                completedBytes += file.size ?? 0
+                if knownTotalBytes > 0 {
+                    state = .downloading(kind: kind, progress: min(0.99, Double(completedBytes) / Double(knownTotalBytes)))
+                }
+            }
+
+            let marker = tempDirectory.appendingPathComponent(Self.repositoryDownloadMarkerFileName)
+            try Data("repo=\(repoID)\ndownloadedAt=\(ISO8601DateFormatter().string(from: Date()))\n".utf8).write(to: marker)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: tempDirectory, to: destination)
+            state = .downloading(kind: kind, progress: 1)
+        } catch {
+            try? FileManager.default.removeItem(at: tempDirectory)
+            throw error
+        }
+    }
+
+    private static func sha256Hex(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while true {
+            let data = try handle.read(upToCount: 4 * 1024 * 1024) ?? Data()
+            if data.isEmpty { break }
+            hasher.update(data: data)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

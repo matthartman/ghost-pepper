@@ -12,6 +12,14 @@ struct QAAttachment: Identifiable, Equatable {
     @MainActor
     static func from(entry: CommandKHaystackEntry, archiveRoot: URL) -> QAAttachment? {
         switch entry.kind {
+        case .wiki(let item, let folderTitle):
+            guard let rel = relative(item.fileURL, to: archiveRoot) else { return nil }
+            return QAAttachment(
+                id: "wiki-\(item.fileURL.path)",
+                title: item.title,
+                relativePath: rel,
+                kindGlyph: folderTitle == "People" ? "person.crop.circle" : "books.vertical"
+            )
         case .person(let kind, let item):
             let url = MarkdownArchivePaths.entryURL(in: archiveRoot, kind: kind, slug: item.slug)
             guard let rel = relative(url, to: archiveRoot) else { return nil }

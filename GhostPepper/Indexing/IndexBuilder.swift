@@ -9,7 +9,7 @@ import CryptoKit
 /// All work for a given `IndexKind` is serialized through a single Task chain
 /// so two close-together meeting stops can't race on the same dossier file.
 @MainActor
-final class IndexBuilder {
+final class IndexBuilder: IndexBuilding {
     private let provider: AnthropicProvider
     private let model: ClaudeAPIModel
     private let saveDir: URL
@@ -51,11 +51,6 @@ final class IndexBuilder {
     /// merge instruction, and returns the merged body text. No tools used —
     /// pure generation, fast and cheap. Caller is responsible for writing
     /// the result back to disk.
-    struct MergeDossierResult {
-        let body: String
-        let generation: GenerationMetadata
-    }
-
     func mergeDossierBody(
         kind: IndexKind,
         slug: String,
@@ -197,13 +192,14 @@ final class IndexBuilder {
 
         continuation.yield(.meetingsProcessed(processed: coveredMeetings.count, total: totalCount))
 
-        let prompt = IndexSystemPrompt.buildPeopleIndexFullBuild(
+        let prompt = IndexSystemPrompt.buildFullBuild(
+            spec: kind.spec,
             archiveRootPath: saveDir.path,
             indexRootPath: indexRoot.path
         )
         let promptHash = Self.hashPrompt(prompt)
         let agent = makeAgent(systemPrompt: prompt, indexRoot: indexRoot)
-        let initialMessage = Self.fullBuildInitialMessage(meetings: unprocessedMeetings)
+        let initialMessage = Self.fullBuildInitialMessage(kind: kind, meetings: unprocessedMeetings)
 
         let manifestURL = MarkdownArchivePaths.manifestURL(in: saveDir, kind: kind)
         var entriesTouched: Set<String> = []
@@ -228,7 +224,7 @@ final class IndexBuilder {
                             augmentGeneration(
                                 slug: slug,
                                 kind: kind,
-                                promptKind: "people-index-full-build",
+                                promptKind: "\(kind.rawValue)-index-full-build",
                                 promptHash: promptHash
                             )
                             continuation.yield(.entryWritten(slug: slug, canonicalName: ""))
@@ -333,7 +329,8 @@ final class IndexBuilder {
         guard !manifest.isProcessed(meetingPath: meetingPath) else { return }
 
         let aliasSnapshot = IndexManifest.aliasSnapshot(in: saveDir, kind: kind)
-        let prompt = IndexSystemPrompt.buildPeopleIndexIncremental(
+        let prompt = IndexSystemPrompt.buildIncremental(
+            spec: kind.spec,
             archiveRootPath: saveDir.path,
             indexRootPath: indexRoot.path,
             meetingPath: meetingPath,
@@ -341,7 +338,7 @@ final class IndexBuilder {
         )
         let promptHash = Self.hashPrompt(prompt)
         let agent = makeAgent(systemPrompt: prompt, indexRoot: indexRoot)
-        let initialMessage = "Update the People index for the new meeting at `\(meetingPath)`."
+        let initialMessage = "Update the \(kind.displayName) index for the new meeting at `\(meetingPath)`."
 
         var entriesTouched: Set<String> = []
         do {
@@ -354,7 +351,7 @@ final class IndexBuilder {
                             augmentGeneration(
                                 slug: slug,
                                 kind: kind,
-                                promptKind: "people-index-incremental",
+                                promptKind: "\(kind.rawValue)-index-incremental",
                                 promptHash: promptHash
                             )
                         }
@@ -490,19 +487,19 @@ final class IndexBuilder {
         return String(path.dropLast(3))
     }
 
-    private static func fullBuildInitialMessage(meetings: [String]) -> String {
+    private static func fullBuildInitialMessage(kind: IndexKind, meetings: [String]) -> String {
         if meetings.isEmpty {
-            return "Build the People index. The archive currently has no meetings; write nothing and stop."
+            return "Build the \(kind.displayName) index. The archive currently has no meetings; write nothing and stop."
         }
         let preview = meetings.prefix(20).joined(separator: "\n")
         let suffix = meetings.count > 20 ? "\n... and \(meetings.count - 20) more." : ""
         return """
-        Build the People index for the meeting archive. There are \(meetings.count) meetings in total. \
+        Build the \(kind.displayName) index for the meeting archive. There are \(meetings.count) meetings in total. \
         First few paths:
 
         \(preview)\(suffix)
 
-        Use `list_dir` and `grep` to explore the rest yourself, then `write_file` one dossier per canonical person.
+        Use `list_dir` and `grep` to explore the rest yourself, then `write_file` one dossier per canonical \(kind.spec.entityNoun).
         """
     }
 }

@@ -7,6 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00A17B847D4D401A8E89F14A /* AirtableImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A17B837D4D401A8E89F14A /* AirtableImporter.swift */; };
+		00A17B867D4D401A8E89F14A /* AirtableImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A17B857D4D401A8E89F14A /* AirtableImportView.swift */; };
+		00B000000000000000000001 /* IndexBuilding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000001 /* IndexBuilding.swift */; };
+		00B000000000000000000002 /* WikiKindStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000002 /* WikiKindStore.swift */; };
+		00B000000000000000000003 /* QMDService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000003 /* QMDService.swift */; };
+		00B000000000000000000004 /* NewWikiSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000004 /* NewWikiSheet.swift */; };
+		00B000000000000000000007 /* LocalStructuredLLM.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000007 /* LocalStructuredLLM.swift */; };
+		00B000000000000000000008 /* LocalWikiEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000008 /* LocalWikiEngine.swift */; };
+		00B000000000000000000009 /* LocalWikiPrompts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000009 /* LocalWikiPrompts.swift */; };
+		00B000000000000000000010 /* MeetingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000010 /* MeetingCard.swift */; };
+		00B000000000000000000011 /* MeetingChunker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000011 /* MeetingChunker.swift */; };
+		00B000000000000000000012 /* WikiEntityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000012 /* WikiEntityResolver.swift */; };
+		00B000000000000000000013 /* WikiKindProposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000013 /* WikiKindProposer.swift */; };
+		00B000000000000000000015 /* GeneratedWikiEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000015 /* GeneratedWikiEngine.swift */; };
+		00B000000000000000000016 /* WikiSearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A000000000000000000016 /* WikiSearchService.swift */; };
 		00D963F24233D19221F6F3BA /* ClaudePricing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45CD91720FB67A72CAEF0E9C /* ClaudePricing.swift */; };
 		04654E621041E2A81CC2CFC7 /* MeetingQAToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 785F5D6EDD25D78F6220268E /* MeetingQAToolsTests.swift */; };
 		056C454F3BD1A9795C6775A5 /* ScreenRecordingPermissionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E4B61BA7270EEC11A8AC69 /* ScreenRecordingPermissionController.swift */; };
@@ -79,6 +94,7 @@
 		571085951E318B0ADD2B00EA /* RuntimeModelInventoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38C742095D3934D70BCE44E4 /* RuntimeModelInventoryTests.swift */; };
 		572FDC1B8744EECF73C0EA86 /* PasteSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 934F425F25CCB580B8202127 /* PasteSession.swift */; };
 		58786AC40C6823691E15369C /* FocusedElementLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E3575D1B5EA81CBB2CD1C2B /* FocusedElementLocator.swift */; };
+		58A000000000000000000001 /* AppleSpeechAnalyzerBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58A000000000000000000000 /* AppleSpeechAnalyzerBackend.swift */; };
 		5A4D2E405B6F7A519BA6F6F0 /* IndexSystemPromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF04305B5AE9665D25C23A2C /* IndexSystemPromptTests.swift */; };
 		5AB7257704509FD4BC36F69E /* TextPaster.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1EB2D492BFBDC803133A31 /* TextPaster.swift */; };
 		5AC883ADFD11721A8E9E4D37 /* ModelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAE65A5741A98AEADF6498D /* ModelManager.swift */; };
@@ -213,6 +229,21 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		00A17B837D4D401A8E89F14A /* AirtableImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirtableImporter.swift; sourceTree = "<group>"; };
+		00A17B857D4D401A8E89F14A /* AirtableImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirtableImportView.swift; sourceTree = "<group>"; };
+		00A000000000000000000001 /* IndexBuilding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexBuilding.swift; sourceTree = "<group>"; };
+		00A000000000000000000002 /* WikiKindStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiKindStore.swift; sourceTree = "<group>"; };
+		00A000000000000000000003 /* QMDService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QMDService.swift; sourceTree = "<group>"; };
+		00A000000000000000000004 /* NewWikiSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWikiSheet.swift; sourceTree = "<group>"; };
+		00A000000000000000000007 /* LocalStructuredLLM.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStructuredLLM.swift; sourceTree = "<group>"; };
+		00A000000000000000000008 /* LocalWikiEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalWikiEngine.swift; sourceTree = "<group>"; };
+		00A000000000000000000009 /* LocalWikiPrompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalWikiPrompts.swift; sourceTree = "<group>"; };
+		00A000000000000000000010 /* MeetingCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCard.swift; sourceTree = "<group>"; };
+		00A000000000000000000011 /* MeetingChunker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingChunker.swift; sourceTree = "<group>"; };
+		00A000000000000000000012 /* WikiEntityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiEntityResolver.swift; sourceTree = "<group>"; };
+		00A000000000000000000013 /* WikiKindProposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiKindProposer.swift; sourceTree = "<group>"; };
+		00A000000000000000000015 /* GeneratedWikiEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedWikiEngine.swift; sourceTree = "<group>"; };
+		00A000000000000000000016 /* WikiSearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiSearchService.swift; sourceTree = "<group>"; };
 		0065F99395EEC3EB77997C2C /* CleanupSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupSettings.swift; sourceTree = "<group>"; };
 		016C38149DDDAA03B88E35C0 /* PerformanceTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceTrace.swift; sourceTree = "<group>"; };
 		01A8B88DFD046F1EC74E5CD6 /* TranscriptionLabStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabStore.swift; sourceTree = "<group>"; };
@@ -285,6 +316,7 @@
 		5D68EDD354F149B2EF3963B7 /* CleanupModelProbe */ = {isa = PBXFileReference; includeInIndex = 0; path = CleanupModelProbe; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DCEBF68EFD590E3779D72D5 /* DiarizationSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiarizationSummary.swift; sourceTree = "<group>"; };
 		5F85AD0262D40047E6FCA3D8 /* UpdaterController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterController.swift; sourceTree = "<group>"; };
+		58A000000000000000000000 /* AppleSpeechAnalyzerBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechAnalyzerBackend.swift; sourceTree = "<group>"; };
 		624731D133FE2A9EB3A12740 /* MeetingTranscriptSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTranscriptSettings.swift; sourceTree = "<group>"; };
 		626F06D7734BB38A033B6F48 /* IndexManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexManifest.swift; sourceTree = "<group>"; };
 		648497BCB18036D3B10EADD2 /* MeetingHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingHistory.swift; sourceTree = "<group>"; };
@@ -496,6 +528,7 @@
 				B242BF76D6E42784C2A05EB5 /* Transcription */,
 				50C964CA46111D1FD8AFE84B /* UI */,
 				BD5B7BB40BFF38FE122102AC /* UsageStats */,
+				00C000000000000000000001 /* Wiki */,
 			);
 			path = GhostPepper;
 			sourceTree = "<group>";
@@ -525,6 +558,8 @@
 				659E43C6D2C350FE7DB967A3 /* PathSandbox.swift */,
 				E9369F8E6A32A99F693A5DF3 /* QAEvent.swift */,
 				F2387F1E285001F18E98F967 /* QATranscript.swift */,
+				00A000000000000000000003 /* QMDService.swift */,
+				00A000000000000000000016 /* WikiSearchService.swift */,
 				4EAB6FB92135AD07ACA34963 /* QwenToolCallParser.swift */,
 			);
 			path = QA;
@@ -606,6 +641,7 @@
 			isa = PBXGroup;
 			children = (
 				2CD55E5B8D8B9A82E9774A2C /* AccessibilityWindowTitles.swift */,
+				00A17B837D4D401A8E89F14A /* AirtableImporter.swift */,
 				9452C09EB8A7AC2E5E69A502 /* GranolaImporter.swift */,
 				CE672F443903BF4B47EF96EF /* MeetingDetector.swift */,
 				648497BCB18036D3B10EADD2 /* MeetingHistory.swift */,
@@ -622,6 +658,7 @@
 		50C964CA46111D1FD8AFE84B /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				00A17B857D4D401A8E89F14A /* AirtableImportView.swift */,
 				8EC7E1A9685759595E98ABB5 /* BuildIndexSheet.swift */,
 				1AC12AC919C182CDEF77DB11 /* CommandKSearchSheet.swift */,
 				95281DF90A125CA223FCEE7A /* ContextBubbleView.swift */,
@@ -634,6 +671,7 @@
 				AACCB8CD3CFA3BA1C91B5B87 /* MenuBarView.swift */,
 				3B68F46BA90BDD633868A8CE /* ModelInventoryViews.swift */,
 				CA0C0CBEADEB8791C4D738B1 /* ModelsSidebarView.swift */,
+				00A000000000000000000004 /* NewWikiSheet.swift */,
 				F0EBA7ECAEFCAC714F83C2C5 /* OnboardingWindow.swift */,
 				DB753C40197FA7255E1DEA29 /* PepperChatWindow.swift */,
 				2B43697CC08695B8E8F8AD01 /* PromptEditorWindow.swift */,
@@ -704,14 +742,31 @@
 			children = (
 				DCF8311B6325214FE6B40CDE /* IndexBuilder.swift */,
 				F14601041CEB40DAB3828382 /* IndexBuildEvent.swift */,
+				00A000000000000000000001 /* IndexBuilding.swift */,
 				2F32B8CF5E22FF8A9A5D42E8 /* IndexEntry.swift */,
 				AC8BC15638B3E29136594B44 /* IndexEntryFile.swift */,
 				BC2402355479C57FB26A884B /* IndexKind.swift */,
 				626F06D7734BB38A033B6F48 /* IndexManifest.swift */,
 				6D736758B588185CCE102504 /* IndexSystemPrompt.swift */,
 				48F971536E7FB4527A61DBC9 /* MarkdownArchivePaths.swift */,
+				00A000000000000000000002 /* WikiKindStore.swift */,
 			);
 			path = Indexing;
+			sourceTree = "<group>";
+		};
+		00C000000000000000000001 /* Wiki */ = {
+			isa = PBXGroup;
+			children = (
+				00A000000000000000000007 /* LocalStructuredLLM.swift */,
+				00A000000000000000000015 /* GeneratedWikiEngine.swift */,
+				00A000000000000000000008 /* LocalWikiEngine.swift */,
+				00A000000000000000000009 /* LocalWikiPrompts.swift */,
+				00A000000000000000000010 /* MeetingCard.swift */,
+				00A000000000000000000011 /* MeetingChunker.swift */,
+				00A000000000000000000012 /* WikiEntityResolver.swift */,
+				00A000000000000000000013 /* WikiKindProposer.swift */,
+			);
+			path = Wiki;
 			sourceTree = "<group>";
 		};
 		A02E15F442CE34FDC04742D1 = {
@@ -729,6 +784,7 @@
 		B242BF76D6E42784C2A05EB5 /* Transcription */ = {
 			isa = PBXGroup;
 			children = (
+				58A000000000000000000000 /* AppleSpeechAnalyzerBackend.swift */,
 				6CAEC58BA358D8ED4206D550 /* ChunkedTranscriptionPipeline.swift */,
 				5DCEBF68EFD590E3779D72D5 /* DiarizationSummary.swift */,
 				2771A24BE8CE83A8BDE8DB0B /* FluidAudioSpeechSession.swift */,
@@ -921,7 +977,7 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					5EBC085BD56A3725D371FB1A = {
-						DevelopmentTeam = BBVMGXR9AY;
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -1000,6 +1056,8 @@
 				1AB34878C4E7E375F34A1339 /* CleanupModelProbeRunner.swift in Sources */,
 				1D533340C55B7F67AE1B4E94 /* CleanupPromptBuilder.swift in Sources */,
 				17AF31EA19761CA8B7DF5F9A /* CleanupSettings.swift in Sources */,
+				00A17B867D4D401A8E89F14A /* AirtableImportView.swift in Sources */,
+				00A17B847D4D401A8E89F14A /* AirtableImporter.swift in Sources */,
 				9A6A342D232B4D11E8604B89 /* CommandKSearchSheet.swift in Sources */,
 				38CDCD968C2E4EBA2F8C59A5 /* ContextBubbleView.swift in Sources */,
 				2BEB4B4A879A749C8B92BE44 /* CorrectionStore.swift in Sources */,
@@ -1018,6 +1076,7 @@
 				BF329CF451CC34A3B74348CC /* HotkeyMonitor.swift in Sources */,
 				74C8907D76A8E0433442CA77 /* IndexBuildEvent.swift in Sources */,
 				C5D011A82469050DF1E7F462 /* IndexBuilder.swift in Sources */,
+				00B000000000000000000001 /* IndexBuilding.swift in Sources */,
 				269C54824B06E5918813D297 /* IndexEntry.swift in Sources */,
 				A9DB6627D058705A602BED84 /* IndexEntryFile.swift in Sources */,
 				9F0C599099252C3E7C8846F2 /* IndexEntryView.swift in Sources */,
@@ -1030,8 +1089,14 @@
 				B8877739DF84D885A825C19F /* LLMProvider.swift in Sources */,
 				CC795C47BAF8CEF62790BAFF /* LocalLLMCleanupBackend.swift in Sources */,
 				8F4C6360C1304C4A145DC34F /* LocalLLMProvider.swift in Sources */,
+				00B000000000000000000007 /* LocalStructuredLLM.swift in Sources */,
+				00B000000000000000000015 /* GeneratedWikiEngine.swift in Sources */,
+				00B000000000000000000008 /* LocalWikiEngine.swift in Sources */,
+				00B000000000000000000009 /* LocalWikiPrompts.swift in Sources */,
 				736FB3EB1125A9A9D328400E /* MarkdownArchivePaths.swift in Sources */,
 				FCEE3C748338E66F1246B917 /* MediaPlaybackController.swift in Sources */,
+				00B000000000000000000010 /* MeetingCard.swift in Sources */,
+				00B000000000000000000011 /* MeetingChunker.swift in Sources */,
 				47B377ADA2B2F12226744122 /* MeetingDetector.swift in Sources */,
 				C6F4C6C95E2835A2EEB58861 /* MeetingHistory.swift in Sources */,
 				52583C82CF1B27757D2154DC /* MeetingMarkdownWriter.swift in Sources */,
@@ -1047,8 +1112,10 @@
 				5589DDF10DE9446993C99B6B /* MenuBarView.swift in Sources */,
 				9A7637F5576B21D74F14149D /* ModelInventory.swift in Sources */,
 				C1A07FBD7318A26BA879232A /* ModelInventoryViews.swift in Sources */,
+				58A000000000000000000001 /* AppleSpeechAnalyzerBackend.swift in Sources */,
 				5AC883ADFD11721A8E9E4D37 /* ModelManager.swift in Sources */,
 				CD1993731E37C507B43CED9F /* ModelsSidebarView.swift in Sources */,
+				00B000000000000000000004 /* NewWikiSheet.swift in Sources */,
 				5AFD58B50823656E71CF3AA9 /* OCRContext.swift in Sources */,
 				CBDE26BEEBD0419A73D09DFC /* OCRRequestFactory.swift in Sources */,
 				CE62853358A180E54150BCA4 /* OnboardingWindow.swift in Sources */,
@@ -1066,6 +1133,8 @@
 				ACC06182C51F75BDF79E571E /* QAAttachment.swift in Sources */,
 				FD49BB359F176351FCAB7BBC /* QAEvent.swift in Sources */,
 				E30E215812243E696D4BA75F /* QATranscript.swift in Sources */,
+				00B000000000000000000003 /* QMDService.swift in Sources */,
+				00B000000000000000000016 /* WikiSearchService.swift in Sources */,
 				A5C0FD97A59CA8F8AACCF328 /* QwenToolCallParser.swift in Sources */,
 				ED6279A88A99C00B4F6C49CC /* ReaderCapture.swift in Sources */,
 				1F0BFAEE62163EFA88F3F19C /* ReaderCaptureSheet.swift in Sources */,
@@ -1096,6 +1165,9 @@
 				829C83DF25112D375A8DB767 /* UpdaterController.swift in Sources */,
 				3867702A684F28E1B31A4440 /* UsageReportView.swift in Sources */,
 				9114B9CC3A96A49F51A622A8 /* UsageStatsStore.swift in Sources */,
+				00B000000000000000000012 /* WikiEntityResolver.swift in Sources */,
+				00B000000000000000000002 /* WikiKindStore.swift in Sources */,
+				00B000000000000000000013 /* WikiKindProposer.swift in Sources */,
 				750B0226D3A035D24259B606 /* WindowCaptureService.swift in Sources */,
 				3B8354B1BAACB0F28DF98815 /* ZoBackend.swift in Sources */,
 			);
@@ -1184,15 +1256,15 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		1E4BC3C9A2D9995B5339A1F0 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
-				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_APP_SANDBOX = NO;
+			1E4BC3C9A2D9995B5339A1F0 /* Release */ = {
+				isa = XCBuildConfiguration;
+				baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
+				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
+					CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
+					COMBINE_HIDPI_IMAGES = YES;
+					ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1329,15 +1401,15 @@
 			};
 			name = Debug;
 		};
-		E539A0CB0CD4C3B8D54B2855 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
-				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_APP_SANDBOX = NO;
+			E539A0CB0CD4C3B8D54B2855 /* Debug */ = {
+				isa = XCBuildConfiguration;
+				baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
+				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
+					CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
+					COMBINE_HIDPI_IMAGES = YES;
+					ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = GhostPepper/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

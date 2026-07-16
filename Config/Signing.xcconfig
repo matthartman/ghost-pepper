@@ -3,6 +3,6 @@
 
 CODE_SIGN_IDENTITY = Apple Development
 CODE_SIGN_STYLE = Automatic
-DEVELOPMENT_TEAM = BBVMGXR9AY
+DEVELOPMENT_TEAM =
 
 #include? "LocalSigning.xcconfig"

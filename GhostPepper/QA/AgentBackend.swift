@@ -36,6 +36,7 @@ enum AgentBackend: Equatable {
         case .qwen35_2b_q4_k_m: return "Qwen 3.5 2B"
         case .qwen35_4b_q4_k_m: return "Qwen 3.5 4B"
         case .deepseek_r1_qwen_7b_q4_k_m: return "DeepSeek R1 7B"
+        case .gemma4_12b_it_optiq_4bit_mlx: return "Gemma 4 12B MLX"
         }
     }
 

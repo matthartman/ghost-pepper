@@ -7,6 +7,9 @@ import WhisperKit
 final class ModelManager: ObservableObject {
     typealias ModelLoadOverride = @MainActor (SpeechModelDescriptor) async throws -> Void
     typealias RetryDelayOverride = @MainActor () async -> Void
+    typealias SpeechAnalyzerBackendFactory = @MainActor (
+        _ language: String?
+    ) async throws -> any SpeechAnalyzerTranscribing
 
     private(set) var whisperKit: WhisperKit?
     private var fluidAudioManager: AsrManager?
@@ -16,6 +19,8 @@ final class ModelManager: ObservableObject {
     /// Stored as `Any?` because `Qwen3AsrManager` is `@available(macOS 15, *)`
     /// and the app deploys to macOS 14. Cast at use sites under `#available`.
     private var qwen3AsrManagerStorage: Any?
+    private var speechAnalyzerBackend: (any SpeechAnalyzerTranscribing)?
+    private var loadedSpeechAnalyzerLanguage: String?
 
     @Published private(set) var state: ModelManagerState = .idle
     @Published private(set) var downloadProgress: Double?
@@ -41,18 +46,23 @@ final class ModelManager: ObservableObject {
 
     private let modelLoadOverride: ModelLoadOverride?
     private let loadRetryDelayOverride: RetryDelayOverride?
+    private let speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory?
+    private var queuedLoadRequest: (name: String, language: String?)?
+    private var queuedLoadWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         modelName: String = SpeechModelCatalog.defaultModelID,
         modelLoadOverride: ModelLoadOverride? = nil,
-        loadRetryDelayOverride: RetryDelayOverride? = nil
+        loadRetryDelayOverride: RetryDelayOverride? = nil,
+        speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory? = nil
     ) {
         self.modelName = modelName
         self.modelLoadOverride = modelLoadOverride
         self.loadRetryDelayOverride = loadRetryDelayOverride
+        self.speechAnalyzerBackendFactory = speechAnalyzerBackendFactory
     }
 
-    func loadModel(name: String? = nil) async {
+    func loadModel(name: String? = nil, language: String? = nil) async {
         let requestedName = name ?? modelName
         guard let requestedModel = SpeechModelCatalog.model(named: requestedName) else {
             let missingModelError = NSError(
@@ -65,7 +75,18 @@ final class ModelManager: ObservableObject {
             return
         }
 
-        if requestedName != modelName && state == .ready {
+        if state == .loading {
+            queuedLoadRequest = (requestedName, language)
+            await withCheckedContinuation { continuation in
+                queuedLoadWaiters.append(continuation)
+            }
+            return
+        }
+
+        let speechAnalyzerLanguageChanged = requestedModel.backend == .speechAnalyzer
+            && speechAnalyzerBackend != nil
+            && loadedSpeechAnalyzerLanguage != language
+        if state == .ready && (requestedName != modelName || speechAnalyzerLanguageChanged) {
             resetLoadedModels()
         } else if state == .ready {
             return
@@ -80,7 +101,7 @@ final class ModelManager: ObservableObject {
 
         do {
             do {
-                try await loadRequestedModel(requestedModel)
+                try await loadRequestedModel(requestedModel, language: language)
             } catch {
                 guard Self.isRetryableLoadError(error) else {
                     throw error
@@ -89,7 +110,7 @@ final class ModelManager: ObservableObject {
                 debugLogger?(.model, "Speech model \(modelName) load timed out. Retrying once.")
                 clearLoadedModelInstances()
                 await retryLoadDelay()
-                try await loadRequestedModel(requestedModel)
+                try await loadRequestedModel(requestedModel, language: language)
             }
             self.state = .ready
             debugLogger?(.model, "Speech model \(modelName) loaded successfully.")
@@ -98,9 +119,20 @@ final class ModelManager: ObservableObject {
             self.state = .error
             debugLogger?(.model, "Speech model \(modelName) failed to load: \(error.localizedDescription)")
         }
+
+        guard let queuedLoadRequest else { return }
+        self.queuedLoadRequest = nil
+        await loadModel(name: queuedLoadRequest.name, language: queuedLoadRequest.language)
+
+        let waiters = queuedLoadWaiters
+        queuedLoadWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 
-    private func loadRequestedModel(_ requestedModel: SpeechModelDescriptor) async throws {
+    private func loadRequestedModel(
+        _ requestedModel: SpeechModelDescriptor,
+        language: String?
+    ) async throws {
         if let modelLoadOverride {
             try await modelLoadOverride(requestedModel)
             return
@@ -124,7 +156,33 @@ final class ModelManager: ObservableObject {
             case .parakeetV3, .none:
                 try await loadFluidAudioModel(requestedModel)
             }
+        case .speechAnalyzer:
+            try await loadSpeechAnalyzer(language: language)
         }
+    }
+
+    private func loadSpeechAnalyzer(language: String?) async throws {
+        let backend: any SpeechAnalyzerTranscribing
+        if let speechAnalyzerBackendFactory {
+            backend = try await speechAnalyzerBackendFactory(language)
+        } else if #available(macOS 26.0, *) {
+            backend = try await AppleSpeechAnalyzerBackend.prepare(
+                languageCode: language,
+                progressHandler: { [weak self] progress in
+                    self?.downloadProgress = progress
+                }
+            )
+        } else {
+            throw NSError(
+                domain: "GhostPepper.ModelManager",
+                code: 501,
+                userInfo: [NSLocalizedDescriptionKey: "Apple SpeechAnalyzer requires macOS 26 or later."]
+            )
+        }
+
+        speechAnalyzerBackend = backend
+        loadedSpeechAnalyzerLanguage = language
+        downloadProgress = nil
     }
 
     func transcribe(audioBuffer: [Float], language: String? = nil) async -> String? {
@@ -167,6 +225,9 @@ final class ModelManager: ObservableObject {
                     let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     return cleaned.isEmpty ? nil : cleaned
                 }
+            case .speechAnalyzer:
+                guard let speechAnalyzerBackend else { return nil }
+                return try await speechAnalyzerBackend.transcribe(audioBuffer: audioBuffer)
             }
         } catch {
             debugLogger?(.model, "Speech transcription failed for \(modelName): \(error.localizedDescription)")
@@ -456,6 +517,8 @@ final class ModelManager: ObservableObject {
         fluidAudioModels = nil
         sortformerModels = nil
         qwen3AsrManagerStorage = nil
+        speechAnalyzerBackend = nil
+        loadedSpeechAnalyzerLanguage = nil
         downloadProgress = nil
     }
 
@@ -587,6 +650,9 @@ final class ModelManager: ObservableObject {
     }
 
     func deleteCachedModel(_ model: SpeechModelDescriptor) {
+        guard model.isSystemManaged == false else {
+            return
+        }
         Self.removeCachedModelFiles(for: model)
 
         if model.name == modelName {
@@ -615,6 +681,8 @@ final class ModelManager: ObservableObject {
             case .qwen3AsrInt8:
                 break // Qwen3 cache cleanup handled by FluidAudio internally
             }
+        case .speechAnalyzer:
+            break
         }
     }
 
@@ -642,6 +710,8 @@ final class ModelManager: ObservableObject {
                 }
                 return false
             }
+        case .speechAnalyzer:
+            return true
         }
     }
 

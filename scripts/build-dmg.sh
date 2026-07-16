@@ -5,15 +5,27 @@ APP_NAME="GhostPepper"
 DMG_NAME="GhostPepper"
 BUILD_DIR="build"
 DMG_DIR="$BUILD_DIR/dmg"
-SIGNING_IDENTITY="Developer ID Application: Matthew Hartman (BBVMGXR9AY)"
-TEAM_ID="BBVMGXR9AY"
+SIGNING_IDENTITY="${GHOSTPEPPER_SIGNING_IDENTITY:-}"
+TEAM_ID="${GHOSTPEPPER_TEAM_ID:-}"
 SOURCE_ENTITLEMENTS="$(pwd)/GhostPepper/GhostPepper.entitlements"
 
 # Get version from Info.plist
-VERSION=$(defaults read "$(pwd)/GhostPepper/Info.plist" CFBundleShortVersionString)
-BUILD_NUMBER=$(defaults read "$(pwd)/GhostPepper/Info.plist" CFBundleVersion)
+VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$(pwd)/GhostPepper/Info.plist")
+BUILD_NUMBER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$(pwd)/GhostPepper/Info.plist")
 
 echo "==> Building $APP_NAME v$VERSION (build $BUILD_NUMBER)..."
+
+if [ -z "$SIGNING_IDENTITY" ] || [ -z "$TEAM_ID" ]; then
+  echo "ERROR: Set GHOSTPEPPER_SIGNING_IDENTITY and GHOSTPEPPER_TEAM_ID before building a signed DMG."
+  echo "Tip: put local signing overrides in Config/LocalSigning.xcconfig and export matching env vars for packaging."
+  exit 1
+fi
+
+if [ "${GHOSTPEPPER_SKIP_PRIVACY_PREFLIGHT:-0}" != "1" ]; then
+  ./scripts/privacy-security-preflight.sh
+else
+  echo "==> Skipping privacy/security preflight because GHOSTPEPPER_SKIP_PRIVACY_PREFLIGHT=1"
+fi
 
 echo "==> Cleaning..."
 rm -rf "$BUILD_DIR"
@@ -54,7 +66,6 @@ done
 ENTITLEMENTS_PLIST=$(mktemp)
 cp "$SOURCE_ENTITLEMENTS" "$ENTITLEMENTS_PLIST"
 /usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
-/usr/libexec/PlistBuddy -c "Delete :com.apple.security.app-sandbox" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
 codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime --entitlements "$ENTITLEMENTS_PLIST" "$APP_PATH"
 rm "$ENTITLEMENTS_PLIST"
 
@@ -115,6 +126,7 @@ echo ""
 echo "Done! DMG is at: $BUILD_DIR/$DMG_NAME.dmg ($DMG_SIZE bytes)"
 echo ""
 echo "Next steps:"
-echo "  1. Update appcast.xml with version $VERSION, size $DMG_SIZE, and signature above"
-echo "  2. Commit and push appcast.xml"
-echo "  3. Create a GitHub release: gh release create v$VERSION $BUILD_DIR/$DMG_NAME.dmg --title \"Ghost Pepper v$VERSION 🌶️\""
+echo "  1. Review docs/pre-deploy-privacy-security.md and fresh Codex audit findings"
+echo "  2. Update appcast.xml with version $VERSION, size $DMG_SIZE, and signature above"
+echo "  3. Commit and push appcast.xml"
+echo "  4. Create a GitHub release: gh release create v$VERSION $BUILD_DIR/$DMG_NAME.dmg --title \"Ghost Pepper v$VERSION 🌶️\""

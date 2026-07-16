@@ -3,9 +3,11 @@ build/
 DerivedData/
 *.xcuserstate
 xcuserdata/
+.codex/
 
 # Models (large binary files)
 Resources/models/
+GhostPepper/Resources/models/
 
 # Secrets
 .env
@@ -26,15 +28,41 @@ GhostPepper/Secrets.swift
 
 # Logs
 *.log
+
+# Local user data / generated private artifacts
+**/Ghost Pepper Meetings/
+/.indexes/
+/wikis/
+/Reads/
+/20??-??-??/
+**/transcription-lab/
+transcription-lab-index.json
+transcription-lab-timings.json
+debug-log.json
+cache-v6.json
+cache-v6.json.enc
+*.jsonl
+*.wav
+*.m4a
+*.mp3
+*.caf
+*.aiff
+*.mov
+*.mp4
+*.webm
+screenshots/
+Screenshots/
+
+# Only keep shipping-facing docs/assets in git.
 docs
 !docs/
 docs/*
 !docs/index.html
-!docs/superpowers/
-docs/superpowers/*
-!docs/superpowers/specs/
-!docs/superpowers/specs/**
-!docs/superpowers/plans/
-!docs/superpowers/plans/**
+!docs/pre-deploy-privacy-security.md
 .superpowers/
 inspo/
+
+# Local-only experiments that require an unsandboxed dev build
+GhostPepper/GhostPepper-Dev.entitlements
+GhostPepper/Meeting/GranolaSessionAuth.swift
+GhostPepper/Meeting/GranolaSessionSync.swift

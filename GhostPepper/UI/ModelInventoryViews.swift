@@ -24,12 +24,12 @@ struct ModelInventoryCard: View {
     }
 
     private func canDelete(_ row: RuntimeModelRow) -> Bool {
-        guard onDelete != nil else { return false }
+        guard onDelete != nil, row.allowsDeletion else { return false }
         return row.status == .loaded && !row.isSelected
     }
 
     private func canDownload(_ row: RuntimeModelRow) -> Bool {
-        guard onDownload != nil else { return false }
+        guard onDownload != nil, row.allowsManualDownload else { return false }
         return row.status == .notLoaded
     }
 }
@@ -52,6 +52,8 @@ private extension RuntimeModelStatus {
         case .downloading(let progress):
             let progressKey = progress.map { String(format: "%.3f", $0) } ?? "indeterminate"
             return "downloading-\(progressKey)"
+        case .systemManaged:
+            return "system-managed"
         }
     }
 }
@@ -137,6 +139,8 @@ private struct ModelInventoryRow: View {
             return "Downloading \(Int(progress * 100))%"
         case .downloading(nil):
             return "Preparing"
+        case .systemManaged:
+            return "Managed by macOS"
         }
     }
 }
@@ -158,6 +162,9 @@ private struct ModelInventoryStatusIndicator: View {
                     .foregroundStyle(.secondary)
             case .downloading(let progress):
                 PieProgressIndicator(progress: progress)
+            case .systemManaged:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
             }
         }
         .font(.caption)
