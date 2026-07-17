@@ -39,7 +39,7 @@ warn_on_output() {
 
 check_no_output \
   "Tracked private/generated artifact paths found. Move them out of the repo or update ignores before deploying." \
-  \"git ls-files | rg -n '(^|/)(Ghost Pepper Meetings|transcription-lab|screenshots|Screenshots|\\.indexes|wikis|Reads)(/|$)|(^|/)(debug-log\\.json|cache-v6\\.json|cache-v6\\.json\\.enc|transcription-lab-index\\.json|transcription-lab-timings\\.json)$|(^|/)(20[0-9]{2}-[0-9]{2}-[0-9]{2})(/|$)|\\.(wav|m4a|mp3|caf|aiff|mov|mp4|webm)$'\"
+  "git ls-files | rg -n '(^|/)(Ghost Pepper Meetings|transcription-lab|screenshots|Screenshots|\\.indexes|wikis|Reads)(/|$)|(^|/)(debug-log\\.json|cache-v6\\.json|cache-v6\\.json\\.enc|transcription-lab-index\\.json|transcription-lab-timings\\.json)$|(^|/)(20[0-9]{2}-[0-9]{2}-[0-9]{2})(/|$)|\\.(wav|m4a|mp3|caf|aiff|mov|mp4|webm)$'"
 
 check_no_output \
   "Likely credentials or private keys found in tracked files." \
