@@ -23,9 +23,17 @@ open_app() {
     /usr/bin/open -n "$APP_BUNDLE"
 }
 
+open_onboarding() {
+    defaults write "$BUNDLE_ID" onboardingCompleted -bool false
+    /usr/bin/open -n "$APP_BUNDLE" --args --force-onboarding
+}
+
 case "$MODE" in
     run)
         open_app
+        ;;
+    onboarding|--onboarding)
+        open_onboarding
         ;;
     --debug|debug)
         lldb -- "$APP_BINARY"
@@ -44,7 +52,7 @@ case "$MODE" in
         pgrep -x "$APP_NAME" >/dev/null
         ;;
     *)
-        echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+        echo "usage: $0 [run|onboarding|--debug|--logs|--telemetry|--verify]" >&2
         exit 2
         ;;
 esac

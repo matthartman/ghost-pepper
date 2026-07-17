@@ -706,7 +706,7 @@ class AppState: ObservableObject {
             overlay.show(message: .modelLoading)
         }
         debugLogStore.record(category: .model, message: "App initialization started.")
-        if !modelManager.isReady {
+        if !modelManager.isReady || modelManager.modelName != speechModel {
             await loadSpeechModel(name: speechModel)
         }
         if showOverlay {
@@ -897,6 +897,10 @@ class AppState: ObservableObject {
               modelManager.isReady,
               modelManager.modelName == speechModel,
               speechAnalyzerReloadsInFlight == 0 else {
+            debugLogStore.record(
+                category: .hotkey,
+                message: "Recording start skipped because app is not ready. status=\(status.rawValue), modelReady=\(modelManager.isReady), loadedSpeechModel=\(modelManager.modelName), selectedSpeechModel=\(speechModel), speechAnalyzerReloadsInFlight=\(speechAnalyzerReloadsInFlight)"
+            )
             if status == .loading
                 || !modelManager.isReady
                 || modelManager.modelName != speechModel

@@ -1,12 +1,10 @@
 import Foundation
 
-/// Imports meeting notes from Granola's local cache and API into Ghost Pepper's markdown format.
+/// Imports meeting notes from Granola's public API into Ghost Pepper's markdown format.
 @MainActor
 final class GranolaImporter: ObservableObject {
     enum ImportState: Equatable {
         case idle
-        case importingLocal
-        case localDone(count: Int, enriched: Int)
         case needsApiKey
         case fetchingNotes(current: Int, total: Int)
         case done(imported: Int, transcripts: Int, enriched: Int)
@@ -15,8 +13,6 @@ final class GranolaImporter: ObservableObject {
         static func == (lhs: ImportState, rhs: ImportState) -> Bool {
             switch (lhs, rhs) {
             case (.idle, .idle): return true
-            case (.importingLocal, .importingLocal): return true
-            case (.localDone(let a1, let a2), .localDone(let b1, let b2)): return a1 == b1 && a2 == b2
             case (.needsApiKey, .needsApiKey): return true
             case (.fetchingNotes(let a1, let a2), .fetchingNotes(let b1, let b2)): return a1 == b1 && a2 == b2
             case (.done(let a1, let a2, let a3), .done(let b1, let b2, let b3)): return a1 == b1 && a2 == b2 && a3 == b3
@@ -35,11 +31,6 @@ final class GranolaImporter: ObservableObject {
         didSet { _ = KeychainHelper.set(granolaApiKey, for: Self.granolaApiKeyKeychainKey) }
     }
 
-    nonisolated private static let cachePath = NSHomeDirectory() + "/Library/Application Support/Granola/cache-v6.json"
-    /// Suffix appended to every local-cache failure message so the user
-    /// knows the API path is still a live option.
-    private static let apiPivotHint = "Use the API-key path below — get a key from Granola Settings → API Key → Create new key."
-
     private static func debugLog(_ msg: @autoclosure () -> String) {
         #if DEBUG
         let message = msg()
@@ -49,11 +40,6 @@ final class GranolaImporter: ObservableObject {
         #endif
     }
 
-    /// Whether the Granola cache file exists on disk.
-    static var isCacheAvailable: Bool {
-        FileManager.default.fileExists(atPath: cachePath)
-    }
-
     static var isInstalled: Bool {
         [
             "/Applications/Granola.app",
@@ -61,127 +47,10 @@ final class GranolaImporter: ObservableObject {
         ].contains { FileManager.default.fileExists(atPath: $0) }
     }
 
-    /// Count of valid Granola documents whose target markdown file does not yet exist
-    /// in the meetings save directory. Mirrors the dedup logic in `importFromLocalCache`
-    /// so the count matches what an actual sync would write. Returns nil if cache is
-    /// missing or unreadable.
+    /// Local Granola cache reads are intentionally disabled. Import uses only
+    /// Granola's public API after the user provides an API key.
     nonisolated static func pendingImportCount(savedTo directory: URL) -> Int? {
-        guard let data = FileManager.default.contents(atPath: cachePath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cache = json["cache"] as? [String: Any],
-              let stateDict = cache["state"] as? [String: Any],
-              let documents = stateDict["documents"] as? [String: [String: Any]] else {
-            return nil
-        }
-
-        var pending = 0
-        for (_, doc) in documents {
-            if doc["deleted_at"] != nil && !(doc["deleted_at"] is NSNull) { continue }
-            if let valid = doc["valid_meeting"] as? Bool, !valid { continue }
-            let notesMd = doc["notes_markdown"] as? String
-            let notesPlain = doc["notes_plain"] as? String
-            let summary = doc["summary"] as? String
-            guard (notesMd?.isEmpty == false) || (notesPlain?.isEmpty == false) || (summary?.isEmpty == false) else { continue }
-
-            let title = (doc["title"] as? String) ?? "Untitled"
-            let createdAt = doc["created_at"] as? String ?? ""
-            let dateFolder = Self.dateFolder(from: createdAt)
-            let slug = Self.slugify(title)
-            let filePath = directory
-                .appendingPathComponent(dateFolder)
-                .appendingPathComponent("\(slug).md")
-            if !FileManager.default.fileExists(atPath: filePath.path) {
-                pending += 1
-            }
-        }
-        return pending
-    }
-
-    // MARK: - Local Cache Import
-
-    func importFromLocalCache(to directory: URL) async -> (imported: Int, enriched: Int) {
-        state = .importingLocal
-
-        guard let data = FileManager.default.contents(atPath: Self.cachePath) else {
-            state = .error("Could not read Granola cache file. \(Self.apiPivotHint)")
-            return (0, 0)
-        }
-
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let cache = json["cache"] as? [String: Any],
-              let stateDict = cache["state"] as? [String: Any],
-              let documents = stateDict["documents"] as? [String: [String: Any]] else {
-            // Granola v6 ships an encrypted store alongside the plain JSON;
-            // when the plain file is just UI state without `documents`, the
-            // encrypted sibling is where the actual data lives.
-            let encryptedPath = Self.cachePath + ".enc"
-            if FileManager.default.fileExists(atPath: encryptedPath) {
-                state = .error("Granola v6 encrypts its local cache (cache-v6.json.enc). The local-cache importer can't read it. \(Self.apiPivotHint)")
-            } else {
-                state = .error("Could not parse Granola cache structure. \(Self.apiPivotHint)")
-            }
-            return (0, 0)
-        }
-
-        var written = 0
-        var enriched = 0
-
-        for (docId, doc) in documents {
-            // Skip deleted
-            if doc["deleted_at"] != nil && !(doc["deleted_at"] is NSNull) { continue }
-
-            // Skip invalid meetings
-            if let valid = doc["valid_meeting"] as? Bool, !valid { continue }
-
-            // Skip empty
-            let notesMd = doc["notes_markdown"] as? String
-            let notesPlain = doc["notes_plain"] as? String
-            let summary = doc["summary"] as? String
-            guard (notesMd != nil && !notesMd!.isEmpty) ||
-                  (notesPlain != nil && !notesPlain!.isEmpty) ||
-                  (summary != nil && !summary!.isEmpty) else { continue }
-
-            let title = (doc["title"] as? String) ?? "Untitled"
-            let createdAt = doc["created_at"] as? String ?? ""
-
-            // Date folder
-            let dateFolder = Self.dateFolder(from: createdAt)
-            let slug = Self.slugify(title)
-            let dir = directory.appendingPathComponent(dateFolder)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let filePath = dir.appendingPathComponent("\(slug).md")
-
-            // Build markdown
-            let markdown = Self.buildMarkdown(
-                docId: docId,
-                title: title,
-                createdAt: createdAt,
-                summary: summary,
-                notes: notesMd ?? notesPlain,
-                chapters: doc["chapters"] as? [[String: Any]],
-                people: doc["people"],
-                rawGranolaPayload: [
-                    "source": "local-cache",
-                    "document": doc
-                ]
-            )
-
-            if FileManager.default.fileExists(atPath: filePath.path) {
-                guard let existing = try? String(contentsOf: filePath, encoding: .utf8),
-                      !Self.hasGranolaEnrichment(existing) else {
-                    continue
-                }
-                let merged = Self.mergeGranolaEnrichment(from: markdown, into: existing)
-                try? merged.write(to: filePath, atomically: true, encoding: .utf8)
-                enriched += 1
-            } else {
-                try? markdown.write(to: filePath, atomically: true, encoding: .utf8)
-                written += 1
-            }
-        }
-
-        state = .localDone(count: written, enriched: enriched)
-        return (written, enriched)
+        nil
     }
 
     // MARK: - API Transcript Fetching

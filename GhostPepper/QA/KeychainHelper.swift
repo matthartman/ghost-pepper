@@ -27,14 +27,17 @@ enum KeychainHelper {
         return status == errSecSuccess
     }
 
-    static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
+    static func get(_ key: String, allowUserInteraction: Bool = false) -> String? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
         ]
+        if !allowUserInteraction {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -55,7 +58,7 @@ enum KeychainHelper {
 
     @discardableResult
     static func migrateUserDefaultsString(defaultsKey: String, keychainKey: String, defaults: UserDefaults = .standard) -> String? {
-        if let existing = get(keychainKey), !existing.isEmpty {
+        if let existing = get(keychainKey, allowUserInteraction: false), !existing.isEmpty {
             defaults.removeObject(forKey: defaultsKey)
             return existing
         }

@@ -75,7 +75,7 @@ class MicLevelMonitor: ObservableObject {
 class OnboardingWindowController {
     private var window: NSWindow?
 
-    func show(appState: AppState, onComplete: @escaping () -> Void) {
+    func show(appState: AppState, onComplete: @escaping () async -> Void) {
         dismiss()
 
         // Show in dock/Cmd+Tab during onboarding
@@ -84,8 +84,8 @@ class OnboardingWindowController {
         // Delay slightly to let activation policy take effect
         DispatchQueue.main.async {
             let onboardingView = OnboardingView(appState: appState, onComplete: { [weak self] in
+                await onComplete()
                 self?.dismiss()
-                onComplete()
             })
 
             let window = NSWindow(
@@ -121,7 +121,7 @@ class OnboardingWindowController {
 
 struct OnboardingView: View {
     @ObservedObject var appState: AppState
-    let onComplete: () -> Void
+    let onComplete: () async -> Void
     @State private var currentStep = 1
 
     private var completionStep: Int {
@@ -156,7 +156,9 @@ struct OnboardingView: View {
 
     private func completeOnboarding() {
         UserDefaults.standard.set(true, forKey: "onboardingCompleted")
-        onComplete()
+        Task {
+            await onComplete()
+        }
     }
 }
 
@@ -241,15 +243,19 @@ struct SetupStep: View {
     @StateObject private var screenRecordingPermission = ScreenRecordingPermissionController()
 
     private var allComplete: Bool {
-        micGranted && accessibilityGranted && localIntelligenceReady
+        micGranted && accessibilityGranted && requiredModelsReady
     }
 
-    private var secondBrainModelReady: Bool {
-        appState.textCleanupManager.cachedModelKinds.contains(appState.selectedWikiModelKind)
+    private var voiceModelReady: Bool {
+        modelManager.isReady
     }
 
-    private var localIntelligenceReady: Bool {
-        modelManager.isReady && secondBrainModelReady
+    private var cleanupModelReady: Bool {
+        appState.textCleanupManager.isReady
+    }
+
+    private var requiredModelsReady: Bool {
+        voiceModelReady && cleanupModelReady
     }
 
     private var localIntelligenceStatus: String {
@@ -257,12 +263,12 @@ struct SetupStep: View {
             return "Download failed"
         }
 
-        if let activeDownload = RuntimeModelInventory.activeDownloadText(rows: modelRows) {
+        if let activeDownload = RuntimeModelInventory.activeDownloadText(rows: [speechModelRow, cleanupModelRow].compactMap(\.self)) {
             return activeDownload
         }
 
-        if modelManager.isReady && secondBrainModelReady {
-            return "Ready for dictation, meetings, wiki, and Q&A"
+        if requiredModelsReady {
+            return "Ready for voice-to-text"
         }
 
         return "Downloading the local models Ghost Pepper needs"
@@ -277,13 +283,17 @@ struct SetupStep: View {
             cachedSpeechModelNames: modelManager.cachedModelNames,
             cleanupState: appState.textCleanupManager.state,
             selectedCleanupModelKind: appState.textCleanupManager.selectedCleanupModelKind,
-            selectedWikiModelKind: appState.selectedWikiModelKind,
+            selectedWikiModelKind: nil,
             cachedCleanupKinds: appState.textCleanupManager.cachedModelKinds
         )
     }
 
-    private var secondBrainModelRow: RuntimeModelRow? {
-        guard let descriptor = TextCleanupManager.cleanupModels.first(where: { $0.kind == appState.selectedWikiModelKind }) else {
+    private var speechModelRow: RuntimeModelRow? {
+        modelRows.first(where: { $0.id == appState.speechModel })
+    }
+
+    private var cleanupModelRow: RuntimeModelRow? {
+        guard let descriptor = TextCleanupManager.cleanupModels.first(where: { $0.kind == appState.textCleanupManager.selectedCleanupModelKind }) else {
             return nil
         }
         return modelRows.first(where: { $0.id == "cleanup-\(descriptor.fileName)" })
@@ -419,10 +429,10 @@ struct SetupStep: View {
 
                 VStack(spacing: 8) {
                     SetupRow(
-                        icon: "brain",
-                        title: "Local Intelligence",
+                        icon: "waveform",
+                        title: "Local Models",
                         subtitle: localIntelligenceStatus,
-                        isComplete: localIntelligenceReady
+                        isComplete: requiredModelsReady
                     ) {
                         if modelManager.state == .loading || appState.textCleanupManager.state.isLoading {
                             ProgressView()
@@ -438,8 +448,8 @@ struct SetupStep: View {
                     }
 
                     OnboardingModelSummary(
-                        speechModelRow: modelRows.first(where: { $0.isSelected }),
-                        secondBrainModelRow: secondBrainModelRow
+                        speechModelRow: speechModelRow,
+                        cleanupModelRow: cleanupModelRow
                     )
                 }
             }
@@ -464,13 +474,13 @@ struct SetupStep: View {
                 .padding(.bottom, 24)
             } else {
                 Button(action: {
-                    let tweet = "Trying out Ghost Pepper 🌶️ and liking it so far."
+                    let tweet = "hey @matthartman I'm trying out Ghost Pepper 🌶️ will let you know how I like it!"
                     let encoded = tweet.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
                     if let url = URL(string: "https://twitter.com/intent/tweet?text=\(encoded)") {
                         NSWorkspace.shared.open(url)
                     }
                 }) {
-                    Text("📣 Share Ghost Pepper")
+                    Text("📣 Tell Matt you're trying out Ghost Pepper!")
                         .font(.callout)
                 }
                 .buttonStyle(.plain)
@@ -490,7 +500,7 @@ struct SetupStep: View {
                 micLevel.start(deviceID: selectedDeviceID == 0 ? nil : selectedDeviceID)
             }
 
-            if !localIntelligenceLoadStarted && !localIntelligenceReady {
+            if !localIntelligenceLoadStarted && !requiredModelsReady {
                 localIntelligenceLoadStarted = true
                 Task { await loadRequiredLocalModels() }
             }
@@ -526,8 +536,8 @@ struct SetupStep: View {
     }
 
     private func loadRequiredLocalModels() async {
-        await modelManager.loadModel()
-        await appState.textCleanupManager.loadModel(kind: appState.selectedWikiModelKind)
+        await modelManager.loadModel(name: appState.speechModel)
+        await appState.textCleanupManager.loadModel(kind: appState.textCleanupManager.selectedCleanupModelKind)
     }
 }
 
@@ -584,15 +594,15 @@ struct SetupRow<Actions: View>: View {
 
 private struct OnboardingModelSummary: View {
     let speechModelRow: RuntimeModelRow?
-    let secondBrainModelRow: RuntimeModelRow?
+    let cleanupModelRow: RuntimeModelRow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let row = speechModelRow {
                 OnboardingModelRow(label: "Voice", name: row.name, size: row.sizeDescription, status: row.status)
             }
-            if let row = secondBrainModelRow {
-                OnboardingModelRow(label: "Brain", name: row.name, size: row.sizeDescription, status: row.status)
+            if let row = cleanupModelRow {
+                OnboardingModelRow(label: "Cleanup", name: row.name, size: row.sizeDescription, status: row.status)
             }
 
             Text("Ghost Pepper picks these during onboarding. Advanced model controls live in Settings.")
@@ -908,8 +918,6 @@ struct KeyCap: View {
 
 struct GranolaOnboardingStep: View {
     let onContinue: () -> Void
-    @StateObject private var importer = GranolaImporter()
-    @StateObject private var meetingState = MeetingWindowState()
     @State private var showImporter = false
 
     var body: some View {
@@ -956,8 +964,17 @@ struct GranolaOnboardingStep: View {
             .padding(.bottom, 24)
         }
         .sheet(isPresented: $showImporter, onDismiss: onContinue) {
-            GranolaImportView(importer: importer, state: meetingState)
+            GranolaImportSheet()
         }
+    }
+}
+
+private struct GranolaImportSheet: View {
+    @StateObject private var importer = GranolaImporter()
+    @StateObject private var meetingState = MeetingWindowState()
+
+    var body: some View {
+        GranolaImportView(importer: importer, state: meetingState)
     }
 }
 
@@ -965,6 +982,7 @@ struct GranolaOnboardingStep: View {
 
 struct DoneStep: View {
     let onComplete: () -> Void
+    @State private var isCompleting = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -1029,14 +1047,25 @@ struct DoneStep: View {
 
             Spacer()
 
-            Button(action: onComplete) {
-                Text("Start Using Ghost Pepper")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+            Button {
+                guard !isCompleting else { return }
+                isCompleting = true
+                onComplete()
+            } label: {
+                HStack(spacing: 8) {
+                    if isCompleting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(isCompleting ? "Finishing Setup..." : "Start Using Ghost Pepper")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
+            .disabled(isCompleting)
             .padding(.horizontal, 40)
             .padding(.bottom, 24)
         }

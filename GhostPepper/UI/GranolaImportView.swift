@@ -5,6 +5,7 @@ struct GranolaImportView: View {
     @ObservedObject var importer: GranolaImporter
     @ObservedObject var state: MeetingWindowState
     @Environment(\.dismiss) private var dismiss
+    @State private var importStarted = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -20,23 +21,10 @@ struct GranolaImportView: View {
             switch importer.state {
             case .idle:
                 idleView
-            case .importingLocal:
-                ProgressView("Importing meetings from local cache...")
-            case .localDone(let count, let enriched):
-                localDoneView(count: count, enriched: enriched)
             case .needsApiKey:
                 apiKeyView
             case .fetchingNotes(let current, let total):
-                VStack(spacing: 8) {
-                    if total == 0 {
-                        ProgressView("Fetching note list from Granola...")
-                    } else {
-                        ProgressView("Enriching notes... \(current)/\(total)")
-                    }
-                    Text("This may take a few minutes")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                progressView(current: current, total: total)
             case .done(let imported, let transcripts, let enriched):
                 doneView(imported: imported, transcripts: transcripts, enriched: enriched)
             case .error(let message):
@@ -45,37 +33,22 @@ struct GranolaImportView: View {
         }
         .padding(32)
         .frame(width: 420)
-        .task {
-            // Every sheet open kicks off a fresh import — try local first
-            // (silent if Granola's v6 encrypted cache is in use), then API
-            // if a key is configured. Avoids the "Start Import → fail →
-            // Try Again" dance the user used to have to do.
+        .onAppear {
+            guard !importStarted else { return }
+            importStarted = true
             if case .fetchingNotes = importer.state { return }
-            if case .importingLocal = importer.state { return }
             importer.state = .idle
-            await runAutoImport()
+            Task { await runAutoImport() }
         }
     }
 
-    /// Single-shot orchestrator that runs on sheet open. Calls the local-
-    /// cache importer (which now fails fast and quietly when Granola's v6
-    /// encrypted store is in use), then the API path if a key is configured.
-    /// Routes to the right end-state without making the user click "Start
-    /// Import" or "Try Again".
+    /// Single-shot orchestrator that runs on sheet open. Uses only Granola's
+    /// public API, and prompts for an API key if one is not configured.
     private func runAutoImport() async {
         let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-        let localSummary = await importer.importFromLocalCache(to: dir)
-        state.loadHistory()
-        let localChanged = localSummary.imported + localSummary.enriched
-        if localChanged > 0 {
-            NotificationCenter.default.post(name: .granolaImported, object: localChanged)
-        }
 
         let hasApiKey = !importer.granolaApiKey.isEmpty
         if hasApiKey {
-            // Override any local error state — we're going to try the API
-            // regardless. Errors from the API path itself are surfaced by
-            // `fetchTranscripts` and end up in `.error`.
             importer.state = .fetchingNotes(current: 0, total: 0)
             let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
             state.loadHistory()
@@ -83,51 +56,32 @@ struct GranolaImportView: View {
             if apiChanged > 0 {
                 NotificationCenter.default.post(name: .granolaImported, object: apiChanged)
             }
-            // If `fetchTranscripts` already routed to `.error` (e.g. HTTP
-            // failure), leave that in place so the user sees what went
-            // wrong. Otherwise summarize.
             if case .error = importer.state {
-                // keep the API error state
+                // Keep the API error state.
             } else {
                 importer.state = .done(
-                    imported: localSummary.imported + apiSummary.imported,
+                    imported: apiSummary.imported,
                     transcripts: apiSummary.transcripts,
-                    enriched: localSummary.enriched + apiSummary.enriched
+                    enriched: apiSummary.enriched
                 )
             }
             return
         }
 
-        // No API key. If local succeeded, show its summary; otherwise prompt
-        // for a key so the user can pivot in one click instead of bouncing
-        // off "Try Again."
-        if localChanged > 0 {
-            importer.state = .localDone(count: localSummary.imported, enriched: localSummary.enriched)
-        } else {
-            importer.state = .needsApiKey
-        }
+        importer.state = .needsApiKey
     }
 
     // MARK: - States
 
     private var idleView: some View {
         VStack(spacing: 12) {
-            Text("Import your meeting notes, summaries, and chapters from Granola's local cache.")
+            Text("Import your meeting notes, summaries, and transcripts from the Granola API.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            Button("Start Import") {
-                Task {
-                    let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-                    let summary = await importer.importFromLocalCache(to: dir)
-                    state.loadHistory()
-                    let changed = summary.imported + summary.enriched
-                    if changed > 0 {
-                        NotificationCenter.default.post(name: .granolaImported, object: changed)
-                        importer.state = .localDone(count: summary.imported, enriched: summary.enriched)
-                    }
-                }
+            Button("Enter API Key") {
+                importer.state = .needsApiKey
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
@@ -138,94 +92,58 @@ struct GranolaImportView: View {
         }
     }
 
-    private func localDoneView(count: Int, enriched: Int) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 28))
-                .foregroundColor(.green)
-
-            importSummaryText(imported: count, transcripts: 0, enriched: enriched)
-                .font(.callout.weight(.medium))
-
-            Divider()
-
-            Text("Want to fetch full notes & transcripts from the Granola API?")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            Text("Open **Granola** → **Settings** → **API Key** → **Create new key** and paste it below.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            SecureField("Granola API key", text: $importer.granolaApiKey)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 320)
-
-            Link("How to get an API key", destination: URL(string: "https://docs.granola.ai/introduction#obtaining-an-api-key")!)
-                .font(.caption)
-
-            HStack(spacing: 12) {
-                Button("Fetch Notes & Transcripts") {
-                    Task {
-                        let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-                        let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
-                        state.loadHistory()
-                        let changed = apiSummary.imported + apiSummary.enriched
-                        if changed > 0 {
-                            NotificationCenter.default.post(name: .granolaImported, object: changed)
-                        }
-                        importer.state = .done(
-                            imported: count + apiSummary.imported,
-                            transcripts: apiSummary.transcripts,
-                            enriched: enriched + apiSummary.enriched
-                        )
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
-                .disabled(importer.granolaApiKey.isEmpty)
-
-                Button("Skip") {
-                    dismiss()
-                    state.loadHistory()
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.secondary)
-            }
-        }
-    }
-
     private var apiKeyView: some View {
         VStack(spacing: 12) {
             Text("Enter your Granola API key to fetch transcripts.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
+            Text("In Granola, go to Account → Settings → Connectors → Personal API Key.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
             SecureField("Granola API key", text: $importer.granolaApiKey)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 320)
 
-            Link("How to get an API key", destination: URL(string: "https://docs.granola.ai/introduction#obtaining-an-api-key")!)
-                .font(.caption)
-
             Button("Fetch Transcripts") {
-                Task {
-                    let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
-                    let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
-                    state.loadHistory()
-                    let changed = apiSummary.imported + apiSummary.enriched
-                    if changed > 0 {
-                        NotificationCenter.default.post(name: .granolaImported, object: changed)
-                    }
-                    importer.state = .done(imported: apiSummary.imported, transcripts: apiSummary.transcripts, enriched: apiSummary.enriched)
-                }
+                Task { await runAPIImport() }
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
             .disabled(importer.granolaApiKey.isEmpty)
         }
+    }
+
+    private func progressView(current: Int, total: Int) -> some View {
+        VStack(spacing: 12) {
+            if total == 0 {
+                ProgressView("Fetching note list from Granola...")
+            } else {
+                ProgressView("Enriching notes... \(current)/\(total)")
+            }
+
+            Text("This may take a few minutes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button("Continue in Background") {
+                dismiss()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private func runAPIImport() async {
+        let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
+        let apiSummary = await importer.fetchTranscripts(apiKey: importer.granolaApiKey, to: dir)
+        state.loadHistory()
+        let changed = apiSummary.imported + apiSummary.enriched
+        if changed > 0 {
+            NotificationCenter.default.post(name: .granolaImported, object: changed)
+        }
+        importer.state = .done(imported: apiSummary.imported, transcripts: apiSummary.transcripts, enriched: apiSummary.enriched)
     }
 
     private func doneView(imported: Int, transcripts: Int, enriched: Int) -> some View {
@@ -278,24 +196,12 @@ struct GranolaImportView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            // If the local-cache path failed (and an encrypted cache file
-            // exists, which is the post-v6 reality), surface the API path as
-            // the primary recovery action rather than just "Try Again".
-            let mentionsApi = message.contains("API-key") || message.contains("encrypts")
-
             HStack(spacing: 12) {
-                if mentionsApi {
-                    Button("Enter API key") {
-                        importer.state = .needsApiKey
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-                } else {
-                    Button("Try Again") {
-                        importer.state = .idle
-                    }
-                    .buttonStyle(.bordered)
+                Button("Enter API Key") {
+                    importer.state = .needsApiKey
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
 
                 Button("Close") { dismiss() }
                     .buttonStyle(.plain)

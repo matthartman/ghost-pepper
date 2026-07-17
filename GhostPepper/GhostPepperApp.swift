@@ -8,6 +8,7 @@ class LazyUpdaterController {
 @main
 struct GhostPepperApp: App {
     private static let automaticTerminationReason = "Ghost Pepper keeps a persistent menu bar presence."
+    private static let forceOnboarding = ProcessInfo.processInfo.arguments.contains("--force-onboarding")
     @StateObject private var appState = AppState()
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
     @State private var hasInitialized = false
@@ -50,7 +51,14 @@ struct GhostPepperApp: App {
                 ProcessInfo.processInfo.disableAutomaticTermination(Self.automaticTerminationReason)
                 guard !hasInitialized else { return }
                 hasInitialized = true
-                if onboardingCompleted {
+                if Self.forceOnboarding {
+                    onboardingCompleted = false
+                    onboardingController.show(appState: appState) {
+                        onboardingCompleted = true
+                        await appState.initialize()
+                        appState.showMeetingTranscriptWindow()
+                    }
+                } else if onboardingCompleted {
                     Task {
                         await appState.initialize()
                         appState.showMeetingTranscriptWindow()
@@ -58,10 +66,8 @@ struct GhostPepperApp: App {
                 } else {
                     onboardingController.show(appState: appState) {
                         onboardingCompleted = true
-                        Task {
-                            await appState.initialize()
-                            appState.showMeetingTranscriptWindow()
-                        }
+                        await appState.initialize()
+                        appState.showMeetingTranscriptWindow()
                     }
                 }
             }
