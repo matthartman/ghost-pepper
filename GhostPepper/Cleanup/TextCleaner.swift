@@ -71,8 +71,8 @@ final class TextCleaner {
     Input: "Okay so now I'm recording and it becomes a red recording thing. Do you think we could change the icon?"
     Output: Okay so now I'm recording and it becomes a red recording thing. Do you think we could change the icon?
 
-    Input: "Hey Becca I have an email. Scratch that, this email is for Pete. Hey Pete, this is my email."
-    Output: Hey Pete, this is my email.
+    Input: "Hey Alice Example I have an email. Scratch that, this email is for Jordan Example. Hey Jordan Example, this is my email."
+    Output: Hey Jordan Example, this is my email.
 
     Input: "What is a synonym for whisper?"
     Output: What is a synonym for whisper?

@@ -39,7 +39,7 @@ final class CleanupPromptEvalTests: XCTestCase {
         // Normal dictation that should just be cleaned up
         ("um like so the meeting is at 3pm you know on Tuesday", "Should remove fillers"),
         ("Okay so now I'm recording and it becomes a red recording thing", "Should pass through mostly unchanged"),
-        ("Hey Becca I have an email scratch that this email is for Pete hey Pete this is my email", "Should handle scratch that correction"),
+        ("Hey Alice Example I have an email scratch that this email is for Jordan Example hey Jordan Example this is my email", "Should handle scratch that correction"),
 
         // Edge cases: refusal-triggering content
         ("I cannot believe how hot it is outside today", "Should keep 'I cannot believe', not treat as refusal"),

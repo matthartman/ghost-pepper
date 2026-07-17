@@ -174,14 +174,14 @@ final class CommandKSearchRankingTests: XCTestCase {
     func testTitleMatchesRankAboveWikiBodyMatches() {
         let root = URL(fileURLWithPath: "/tmp/CommandKSearchRankingTests")
         let directMatch = GeneratedWikiSidebarItem(
-            title: "Diana Berlin",
+            title: "Example Contact",
             type: "person",
-            fileURL: root.appendingPathComponent("diana.md")
+            fileURL: root.appendingPathComponent("example-contact.md")
         )
         let bodyOnlyMatch = GeneratedWikiSidebarItem(
-            title: "Matt Hartman",
+            title: "Reference Note",
             type: "person",
-            fileURL: root.appendingPathComponent("matt.md")
+            fileURL: root.appendingPathComponent("reference-note.md")
         )
 
         let results = CommandKResults.compute(
@@ -190,7 +190,7 @@ final class CommandKSearchRankingTests: XCTestCase {
                     title: bodyOnlyMatch.title,
                     titleLower: bodyOnlyMatch.title.lowercased(),
                     subtitle: "People",
-                    contentLower: "worked with diana on matrix diligence.",
+                    contentLower: "worked with example on matrix diligence.",
                     dateFolderLower: "",
                     id: "wiki-\(bodyOnlyMatch.fileURL.path)",
                     kind: .wiki(bodyOnlyMatch, folderTitle: "People")
@@ -205,10 +205,10 @@ final class CommandKSearchRankingTests: XCTestCase {
                     kind: .wiki(directMatch, folderTitle: "People")
                 )
             ],
-            query: "diana"
+            query: "example"
         )
 
-        XCTAssertEqual(results.wiki.map(\.title), ["Diana Berlin", "Matt Hartman"])
+        XCTAssertEqual(results.wiki.map(\.title), ["Example Contact", "Reference Note"])
         XCTAssertEqual(results.wiki.last?.subtitle, "People • content match")
     }
 }

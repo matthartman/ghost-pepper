@@ -913,7 +913,7 @@ final class GeneratedWikiEngine {
         - Avoid first-name-only Person entities unless no fuller name is available anywhere in the meeting text. If only a first name is available, keep entity_type as Person and say what is unknown in relevant_context.
         - If a title uses a nickname or shortened form but metadata contains a fuller attendee name, use the metadata name as entity_name.
         - Include meeting participants from the title as Person entities only when the title side is a human name.
-        - If a meeting-title participant side contains two likely human names joined by "and", "&", comma, or "/", emit them as separate Person entities. Never emit a combined person name like "Matt Hartman and Rahul Sonwalker".
+        - If a meeting-title participant side contains two likely human names joined by "and", "&", comma, or "/", emit them as separate Person entities. Never emit a combined person name like "Alex Example and Jordan Example".
         - In titles like "Person <> Company", type the organization side as Company, not Person.
         - Do not label a single-word capitalized organization as Person solely because it appears in the title.
         - Classify the real-world thing, not the title fragment. A founder, CEO, investor, partner, or operator is a Person even when associated with a company or product. A product, startup, fund, firm, institution, or website is a Company.
