@@ -193,6 +193,7 @@ private struct SavedModelExperimentPrompt: Identifiable, Equatable, Codable {
 
 struct SettingsView: View {
     @ObservedObject var appState: AppState
+    @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -223,6 +224,10 @@ struct SettingsView: View {
 
     private static let savedExperimentPromptsDefaultsKey = "modelExperimentSavedPrompts"
     private static let experimentRunHistoryDefaultsKey = "modelExperimentRunHistory"
+
+    private var appTheme: AppTheme {
+        AppTheme.resolve(selectedThemeID)
+    }
 
     init(appState: AppState, initialSection: SettingsSection = .general) {
         self.appState = appState
@@ -343,14 +348,14 @@ struct SettingsView: View {
                         // on the visible text/icon, not the empty space in the row. (Fixes #74.)
                         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(selectedSection == section ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.22) : .clear)
+                            RoundedRectangle(cornerRadius: appTheme.id == .windows95 ? 0 : 12, style: .continuous)
+                                .fill(selectedSection == section ? appTheme.selectedFill : .clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            RoundedRectangle(cornerRadius: appTheme.id == .windows95 ? 0 : 12, style: .continuous)
                                 .stroke(
                                     selectedSection == section
-                                        ? Color(nsColor: .separatorColor)
+                                        ? appTheme.separator
                                         : Color.clear,
                                     lineWidth: 1
                                 )
@@ -364,10 +369,10 @@ struct SettingsView: View {
             }
             .frame(minWidth: 250, idealWidth: 270, maxWidth: 270, maxHeight: .infinity, alignment: .topLeading)
             .padding(20)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(appTheme.controlBackground)
             .overlay(alignment: .trailing) {
                 Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
+                    .fill(appTheme.separator)
                     .frame(width: 1)
             }
 
@@ -377,8 +382,9 @@ struct SettingsView: View {
                     .padding(.vertical, 32)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(appTheme.windowBackground)
         }
+        .tint(appTheme.accent)
         .frame(minWidth: 900, minHeight: 680)
         .onAppear {
             inputDevices = AudioDeviceManager.listInputDevices()
@@ -1042,6 +1048,31 @@ struct SettingsView: View {
                         Text(lastError)
                             .font(.callout)
                             .foregroundStyle(.red)
+                    }
+                }
+            }
+
+            SettingsCard("Appearance") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Picker("Theme", selection: $selectedThemeID) {
+                        ForEach(AppThemeID.allCases) { themeID in
+                            Text(themeID.displayName).tag(themeID.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 420, alignment: .leading)
+
+                    HStack(spacing: 12) {
+                        ForEach(AppThemeID.allCases) { themeID in
+                            ThemeSwatch(
+                                theme: AppTheme(id: themeID),
+                                title: themeID.displayName,
+                                subtitle: themeID.subtitle,
+                                isSelected: selectedThemeID == themeID.rawValue
+                            ) {
+                                selectedThemeID = themeID.rawValue
+                            }
+                        }
                     }
                 }
             }
@@ -3078,6 +3109,59 @@ private struct SettingsField<Content: View>: View {
                 .font(.subheadline.weight(.medium))
             content
         }
+    }
+}
+
+private struct ThemeSwatch: View {
+    let theme: AppTheme
+    let title: String
+    let subtitle: String
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 8) {
+                ZStack(alignment: .bottomLeading) {
+                    RoundedRectangle(cornerRadius: theme.id == .windows95 ? 0 : 8, style: .continuous)
+                        .fill(theme.contextBubbleBackground)
+                        .frame(height: 54)
+                        .overlay(alignment: .topLeading) {
+                            HStack(spacing: 5) {
+                                Circle().fill(theme.accent).frame(width: 8, height: 8)
+                                RoundedRectangle(cornerRadius: theme.id == .windows95 ? 0 : 3)
+                                    .fill(theme.textBackground.opacity(0.85))
+                                    .frame(width: 52, height: 8)
+                            }
+                            .padding(8)
+                        }
+
+                    Rectangle()
+                        .fill(theme.accent)
+                        .frame(height: theme.id == .windows95 ? 8 : 5)
+                }
+
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .frame(width: 150, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: theme.id == .windows95 ? 0 : 10, style: .continuous)
+                    .fill(theme.controlBackground.opacity(theme.id == .current ? 0.45 : 1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: theme.id == .windows95 ? 0 : 10, style: .continuous)
+                    .stroke(isSelected ? theme.accent : theme.separator, lineWidth: isSelected ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

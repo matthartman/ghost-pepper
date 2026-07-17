@@ -25,6 +25,11 @@ struct RightSidebarView: View {
     }
 
     @State private var selectedTab: Tab = .models
+    @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
+
+    private var appTheme: AppTheme {
+        AppTheme.resolve(selectedThemeID)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,6 +57,7 @@ struct RightSidebarView: View {
                 UsageReportView(usageStats: usageStats, cleanupManager: cleanupManager)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(appTheme.controlBackground)
+        .tint(appTheme.accent)
     }
 }

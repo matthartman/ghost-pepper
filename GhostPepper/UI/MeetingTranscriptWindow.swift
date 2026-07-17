@@ -1066,13 +1066,23 @@ enum MeetingTranscriptWindowPresentation {
     }
 }
 
+enum MeetingRecordingStartError: LocalizedError {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let message): return message
+        }
+    }
+}
+
 // MARK: - Window Controller
 
 @MainActor
 final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     var onOpenSettings: (() -> Void)?
-    var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
+    var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) throws -> MeetingSession)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
     var onLoadSpeakerReviewItems: ((MeetingTranscript) -> [MeetingSpeakerReviewItem])?
@@ -1182,21 +1192,12 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     /// Request a recording — shows consent dialog first (or starts immediately if user opted out).
     func requestRecording(name: String, skipConsent: Bool = false, sourceURL: String? = nil, detectedMeeting: DetectedMeeting? = nil) {
         guard let state = windowState else { return }
-        state.pendingSourceURL = sourceURL
-        state.pendingDetectedMeeting = detectedMeeting
-        if skipConsent || UserDefaults.standard.bool(forKey: "skipConsentDialog") {
-            guard let session = state.onStartRecording?(name, detectedMeeting) else { return }
-            state.addRecordingTab(session: session)
-            // Add URL to notes if provided
-            if let url = sourceURL {
-                session.transcript.notes = "Source: \(url)\n\n"
-            }
-            state.pendingSourceURL = nil
-            state.pendingDetectedMeeting = nil
-        } else {
-            state.pendingRecordingName = name
-            state.showConsentDialog = true
-        }
+        state.requestRecording(
+            name: name,
+            skipConsent: skipConsent,
+            sourceURL: sourceURL,
+            detectedMeeting: detectedMeeting
+        )
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -1366,6 +1367,7 @@ final class MeetingWindowState: ObservableObject {
     @Published var showSidebar = true
     @Published var historyGroups: [(date: String, entries: [MeetingHistoryEntry])] = []
     @Published var showConsentDialog = false
+    @Published var recordingStartError: String?
     var pendingRecordingName: String?
     var pendingSourceURL: String?
     var pendingDetectedMeeting: DetectedMeeting?
@@ -1373,7 +1375,7 @@ final class MeetingWindowState: ObservableObject {
     var onRecordingStateChanged: (() -> Void)?
 
     var onOpenSettings: (() -> Void)?
-    var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) -> MeetingSession?)?
+    var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) throws -> MeetingSession)?
     var onStopRecording: ((MeetingSession) -> Void)?
     var onGenerateSummary: ((MeetingTranscript) -> Void)?
     var onLoadSpeakerReviewItems: ((MeetingTranscript) -> [MeetingSpeakerReviewItem])?
@@ -2123,7 +2125,7 @@ final class MeetingWindowState: ObservableObject {
     }
 
     func startAdHocCall() {
-        startWithGeneratedName(prefix: "Ad Hoc Call")
+        startWithGeneratedName(prefix: "Ad Hoc Meeting")
     }
 
     private func startWithGeneratedName(prefix: String) {
@@ -2131,26 +2133,11 @@ final class MeetingWindowState: ObservableObject {
         formatter.timeStyle = .short
         let name = "\(prefix) — \(formatter.string(from: Date()))"
 
-        if UserDefaults.standard.bool(forKey: "skipConsentDialog") {
-            guard let session = onStartRecording?(name, nil) else { return }
-            addRecordingTab(session: session)
-        } else {
-            pendingRecordingName = name
-            showConsentDialog = true
-        }
+        requestRecording(name: name)
     }
 
     func startCalendarMeeting(_ event: CalendarEvent) {
-        if UserDefaults.standard.bool(forKey: "skipConsentDialog") {
-            guard let session = onStartRecording?(event.title, nil) else { return }
-            session.applyCalendarEvent(event)
-            addRecordingTab(session: session)
-            openMeetingLink(for: event)
-        } else {
-            pendingRecordingName = event.title
-            pendingCalendarEvent = event
-            showConsentDialog = true
-        }
+        requestRecording(name: event.title, calendarEvent: event)
     }
 
     private func openMeetingLink(for event: CalendarEvent) {
@@ -2158,34 +2145,91 @@ final class MeetingWindowState: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func requestRecording(
+        name: String,
+        skipConsent: Bool = false,
+        sourceURL: String? = nil,
+        detectedMeeting: DetectedMeeting? = nil,
+        calendarEvent: CalendarEvent? = nil
+    ) {
+        clearPendingRecording()
+        recordingStartError = nil
+
+        if skipConsent || UserDefaults.standard.bool(forKey: "skipConsentDialog") {
+            startRecording(
+                name: name,
+                sourceURL: sourceURL,
+                detectedMeeting: detectedMeeting,
+                calendarEvent: calendarEvent
+            )
+            return
+        }
+
+        pendingRecordingName = name
+        pendingSourceURL = sourceURL
+        pendingDetectedMeeting = detectedMeeting
+        pendingCalendarEvent = calendarEvent
+        showConsentDialog = true
+    }
+
     func confirmRecording() {
-        showConsentDialog = false
         guard let name = pendingRecordingName else { return }
-        let url = pendingSourceURL
-        let detectedMeeting = pendingDetectedMeeting
-        let calendarEvent = pendingCalendarEvent
-        pendingRecordingName = nil
-        pendingSourceURL = nil
-        pendingDetectedMeeting = nil
-        pendingCalendarEvent = nil
-        guard let session = onStartRecording?(name, detectedMeeting) else { return }
-        if let calendarEvent = calendarEvent {
-            session.applyCalendarEvent(calendarEvent)
-        }
-        if let url = url {
-            session.transcript.notes = "Source: \(url)\n\n"
-        }
-        addRecordingTab(session: session)
-        if let calendarEvent = calendarEvent {
-            openMeetingLink(for: calendarEvent)
-        }
+        startRecording(
+            name: name,
+            sourceURL: pendingSourceURL,
+            detectedMeeting: pendingDetectedMeeting,
+            calendarEvent: pendingCalendarEvent
+        )
     }
 
     func cancelRecording() {
         showConsentDialog = false
+        clearPendingRecording()
+    }
+
+    private func startRecording(
+        name: String,
+        sourceURL: String?,
+        detectedMeeting: DetectedMeeting?,
+        calendarEvent: CalendarEvent?
+    ) {
+        do {
+            guard let onStartRecording else {
+                throw MeetingRecordingStartError.unavailable("Meeting recording is not ready yet. Close and reopen the meeting window, then try again.")
+            }
+            let session = try onStartRecording(name, detectedMeeting)
+            clearPendingRecording()
+            recordingStartError = nil
+            showConsentDialog = false
+            applyPendingContext(to: session, sourceURL: sourceURL, calendarEvent: calendarEvent)
+            addRecordingTab(session: session)
+            if let calendarEvent {
+                openMeetingLink(for: calendarEvent)
+            }
+        } catch {
+            pendingRecordingName = name
+            pendingSourceURL = sourceURL
+            pendingDetectedMeeting = detectedMeeting
+            pendingCalendarEvent = calendarEvent
+            recordingStartError = error.localizedDescription
+            showConsentDialog = true
+        }
+    }
+
+    private func clearPendingRecording() {
         pendingRecordingName = nil
         pendingSourceURL = nil
         pendingDetectedMeeting = nil
+        pendingCalendarEvent = nil
+    }
+
+    private func applyPendingContext(to session: MeetingSession, sourceURL: String?, calendarEvent: CalendarEvent?) {
+        if let calendarEvent {
+            session.applyCalendarEvent(calendarEvent)
+        }
+        if let sourceURL {
+            session.transcript.notes = "Source: \(sourceURL)\n\n"
+        }
     }
 
     func loadHistory() {
@@ -2463,6 +2507,7 @@ struct MeetingRootView: View {
     @State private var currentQATask: Task<Void, Never>? = nil
     @State private var wikiGenerationRun: WikiGenerationRun? = nil
     @State private var wikiGenerationTask: Task<Void, Never>? = nil
+    @State private var isWikiGenerationMinimized: Bool = false
     @State private var secondBrainLintRun: SecondBrainLintRun? = nil
     @State private var secondBrainLintTask: Task<Void, Never>? = nil
     @State private var isApplyingDossier: Bool = false
@@ -2470,6 +2515,11 @@ struct MeetingRootView: View {
     @State private var showCommandKSearch: Bool = false
     @State private var showQAMentionSheet: Bool = false
     @State private var qaAttachments: [QAAttachment] = []
+    @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
+
+    private var appTheme: AppTheme {
+        AppTheme.resolve(selectedThemeID)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2481,7 +2531,7 @@ struct MeetingRootView: View {
 
                 // Draggable divider
                 Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
+                    .fill(appTheme.separator)
                     .frame(width: 3)
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -2507,12 +2557,12 @@ struct MeetingRootView: View {
                 // Active tab content or new tab view
                 selectedSurfaceContent
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(appTheme.textBackground)
 
             if state.showModelsSidebar {
                 // Draggable divider on the panel's leading edge.
                 Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
+                    .fill(appTheme.separator)
                     .frame(width: 3)
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -2550,6 +2600,8 @@ struct MeetingRootView: View {
             .layoutPriority(1)
         }
         .frame(minWidth: 500, minHeight: 400)
+        .background(appTheme.windowBackground)
+        .tint(appTheme.accent)
         .animation(.easeInOut(duration: 0.2), value: state.showSidebar)
         .animation(.easeInOut(duration: 0.2), value: state.showModelsSidebar)
         .onAppear { state.loadHistory() }
@@ -2586,29 +2638,47 @@ struct MeetingRootView: View {
             if state.showSidebar { state.loadHistory() }
         }
         .overlay {
-            if let run = wikiGenerationRun, run.isBatch {
-                WikiGenerationConsoleSheet(
-                    run: run,
-                    onCancel: {
-                        run.cancelReviewIfNeeded()
-                        wikiGenerationTask?.cancel()
-                        run.fail("Cancelled")
-                        state.isGeneratingMeetingWiki = false
-                        wikiGenerationTask = nil
-                    },
-                    onOpenOverview: {
-                        if let url = run.result?.overviewURL {
-                            state.openGeneratedWikiPage(url)
-                            wikiGenerationRun = nil
-                        }
-                    },
-                    onClose: {
-                        guard !run.isRunning else { return }
-                        wikiGenerationRun = nil
+            if let run = wikiGenerationRun {
+                if !run.isBatch && isWikiGenerationMinimized {
+                    minimizedWikiGenerationStrip(for: run)
+                        .padding(.bottom, 18)
+                        .padding(.horizontal, 18)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(10)
+                } else {
+                    GeometryReader { proxy in
+                        let maxWidth = max(520, proxy.size.width - 72)
+                        let maxHeight = max(420, proxy.size.height - 72)
+                        let scale = min(1, maxWidth / 980, maxHeight / 720)
+                        WikiGenerationConsoleSheet(
+                            run: run,
+                            onCancel: {
+                                cancelWikiGeneration(run)
+                            },
+                            onOpenOverview: {
+                                if let url = run.result?.overviewURL {
+                                    state.openGeneratedWikiPage(url)
+                                    isWikiGenerationMinimized = false
+                                    wikiGenerationRun = nil
+                                }
+                            },
+                            onClose: {
+                                guard !run.isRunning else { return }
+                                isWikiGenerationMinimized = false
+                                wikiGenerationRun = nil
+                            },
+                            onMinimize: run.isBatch ? nil : {
+                                isWikiGenerationMinimized = true
+                            }
+                        )
+                        .scaleEffect(scale)
+                        .frame(width: 980 * scale, height: 720 * scale)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     }
-                )
-                .transition(.opacity)
-                .zIndex(10)
+                    .transition(.opacity)
+                    .zIndex(10)
+                }
             }
         }
         .sheet(isPresented: $state.showConsentDialog) {
@@ -2672,37 +2742,6 @@ struct MeetingRootView: View {
         }
         .sheet(isPresented: $state.showNewWikiSheet) {
             NewWikiSheet(state: state)
-        }
-        .sheet(isPresented: Binding(
-            get: { wikiGenerationRun != nil && wikiGenerationRun?.isBatch != true },
-            set: { isPresented in
-                if !isPresented, wikiGenerationRun?.isBatch != true {
-                    wikiGenerationRun = nil
-                }
-            }
-        )) {
-            if let run = wikiGenerationRun, !run.isBatch {
-                WikiGenerationConsoleSheet(
-                    run: run,
-                    onCancel: {
-                        run.cancelReviewIfNeeded()
-                        wikiGenerationTask?.cancel()
-                        run.fail("Cancelled")
-                        state.isGeneratingMeetingWiki = false
-                        wikiGenerationTask = nil
-                    },
-                    onOpenOverview: {
-                        if let url = run.result?.overviewURL {
-                            state.openGeneratedWikiPage(url)
-                            wikiGenerationRun = nil
-                        }
-                    },
-                    onClose: {
-                        guard !run.isRunning else { return }
-                        wikiGenerationRun = nil
-                    }
-                )
-            }
         }
         .sheet(item: $secondBrainLintRun) { run in
             secondBrainLintSheet(for: run)
@@ -3274,12 +3313,106 @@ struct MeetingRootView: View {
         }
     }
 
+    private func cancelWikiGeneration(_ run: WikiGenerationRun) {
+        run.cancelReviewIfNeeded()
+        wikiGenerationTask?.cancel()
+        run.fail("Cancelled")
+        state.isGeneratingMeetingWiki = false
+        wikiGenerationTask = nil
+        isWikiGenerationMinimized = false
+    }
+
+    private func minimizedWikiGenerationStrip(for run: WikiGenerationRun) -> some View {
+        HStack(spacing: 12) {
+            pepperCharacterForWindow(size: 30)
+                .opacity(run.isRunning ? 1 : 0.82)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(minimizedWikiGenerationTitle(for: run))
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text(run.status)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+
+            if run.isRunning {
+                ProgressView(value: run.progressFraction)
+                    .tint(.orange)
+                    .frame(width: 120)
+            }
+
+            Button("Restore") {
+                isWikiGenerationMinimized = false
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+
+            if run.isRunning {
+                Button("Stop") {
+                    cancelWikiGeneration(run)
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button("Close") {
+                    isWikiGenerationMinimized = false
+                    wikiGenerationRun = nil
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 720)
+        .background(Color(red: 0.05, green: 0.06, blue: 0.06).opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.orange.opacity(0.32), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.26), radius: 18, x: 0, y: 10)
+    }
+
+    private func minimizedWikiGenerationTitle(for run: WikiGenerationRun) -> String {
+        if run.reviewDraft != nil {
+            return "2nd Brain import ready for review"
+        }
+        if run.errorMessage != nil {
+            return "2nd Brain import stopped"
+        }
+        if run.result != nil {
+            return "2nd Brain import complete"
+        }
+        return "Adding to 2nd Brain"
+    }
+
+    @ViewBuilder
+    private func pepperCharacterForWindow(size: CGFloat) -> some View {
+        if let image = NSImage(named: "ghost-pepper-character") ?? Bundle.main.image(forResource: "ghost-pepper-character") {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: size * 0.62, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: size, height: size)
+        }
+    }
+
     private func runMeetingWikiGeneration(fileURL: URL) {
         guard !state.isGeneratingMeetingWiki else { return }
         guard let runner = state.onGenerateMeetingWiki else {
             let run = WikiGenerationRun(meetingURL: fileURL, archiveRoot: state.saveDirectory)
             run.fail("2nd Brain generation is not wired up.")
             wikiGenerationRun = run
+            isWikiGenerationMinimized = false
             return
         }
 
@@ -3288,6 +3421,7 @@ struct MeetingRootView: View {
 
         let run = WikiGenerationRun(meetingURL: fileURL, archiveRoot: state.saveDirectory)
         wikiGenerationRun = run
+        isWikiGenerationMinimized = false
 
         wikiGenerationTask = Task { @MainActor in
             do {
@@ -3360,6 +3494,7 @@ struct MeetingRootView: View {
             let run = WikiGenerationRun(batchTitle: "Next 2nd Brain batch", archiveRoot: state.saveDirectory, sourceCount: 0, modelCallTotal: 0)
             run.fail("2nd Brain generation is not wired up.")
             wikiGenerationRun = run
+            isWikiGenerationMinimized = false
             return
         }
 
@@ -3372,6 +3507,7 @@ struct MeetingRootView: View {
             modelCallTotal: max(0, sourceURLs.count + 1)
         )
         wikiGenerationRun = run
+        isWikiGenerationMinimized = false
 
         guard !sourceURLs.isEmpty else {
             run.fail("No unprocessed meetings or notes found. Every date-folder markdown file already has a generated 2nd Brain overview.")
@@ -3774,7 +3910,7 @@ struct MeetingRootView: View {
             Button(action: { state.showSidebar.toggle() }) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(state.showSidebar ? .orange : .secondary)
+                    .foregroundColor(state.showSidebar ? appTheme.accent : .secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
             }
@@ -3782,7 +3918,7 @@ struct MeetingRootView: View {
             .help(state.showSidebar ? "Hide sidebar" : "Show sidebar")
 
             Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.7))
+                .fill(appTheme.separator.opacity(0.7))
                 .frame(width: 1, height: 18)
                 .padding(.trailing, 4)
 
@@ -3851,17 +3987,17 @@ struct MeetingRootView: View {
             Button(action: { state.showModelsSidebar.toggle() }) {
                 Image(systemName: "sidebar.right")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(state.showModelsSidebar ? .orange : .secondary)
+                    .foregroundColor(state.showModelsSidebar ? appTheme.accent : .secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
             }
             .buttonStyle(.plain)
             .help(state.showModelsSidebar ? "Hide models" : "Show models")
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .background(appTheme.controlBackground.opacity(appTheme.id == .current ? 0.5 : 1))
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
+            Rectangle().fill(appTheme.separator).frame(height: 1)
         }
     }
 
@@ -5222,28 +5358,14 @@ private struct WikiGenerationConsoleSheet: View {
     let onCancel: () -> Void
     let onOpenOverview: () -> Void
     let onClose: () -> Void
+    let onMinimize: (() -> Void)?
     @State private var showPrompt: Bool = false
     @State private var pepperPulse: Bool = false
     @State private var displayNow: Date = Date()
 
     var body: some View {
-        Group {
-            if shouldShowBatchWorkbenchOverlay {
-                batchWorkbenchOverlay
-                    .transition(.opacity)
-            } else {
-            VStack(spacing: 0) {
-                header
-                Divider()
-                HStack(spacing: 0) {
-                    leftRail
-                        .frame(width: 300)
-                    Divider()
-                    detailPane
-                }
-            }
-            }
-        }
+        batchWorkbenchOverlay
+            .transition(.opacity)
         .frame(
             width: 980,
             height: 720
@@ -6168,10 +6290,6 @@ private struct WikiGenerationConsoleSheet: View {
         }
     }
 
-    private var shouldShowBatchWorkbenchOverlay: Bool {
-        run.isBatch
-    }
-
     private var batchWorkbenchOverlay: some View {
         VStack(spacing: 0) {
             windows95TitleBar
@@ -6330,6 +6448,18 @@ private struct WikiGenerationConsoleSheet: View {
             Text(run.isBatch ? "next 50" : "meeting")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.88))
+            if let onMinimize, !run.isBatch {
+                Button(action: onMinimize) {
+                    Text("Minimize")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 2)
+                        .background(Color(red: 0.86, green: 0.86, blue: 0.82))
+                        .overlay(Rectangle().stroke(Color.black.opacity(0.45), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
             Button(action: run.isRunning ? onCancel : onClose) {
                 Text(run.isRunning ? "Stop" : "Close")
                     .font(.system(size: 11, weight: .bold))
@@ -9455,6 +9585,11 @@ struct MeetingSidebarView: View {
     @State private var expandedLibraryFolders: Set<String> = []
     @State private var expandedWikiFolders: Set<String> = []
     @State private var expandedAirtableFolders: Set<String> = []
+    @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
+
+    private var appTheme: AppTheme {
+        AppTheme.resolve(selectedThemeID)
+    }
 
     private var meetingGroups: [(date: String, entries: [MeetingHistoryEntry])] {
         let groups = state.historyGroups.compactMap { group in
@@ -9547,8 +9682,8 @@ struct MeetingSidebarView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
-            .cornerRadius(6)
+            .background(appTheme.textBackground.opacity(appTheme.id == .current ? 0.5 : 0.9))
+            .cornerRadius(appTheme.id == .windows95 ? 0 : 6)
             .padding(.horizontal, 12)
             .padding(.bottom, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -9587,10 +9722,10 @@ struct MeetingSidebarView: View {
                                 HStack(spacing: 6) {
                                     Image(systemName: entry.isGranola ? "square.and.arrow.down.on.square" : "doc.text")
                                         .font(.system(size: 10))
-                                        .foregroundColor(isOpen ? .orange : (entry.isGranola ? .green.opacity(0.7) : .secondary))
+                                        .foregroundColor(isOpen ? appTheme.accent : (entry.isGranola ? .green.opacity(0.7) : .secondary))
                                     Text(entry.name)
                                         .font(.system(size: 12))
-                                        .foregroundColor(isOpen ? .orange : .primary)
+                                        .foregroundColor(isOpen ? appTheme.accent : .primary)
                                         .lineLimit(1)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -9620,7 +9755,7 @@ struct MeetingSidebarView: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(appTheme.controlBackground)
         .onAppear {
             state.loadGeneratedWikiFolders()
         }
@@ -10043,6 +10178,22 @@ private struct ConsentDialogView: View {
             }
 
             Divider()
+
+            if let recordingStartError = state.recordingStartError {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 13))
+                        .foregroundColor(.orange)
+                        .padding(.top, 1)
+                    Text(recordingStartError)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+            }
 
             // Buttons
             VStack(spacing: 12) {

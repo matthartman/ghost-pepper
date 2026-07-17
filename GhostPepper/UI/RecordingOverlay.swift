@@ -153,18 +153,38 @@ class RecordingOverlayController {
 struct OverlayPillView: View {
     let message: OverlayMessage
     var onTap: (() -> Void)?
+    @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
     @State private var isPulsing = false
+
+    private var appTheme: AppTheme {
+        AppTheme.resolve(selectedThemeID)
+    }
+
+    private var textColor: Color {
+        appTheme.usesDarkText ? .black : .white
+    }
+
+    private var pillFill: Color {
+        switch appTheme.id {
+        case .current:
+            return .black.opacity(0.85)
+        case .windows95:
+            return Color(red: 0.78, green: 0.78, blue: 0.72).opacity(0.96)
+        case .space:
+            return Color(red: 0.03, green: 0.04, blue: 0.16).opacity(0.92)
+        }
+    }
 
     private var dotColor: Color {
         switch message {
         case .recording:
             return .red
         case .modelLoading:
-            return .orange
+            return appTheme.accent
         case .cleaningUp, .transcribing, .clipboardFallback:
-            return .blue
+            return appTheme.id == .current ? .blue : appTheme.accent
         case .noSoundDetected:
-            return .orange
+            return appTheme.accent
         case .learnedCorrection:
             return .green
         }
@@ -191,12 +211,12 @@ struct OverlayPillView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(message.primaryText)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(textColor)
 
                 if let secondaryText = message.secondaryText {
                     Text(secondaryText)
                         .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .foregroundStyle(textColor.opacity(0.8))
                         .lineLimit(2)
                 }
             }
@@ -205,7 +225,8 @@ struct OverlayPillView: View {
         .padding(.vertical, 10)
         .background(
             Capsule()
-                .fill(.black.opacity(0.85))
+                .fill(pillFill)
+                .overlay(Capsule().stroke(appTheme.accent.opacity(appTheme.id == .current ? 0 : 0.7), lineWidth: appTheme.id == .current ? 0 : 1))
         )
         .onAppear { isPulsing = true }
         .onTapGesture {

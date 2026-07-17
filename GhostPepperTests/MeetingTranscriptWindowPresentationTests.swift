@@ -35,6 +35,105 @@ final class MeetingTranscriptWindowPresentationTests: XCTestCase {
 }
 
 @MainActor
+final class MeetingWindowStateRecordingRequestTests: XCTestCase {
+    private let skipConsentKey = "skipConsentDialog"
+
+    override func setUp() {
+        super.setUp()
+        UserDefaults.standard.set(false, forKey: skipConsentKey)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: skipConsentKey)
+        super.tearDown()
+    }
+
+    func testAdHocMeetingDoesNotReuseCanceledCalendarEvent() {
+        let state = MeetingWindowState()
+        let event = CalendarEvent(
+            id: "calendar-1",
+            title: "Scheduled Call",
+            startTime: "10:00 AM",
+            startDate: nil,
+            endDate: nil,
+            isAllDay: false,
+            attendees: [MeetingAttendee(name: "Alice Example")],
+            attendeeCount: 1,
+            organizer: nil,
+            meetLink: nil
+        )
+
+        state.startCalendarMeeting(event)
+        XCTAssertEqual(state.pendingCalendarEvent?.id, "calendar-1")
+
+        state.cancelRecording()
+        state.startAdHocCall()
+
+        XCTAssertNil(state.pendingCalendarEvent)
+        XCTAssertNil(state.pendingSourceURL)
+        XCTAssertNil(state.pendingDetectedMeeting)
+        XCTAssertTrue(state.pendingRecordingName?.hasPrefix("Ad Hoc Meeting") == true)
+        XCTAssertTrue(state.showConsentDialog)
+    }
+
+    func testNewRecordingRequestClearsPreviousPendingContext() {
+        let state = MeetingWindowState()
+        state.pendingRecordingName = "Old"
+        state.pendingSourceURL = "https://meet.example/old"
+        state.pendingCalendarEvent = CalendarEvent(
+            id: "old-event",
+            title: "Old Calendar Event",
+            startTime: "9:00 AM",
+            startDate: nil,
+            endDate: nil,
+            isAllDay: false,
+            attendees: [],
+            attendeeCount: 0,
+            organizer: nil,
+            meetLink: nil
+        )
+
+        state.requestRecording(name: "Fresh Ad Hoc Meeting")
+
+        XCTAssertEqual(state.pendingRecordingName, "Fresh Ad Hoc Meeting")
+        XCTAssertNil(state.pendingSourceURL)
+        XCTAssertNil(state.pendingDetectedMeeting)
+        XCTAssertNil(state.pendingCalendarEvent)
+    }
+
+    func testConfirmRecordingKeepsConsentOpenWhenStartupFails() {
+        let state = MeetingWindowState()
+        state.onStartRecording = { _, _ in
+            throw MeetingRecordingStartError.unavailable("Screen Recording permission is required.")
+        }
+
+        state.requestRecording(name: "Scheduled Meeting")
+        state.confirmRecording()
+
+        XCTAssertTrue(state.showConsentDialog)
+        XCTAssertEqual(state.pendingRecordingName, "Scheduled Meeting")
+        XCTAssertEqual(state.recordingStartError, "Screen Recording permission is required.")
+        XCTAssertTrue(state.tabs.isEmpty)
+    }
+
+    func testSkipConsentStartupFailureOpensConsentWithError() {
+        UserDefaults.standard.set(true, forKey: skipConsentKey)
+
+        let state = MeetingWindowState()
+        state.onStartRecording = { _, _ in
+            throw MeetingRecordingStartError.unavailable("Speech model is still loading.")
+        }
+
+        state.requestRecording(name: "Ad Hoc Meeting", skipConsent: true)
+
+        XCTAssertTrue(state.showConsentDialog)
+        XCTAssertEqual(state.pendingRecordingName, "Ad Hoc Meeting")
+        XCTAssertEqual(state.recordingStartError, "Speech model is still loading.")
+        XCTAssertTrue(state.tabs.isEmpty)
+    }
+}
+
+@MainActor
 final class MeetingTranscriptSpeakerLabelTests: XCTestCase {
     func testReplaceSpeakerDisplayNameUpdatesMatchingRemoteSegmentsOnly() {
         let transcript = MeetingTranscript(meetingName: "Speaker Review")

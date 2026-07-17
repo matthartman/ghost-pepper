@@ -12,6 +12,125 @@ enum AppStatus: String {
     case error = "Error"
 }
 
+enum AppThemeID: String, CaseIterable, Identifiable {
+    case current
+    case windows95
+    case space
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .current: "Default"
+        case .windows95: "Windows 95"
+        case .space: "Space"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .current: "The current Ghost Pepper skin."
+        case .windows95: "Classic gray chrome, navy accents, and square edges."
+        case .space: "Deep starfield panels with electric blue-violet accents."
+        }
+    }
+}
+
+struct AppTheme {
+    static let storageKey = "appTheme"
+
+    let id: AppThemeID
+
+    static func resolve(_ rawValue: String) -> AppTheme {
+        AppTheme(id: AppThemeID(rawValue: rawValue) ?? .current)
+    }
+
+    var accent: Color {
+        switch id {
+        case .current: .orange
+        case .windows95: Color(red: 0.0, green: 0.0, blue: 0.50)
+        case .space: Color(red: 0.45, green: 0.78, blue: 1.0)
+        }
+    }
+
+    var accentText: Color {
+        switch id {
+        case .current, .windows95: .black
+        case .space: Color(red: 0.02, green: 0.03, blue: 0.12)
+        }
+    }
+
+    var windowBackground: Color {
+        switch id {
+        case .current: Color(nsColor: .windowBackgroundColor)
+        case .windows95: Color(red: 0.78, green: 0.78, blue: 0.72)
+        case .space: Color(red: 0.02, green: 0.03, blue: 0.12)
+        }
+    }
+
+    var textBackground: Color {
+        switch id {
+        case .current: Color(nsColor: .textBackgroundColor)
+        case .windows95: Color(red: 0.86, green: 0.86, blue: 0.80)
+        case .space: Color(red: 0.05, green: 0.07, blue: 0.18)
+        }
+    }
+
+    var controlBackground: Color {
+        switch id {
+        case .current: Color(nsColor: .controlBackgroundColor)
+        case .windows95: Color(red: 0.75, green: 0.75, blue: 0.70)
+        case .space: Color(red: 0.08, green: 0.10, blue: 0.26)
+        }
+    }
+
+    var separator: Color {
+        switch id {
+        case .current: Color(nsColor: .separatorColor)
+        case .windows95: Color.black.opacity(0.42)
+        case .space: Color(red: 0.45, green: 0.78, blue: 1.0).opacity(0.28)
+        }
+    }
+
+    var selectedFill: Color {
+        switch id {
+        case .current: Color(nsColor: .selectedContentBackgroundColor).opacity(0.22)
+        case .windows95: Color(red: 0.0, green: 0.0, blue: 0.50).opacity(0.18)
+        case .space: Color(red: 0.45, green: 0.22, blue: 0.90).opacity(0.28)
+        }
+    }
+
+    var contextBubbleBackground: LinearGradient {
+        switch id {
+        case .current:
+            LinearGradient(
+                colors: [
+                    Color(nsColor: NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)),
+                    Color(nsColor: NSColor(red: 0.12, green: 0.09, blue: 0.06, alpha: 1))
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .windows95:
+            LinearGradient(
+                colors: [Color(red: 0.78, green: 0.78, blue: 0.72), Color(red: 0.68, green: 0.68, blue: 0.63)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .space:
+            LinearGradient(
+                colors: [Color(red: 0.02, green: 0.03, blue: 0.14), Color(red: 0.15, green: 0.07, blue: 0.32)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    var usesDarkText: Bool {
+        id == .windows95
+    }
+}
+
 enum EmptyTranscriptionDisposition: Equatable {
     case cancel
     case showNoSoundDetected
@@ -1117,8 +1236,11 @@ class AppState: ObservableObject {
         controller.onOpenSettings = { [weak self] in
             self?.showSettings()
         }
-        controller.onStartRecording = { [weak self] name, detectedMeeting -> MeetingSession? in
-            self?.createMeetingSession(name: name, detectedMeeting: detectedMeeting)
+        controller.onStartRecording = { [weak self] name, detectedMeeting -> MeetingSession in
+            guard let self else {
+                throw MeetingRecordingStartError.unavailable("Meeting recording is not ready yet. Close and reopen the meeting window, then try again.")
+            }
+            return try self.createMeetingSession(name: name, detectedMeeting: detectedMeeting)
         }
         controller.onStopRecording = { [weak self] session in
             Task {
@@ -1580,16 +1702,12 @@ class AppState: ObservableObject {
 
     /// Creates a new MeetingSession, starts recording, and returns it.
     /// Called by the window state when the user clicks "+" or auto-detection triggers.
-    func createMeetingSession(name: String, detectedMeeting: DetectedMeeting? = nil) -> MeetingSession? {
+    func createMeetingSession(name: String, detectedMeeting: DetectedMeeting? = nil) throws -> MeetingSession {
         guard canStartSpeechAnalyzerConsumer else {
+            let message = "Meeting recording is still getting the speech model ready. Wait a moment, then click Start recording again."
             debugLogStore.record(category: .model, message: "Meeting transcription start skipped because the SpeechAnalyzer model is loading.")
-            return nil
+            throw MeetingRecordingStartError.unavailable(message)
         }
-        guard PermissionChecker.hasScreenRecordingPermission() else {
-            PermissionChecker.requestScreenRecordingPermission()
-            return nil
-        }
-
         let saveDir = MeetingTranscriptSettings.effectiveSaveDirectory()
         let session = MeetingSession(
             meetingName: name,

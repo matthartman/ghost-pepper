@@ -29,6 +29,7 @@ struct ContextBubbleView: View {
     var isTrelloConfigured: Bool
     var onCopyBundle: (String) -> Void
     var onOpenInMeetings: ((URL) -> Void)?
+    @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
 
     private func sendToZo(command: String, screenContext: String?) {
         session.isReviewingContext = false
@@ -50,6 +51,12 @@ struct ContextBubbleView: View {
     @State private var selectedActionIndex: Int = 0
     @State private var contextKeyMonitor: Any?
     private var actionCount: Int { isTrelloConfigured ? 3 : 2 }
+    private var appTheme: AppTheme { AppTheme.resolve(selectedThemeID) }
+    private var panelText: Color { appTheme.usesDarkText ? .black : .white }
+    private var subduedPanelText: Color { panelText.opacity(appTheme.usesDarkText ? 0.62 : 0.7) }
+    private var faintPanelText: Color { panelText.opacity(appTheme.usesDarkText ? 0.44 : 0.4) }
+    private var subtlePanelFill: Color { panelText.opacity(appTheme.usesDarkText ? 0.08 : 0.06) }
+    private var cornerRadius: CGFloat { appTheme.id == .windows95 ? 0 : 16 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,21 +84,14 @@ struct ContextBubbleView: View {
         }
         .frame(width: 380)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(nsColor: NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)),
-                                 Color(nsColor: NSColor(red: 0.12, green: 0.09, blue: 0.06, alpha: 1))],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .fill(appTheme.contextBubbleBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(appTheme.accent.opacity(appTheme.id == .windows95 ? 0.8 : 0.24), lineWidth: appTheme.id == .windows95 ? 2 : 1)
         )
-        .shadow(color: .black.opacity(0.5), radius: 30, y: 15)
+        .shadow(color: .black.opacity(appTheme.id == .windows95 ? 0.22 : 0.5), radius: appTheme.id == .windows95 ? 10 : 30, y: appTheme.id == .windows95 ? 6 : 15)
     }
 
     // MARK: - Meeting Prompt
@@ -103,13 +103,13 @@ struct ContextBubbleView: View {
             if let rendered = try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
                 Text(rendered)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(panelText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
             } else {
                 Text(message.text)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(panelText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 8)
             }
@@ -122,10 +122,10 @@ struct ContextBubbleView: View {
                     }) {
                         Text(action.acceptLabel)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.black)
+                            .foregroundColor(appTheme.accentText)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange))
+                            .background(RoundedRectangle(cornerRadius: appTheme.id == .windows95 ? 0 : 8).fill(appTheme.accent))
                     }
                     .buttonStyle(.plain)
 
@@ -135,10 +135,10 @@ struct ContextBubbleView: View {
                     }) {
                         Text(action.declineLabel)
                             .font(.system(size: 13))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(subduedPanelText)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: appTheme.id == .windows95 ? 0 : 8).fill(subtlePanelFill))
                     }
                     .buttonStyle(.plain)
                 }
@@ -168,21 +168,21 @@ struct ContextBubbleView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Recording...")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white)
+                            .foregroundColor(panelText)
                         if !session.capturedScreenshots.isEmpty {
                             Text("\(session.capturedScreenshots.count) context\(session.capturedScreenshots.count == 1 ? "" : "s") captured")
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
+                                .foregroundColor(faintPanelText)
                         } else {
                             Text("Click windows to add context")
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.4))
+                                .foregroundColor(faintPanelText)
                         }
                     }
                 } else {
                     Text("Transcribing...")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(panelText)
                 }
 
                 Spacer()
@@ -190,7 +190,7 @@ struct ContextBubbleView: View {
                 Button(action: onMinimize) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(faintPanelText)
                 }
                 .buttonStyle(.plain)
             }
@@ -200,7 +200,7 @@ struct ContextBubbleView: View {
             if session.isRecording {
                 Text("Press hotkey again to stop · click windows to capture context")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.3))
+                    .foregroundColor(faintPanelText)
                     .padding(.bottom, 8)
             }
         }
@@ -217,7 +217,7 @@ struct ContextBubbleView: View {
                 Button(action: onMinimize) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(faintPanelText)
                 }
                 .buttonStyle(.plain)
             }
@@ -230,7 +230,7 @@ struct ContextBubbleView: View {
                     .scaleEffect(0.7)
                 Text("Chatting with Zo...")
                     .font(.callout)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(subduedPanelText)
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 32)
@@ -249,13 +249,13 @@ struct ContextBubbleView: View {
                 PepperLogo(size: 28)
                 Text(command)
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(panelText)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button(action: onMinimize) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(faintPanelText)
                 }
                 .buttonStyle(.plain)
             }
@@ -503,14 +503,14 @@ struct ContextBubbleView: View {
                             Text("Copy last response")
                                 .font(.system(size: 11))
                         }
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(faintPanelText)
                     }
                     .buttonStyle(.plain)
                     Spacer()
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
-                .background(Color.white.opacity(0.03))
+                .background(subtlePanelFill.opacity(0.55))
             }
         }
     }
@@ -520,19 +520,19 @@ struct ContextBubbleView: View {
             // Role label
             Text(message.role == .user ? "You" : "Zo")
                 .font(.system(size: 11, weight: .bold))
-                .foregroundColor(message.role == .user ? .white.opacity(0.5) : .orange)
+                .foregroundColor(message.role == .user ? faintPanelText : appTheme.accent)
 
             // Message text
             if message.role == .assistant, let rendered = try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
                 Text(rendered)
                     .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundColor(panelText.opacity(appTheme.usesDarkText ? 0.82 : 0.9))
                     .lineSpacing(4)
                     .textSelection(.enabled)
             } else {
                 Text(message.text)
                     .font(.system(size: 13))
-                    .foregroundColor(message.role == .user ? .white.opacity(0.8) : .white.opacity(0.9))
+                    .foregroundColor(message.role == .user ? panelText.opacity(0.8) : panelText.opacity(appTheme.usesDarkText ? 0.82 : 0.9))
                     .lineSpacing(4)
                     .textSelection(.enabled)
             }
@@ -570,13 +570,13 @@ struct ContextBubbleView: View {
                 PepperLogo(size: 28)
                 Text(command)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(subduedPanelText)
                     .lineLimit(2)
                 Spacer()
                 Button(action: onMinimize) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(faintPanelText)
                 }
                 .buttonStyle(.plain)
             }
@@ -588,9 +588,9 @@ struct ContextBubbleView: View {
             HStack(spacing: 6) {
                 Text("Zo")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(.orange)
+                    .foregroundColor(appTheme.accent)
                 Rectangle()
-                    .fill(Color.white.opacity(0.08))
+                    .fill(subtlePanelFill)
                     .frame(height: 1)
             }
             .padding(.horizontal, 20)
@@ -602,13 +602,13 @@ struct ContextBubbleView: View {
                     if let rendered = try? AttributedString(markdown: response, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
                         Text(rendered)
                             .font(.system(size: 13))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(panelText.opacity(appTheme.usesDarkText ? 0.82 : 0.9))
                             .lineSpacing(5)
                             .textSelection(.enabled)
                     } else {
                         Text(response)
                             .font(.system(size: 13))
-                            .foregroundColor(.white.opacity(0.9))
+                            .foregroundColor(panelText.opacity(appTheme.usesDarkText ? 0.82 : 0.9))
                             .lineSpacing(5)
                             .textSelection(.enabled)
                     }
@@ -630,7 +630,7 @@ struct ContextBubbleView: View {
                         Text("Copy")
                             .font(.system(size: 12))
                     }
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(faintPanelText)
                 }
                 .buttonStyle(.plain)
 
@@ -639,13 +639,13 @@ struct ContextBubbleView: View {
                 Button(action: onMinimize) {
                     Text("Done")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(faintPanelText)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
-            .background(Color.white.opacity(0.03))
+            .background(subtlePanelFill.opacity(0.55))
         }
     }
 
@@ -659,16 +659,16 @@ struct ContextBubbleView: View {
                 Text(label)
                     .font(.system(size: 12, weight: .semibold))
             }
-            .foregroundColor(isSelected ? .black : .white.opacity(0.8))
+            .foregroundColor(isSelected ? appTheme.accentText : panelText.opacity(0.8))
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.orange : Color.white.opacity(0.08))
+                RoundedRectangle(cornerRadius: appTheme.id == .windows95 ? 0 : 8)
+                    .fill(isSelected ? appTheme.accent : subtlePanelFill)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.orange : Color.clear, lineWidth: 2)
+                RoundedRectangle(cornerRadius: appTheme.id == .windows95 ? 0 : 8)
+                    .stroke(isSelected ? appTheme.accent : Color.clear, lineWidth: 2)
             )
         }
         .buttonStyle(.plain)

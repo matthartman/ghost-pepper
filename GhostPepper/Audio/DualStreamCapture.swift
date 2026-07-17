@@ -35,7 +35,6 @@ final class DualStreamCapture: MeetingAudioCapturing {
         guard !isActive else { return }
 
         startTime = Date()
-        isActive = true
 
         micRecorder.onConvertedAudioChunk = { [weak self] samples in
             guard let self = self, let start = self.startTime else { return }
@@ -57,9 +56,22 @@ final class DualStreamCapture: MeetingAudioCapturing {
             self.onAudioChunk?(chunk)
         }
 
-        // Start both recorders. Mic uses AVAudioEngine, system uses ScreenCaptureKit.
-        try micRecorder.startRecording()
-        try await systemRecorder.startRecording()
+        do {
+            try micRecorder.startRecording()
+        } catch {
+            startTime = nil
+            micRecorder.onConvertedAudioChunk = nil
+            systemRecorder.onConvertedAudioChunk = nil
+            throw error
+        }
+
+        isActive = true
+
+        do {
+            try await systemRecorder.startRecording()
+        } catch {
+            print("DualStreamCapture: system audio unavailable; continuing with microphone-only capture — \(error.localizedDescription)")
+        }
     }
 
     /// Stops both capture streams and returns the full buffers.
