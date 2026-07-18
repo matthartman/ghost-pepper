@@ -1,30 +1,53 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 enum KeychainHelper {
     static let service = "com.github.matthartman.ghostpepper"
 
-    static func set(_ value: String, for key: String) -> Bool {
+    private static func nonInteractiveContext() -> LAContext {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        return context
+    }
+
+    static func set(_ value: String, for key: String, allowUserInteraction: Bool = false) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
 
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
-
-        SecItemDelete(query as CFDictionary)
+        if !allowUserInteraction {
+            query[kSecUseAuthenticationContext as String] = nonInteractiveContext()
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
 
         if value.isEmpty {
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound || status == errSecInteractionNotAllowed
+        }
+
+        let updateStatus = SecItemUpdate(
+            query as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
             return true
+        }
+        if updateStatus != errSecItemNotFound {
+            return false
         }
 
         var attributes = query
+        attributes.removeValue(forKey: kSecUseAuthenticationContext as String)
+        attributes.removeValue(forKey: kSecUseAuthenticationUI as String)
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
 
-        let status = SecItemAdd(attributes as CFDictionary, nil)
-        return status == errSecSuccess
+        let addStatus = SecItemAdd(attributes as CFDictionary, nil)
+        return addStatus == errSecSuccess
     }
 
     static func get(_ key: String, allowUserInteraction: Bool = false) -> String? {
@@ -36,6 +59,7 @@ enum KeychainHelper {
             kSecReturnData as String: true,
         ]
         if !allowUserInteraction {
+            query[kSecUseAuthenticationContext as String] = nonInteractiveContext()
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         }
 
@@ -47,18 +71,27 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(_ key: String) {
-        let query: [String: Any] = [
+    static func delete(_ key: String, allowUserInteraction: Bool = false) {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
+        if !allowUserInteraction {
+            query[kSecUseAuthenticationContext as String] = nonInteractiveContext()
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
         SecItemDelete(query as CFDictionary)
     }
 
     @discardableResult
-    static func migrateUserDefaultsString(defaultsKey: String, keychainKey: String, defaults: UserDefaults = .standard) -> String? {
-        if let existing = get(keychainKey, allowUserInteraction: false), !existing.isEmpty {
+    static func migrateUserDefaultsString(
+        defaultsKey: String,
+        keychainKey: String,
+        defaults: UserDefaults = .standard,
+        allowUserInteraction: Bool = false
+    ) -> String? {
+        if let existing = get(keychainKey, allowUserInteraction: allowUserInteraction), !existing.isEmpty {
             defaults.removeObject(forKey: defaultsKey)
             return existing
         }
@@ -68,7 +101,7 @@ enum KeychainHelper {
             return nil
         }
 
-        if set(legacy, for: keychainKey) {
+        if set(legacy, for: keychainKey, allowUserInteraction: allowUserInteraction) {
             defaults.removeObject(forKey: defaultsKey)
         }
         return legacy

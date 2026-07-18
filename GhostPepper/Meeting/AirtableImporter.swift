@@ -26,11 +26,25 @@ final class AirtableImporter: ObservableObject {
     static let apiTokenKeychainKey = "airtablePersonalAccessToken"
     private static let baseIDDefaultsKey = "airtableBaseID"
 
-    @Published var apiToken: String = KeychainHelper.migrateUserDefaultsString(
-        defaultsKey: AirtableImporter.apiTokenKeychainKey,
-        keychainKey: AirtableImporter.apiTokenKeychainKey
-    ) ?? "" {
-        didSet { _ = KeychainHelper.set(apiToken, for: Self.apiTokenKeychainKey) }
+    @Published var apiToken: String = "" {
+        didSet {
+            guard !isLoadingStoredKey else { return }
+            _ = KeychainHelper.set(apiToken, for: Self.apiTokenKeychainKey)
+        }
+    }
+
+    private var didLoadStoredKey = false
+    private var isLoadingStoredKey = false
+
+    func loadStoredAPIKeyIfNeeded() {
+        guard !didLoadStoredKey else { return }
+        didLoadStoredKey = true
+        isLoadingStoredKey = true
+        apiToken = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.apiTokenKeychainKey,
+            keychainKey: Self.apiTokenKeychainKey
+        ) ?? ""
+        isLoadingStoredKey = false
     }
 
     @Published var baseID: String = UserDefaults.standard.string(forKey: AirtableImporter.baseIDDefaultsKey) ?? "" {

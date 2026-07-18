@@ -24,11 +24,25 @@ final class GranolaImporter: ObservableObject {
 
     @Published var state: ImportState = .idle
     static let granolaApiKeyKeychainKey = "granolaApiKey"
-    @Published var granolaApiKey: String = KeychainHelper.migrateUserDefaultsString(
-        defaultsKey: GranolaImporter.granolaApiKeyKeychainKey,
-        keychainKey: GranolaImporter.granolaApiKeyKeychainKey
-    ) ?? "" {
-        didSet { _ = KeychainHelper.set(granolaApiKey, for: Self.granolaApiKeyKeychainKey) }
+    @Published var granolaApiKey: String = "" {
+        didSet {
+            guard !isLoadingStoredKey else { return }
+            _ = KeychainHelper.set(granolaApiKey, for: Self.granolaApiKeyKeychainKey)
+        }
+    }
+
+    private var didLoadStoredKey = false
+    private var isLoadingStoredKey = false
+
+    func loadStoredAPIKeyIfNeeded() {
+        guard !didLoadStoredKey else { return }
+        didLoadStoredKey = true
+        isLoadingStoredKey = true
+        granolaApiKey = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.granolaApiKeyKeychainKey,
+            keychainKey: Self.granolaApiKeyKeychainKey
+        ) ?? ""
+        isLoadingStoredKey = false
     }
 
     private static func debugLog(_ msg: @autoclosure () -> String) {

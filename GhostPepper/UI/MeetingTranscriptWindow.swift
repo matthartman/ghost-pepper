@@ -4300,7 +4300,7 @@ struct MeetingRootView: View {
                 if GoogleCalendarService.shared.isSignedIn {
                     Button {
                         GoogleCalendarService.shared.invalidateTodayCache()
-                        Task { await loadTodayEvents() }
+                        Task { await loadTodayEvents(userInitiated: true) }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 10, weight: .medium))
@@ -4394,7 +4394,7 @@ struct MeetingRootView: View {
                     HStack(spacing: 8) {
                         Button("Refresh") {
                             GoogleCalendarService.shared.invalidateTodayCache()
-                            Task { await loadTodayEvents() }
+                            Task { await loadTodayEvents(userInitiated: true) }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -4584,12 +4584,25 @@ struct MeetingRootView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private func loadTodayEvents() async {
+    private func loadTodayEvents(userInitiated: Bool = false) async {
         guard GoogleCalendarService.shared.isSignedIn else {
             todayEvents = []
             todayEventsError = nil
             todayEventsLoaded = false
             return
+        }
+        if !GoogleCalendarService.shared.hasLoadedStoredTokens {
+            if userInitiated {
+                GoogleCalendarService.shared.loadStoredConnectionForUserAction()
+            } else {
+                GoogleCalendarService.shared.loadStoredConnectionSilently()
+            }
+            guard GoogleCalendarService.shared.isSignedIn else {
+                todayEvents = []
+                todayEventsError = "Ghost Pepper couldn't access the stored Calendar connection. Reconnect Google Calendar."
+                todayEventsLoaded = true
+                return
+            }
         }
         let result = await GoogleCalendarService.shared.eventsForToday()
         todayEvents = result.events

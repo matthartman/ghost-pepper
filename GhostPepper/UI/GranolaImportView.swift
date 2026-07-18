@@ -37,8 +37,7 @@ struct GranolaImportView: View {
             guard !importStarted else { return }
             importStarted = true
             if case .fetchingNotes = importer.state { return }
-            importer.state = .idle
-            Task { await runAutoImport() }
+            importer.state = .needsApiKey
         }
     }
 

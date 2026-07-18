@@ -189,7 +189,10 @@ class AppState: ObservableObject {
     @AppStorage("preferredLanguage") var preferredLanguage: String = "auto"
     @AppStorage("pepperChatHost") var pepperChatHost: String = "https://api.zo.computer"
     @Published var pepperChatApiKey: String = "" {
-        didSet { _ = KeychainHelper.set(pepperChatApiKey, for: Self.pepperChatApiKeychainKey) }
+        didSet {
+            guard !isLoadingStoredIntegrationKeys else { return }
+            _ = KeychainHelper.set(pepperChatApiKey, for: Self.pepperChatApiKeychainKey)
+        }
     }
     @AppStorage("pepperChatEnabled") var pepperChatEnabled: Bool = false {
         didSet {
@@ -198,10 +201,16 @@ class AppState: ObservableObject {
     }
     @AppStorage("pepperChatIncludeScreenContext") var pepperChatIncludeScreenContext: Bool = true
     @Published var trelloApiKey: String = "" {
-        didSet { _ = KeychainHelper.set(trelloApiKey, for: Self.trelloApiKeyKeychainKey) }
+        didSet {
+            guard !isLoadingStoredIntegrationKeys else { return }
+            _ = KeychainHelper.set(trelloApiKey, for: Self.trelloApiKeyKeychainKey)
+        }
     }
     @Published var trelloToken: String = "" {
-        didSet { _ = KeychainHelper.set(trelloToken, for: Self.trelloTokenKeychainKey) }
+        didSet {
+            guard !isLoadingStoredIntegrationKeys else { return }
+            _ = KeychainHelper.set(trelloToken, for: Self.trelloTokenKeychainKey)
+        }
     }
     @AppStorage("trelloDefaultListId") var trelloDefaultListId: String = ""
     @Published var trelloBoards: [TrelloBoard] = []
@@ -304,6 +313,8 @@ class AppState: ObservableObject {
     private let selectedInputDeviceIDProvider: () -> AudioDeviceID?
     private let resetAudioRecorder: () -> Void
     private var hotkeyMonitorStarted = false
+    private var didLoadStoredIntegrationKeys = false
+    private var isLoadingStoredIntegrationKeys = false
 
     private static let cleanupBackendDefaultsKey = "cleanupBackend"
     private static let frontmostWindowContextEnabledDefaultsKey = "frontmostWindowContextEnabled"
@@ -429,24 +440,6 @@ class AppState: ObservableObject {
             self.playSounds = true
         } else {
             self.playSounds = cleanupSettingsDefaults.bool(forKey: Self.playSoundsDefaultsKey)
-        }
-        let migratedPepperChatApiKey = KeychainHelper.migrateUserDefaultsString(
-            defaultsKey: Self.pepperChatApiKeychainKey,
-            keychainKey: Self.pepperChatApiKeychainKey
-        ) ?? ""
-        let migratedTrelloApiKey = KeychainHelper.migrateUserDefaultsString(
-            defaultsKey: Self.trelloApiKeyKeychainKey,
-            keychainKey: Self.trelloApiKeyKeychainKey
-        ) ?? ""
-        let migratedTrelloToken = KeychainHelper.migrateUserDefaultsString(
-            defaultsKey: Self.trelloTokenKeychainKey,
-            keychainKey: Self.trelloTokenKeychainKey
-        ) ?? ""
-        self.pepperChatApiKey = migratedPepperChatApiKey
-        self.trelloApiKey = migratedTrelloApiKey
-        self.trelloToken = migratedTrelloToken
-        if UserDefaults.standard.object(forKey: Self.pepperChatEnabledDefaultsKey) == nil {
-            pepperChatEnabled = !migratedPepperChatApiKey.isEmpty
         }
         // One-time migration: enable meeting transcription for existing users on update
         if UserDefaults.standard.object(forKey: "meetingTranscriptEnabled") == nil,
@@ -645,8 +638,9 @@ class AppState: ObservableObject {
             return !self.trelloApiKey.isEmpty && !self.trelloToken.isEmpty
         }
         pepperChatWindowController.onSendToTrello = { [weak self] command, context in
-            guard let self = self,
-                  !self.trelloApiKey.isEmpty,
+            guard let self = self else { return }
+            self.loadStoredIntegrationKeysIfNeeded()
+            guard !self.trelloApiKey.isEmpty,
                   !self.trelloToken.isEmpty else { return }
 
             // Parse the spoken command into structured Trello action
@@ -675,11 +669,6 @@ class AppState: ObservableObject {
                     self.debugLogStore.record(category: .model, message: "Trello error: \(error.localizedDescription)")
                 }
             }
-        }
-
-        // Fetch Trello boards on startup if configured
-        if !trelloApiKey.isEmpty && !trelloToken.isEmpty {
-            Task { await fetchTrelloBoards() }
         }
 
         // Wire up "save as note" to open in meetings view
@@ -1594,6 +1583,7 @@ class AppState: ObservableObject {
     }
 
     func beginPepperChatRecording() {
+        loadStoredIntegrationKeysIfNeeded()
         guard pepperChatEnabled, !pepperChatApiKey.isEmpty else { return }
         guard canStartSpeechAnalyzerConsumer else {
             debugLogStore.record(category: .hotkey, message: "Context Bundler start skipped because the SpeechAnalyzer model is loading.")
@@ -1697,9 +1687,38 @@ class AppState: ObservableObject {
     }
 
     func makePepperChatBackend() -> PepperChatBackend? {
+        loadStoredIntegrationKeysIfNeeded()
         guard !pepperChatApiKey.isEmpty else { return nil }
         let host = pepperChatHost.isEmpty ? "https://api.zo.computer" : pepperChatHost
         return ZoBackend(host: host, apiKey: pepperChatApiKey)
+    }
+
+    func loadStoredIntegrationKeysIfNeeded() {
+        guard !didLoadStoredIntegrationKeys else { return }
+        didLoadStoredIntegrationKeys = true
+        isLoadingStoredIntegrationKeys = true
+        defer { isLoadingStoredIntegrationKeys = false }
+
+        let migratedPepperChatApiKey = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.pepperChatApiKeychainKey,
+            keychainKey: Self.pepperChatApiKeychainKey
+        ) ?? ""
+        let migratedTrelloApiKey = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.trelloApiKeyKeychainKey,
+            keychainKey: Self.trelloApiKeyKeychainKey
+        ) ?? ""
+        let migratedTrelloToken = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.trelloTokenKeychainKey,
+            keychainKey: Self.trelloTokenKeychainKey
+        ) ?? ""
+
+        pepperChatApiKey = migratedPepperChatApiKey
+        trelloApiKey = migratedTrelloApiKey
+        trelloToken = migratedTrelloToken
+
+        if UserDefaults.standard.object(forKey: Self.pepperChatEnabledDefaultsKey) == nil {
+            pepperChatEnabled = !migratedPepperChatApiKey.isEmpty
+        }
     }
 
     // MARK: - Meeting Transcript
@@ -1793,6 +1812,7 @@ class AppState: ObservableObject {
     }
 
     func fetchTrelloBoards() async {
+        loadStoredIntegrationKeysIfNeeded()
         guard !trelloApiKey.isEmpty, !trelloToken.isEmpty else { return }
         let backend = TrelloBackend(apiKey: trelloApiKey, token: trelloToken)
         do {

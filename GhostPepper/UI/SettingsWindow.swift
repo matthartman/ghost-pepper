@@ -2463,6 +2463,9 @@ struct SettingsView: View {
                 }
             }
         }
+        .onAppear {
+            appState.loadStoredIntegrationKeysIfNeeded()
+        }
     }
 
     @ObservedObject private var calendarService = GoogleCalendarService.shared
@@ -2470,8 +2473,9 @@ struct SettingsView: View {
     @State private var meetingDirectoryBookmark: URL? = {
         MeetingTranscriptSettings.loadSaveDirectory()
     }()
-    @State private var claudeAPIKeyInput: String = KeychainHelper.get(AnthropicProvider.keychainKey) ?? ""
-    @State private var claudeAPIKeySaved: Bool = (KeychainHelper.get(AnthropicProvider.keychainKey) ?? "").isEmpty == false
+    @State private var claudeAPIKeyInput: String = ""
+    @State private var claudeAPIKeySaved: Bool = false
+    @State private var didLoadClaudeAPIKey = false
 
     private var crossMeetingQACard: some View {
         SettingsCard("Cloud API (optional)") {
@@ -2693,6 +2697,13 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            guard !didLoadClaudeAPIKey else { return }
+            didLoadClaudeAPIKey = true
+            let storedKey = KeychainHelper.get(AnthropicProvider.keychainKey) ?? ""
+            claudeAPIKeyInput = storedKey
+            claudeAPIKeySaved = !storedKey.isEmpty
         }
     }
 

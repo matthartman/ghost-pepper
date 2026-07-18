@@ -38,15 +38,33 @@ final class GoogleCalendarService: ObservableObject {
     private static let tokenKey = "googleCalendarAccessToken"
     private static let refreshTokenKey = "googleCalendarRefreshToken"
     private static let tokenExpiryKey = "googleCalendarTokenExpiry"
+    private static let connectionDefaultsKey = "googleCalendarConnected"
+
+    private var didLoadStoredTokens = false
+    var hasLoadedStoredTokens: Bool { didLoadStoredTokens }
+    private var cachedAccessToken: String?
+    private var cachedRefreshToken: String?
 
     private var accessToken: String? {
-        get { KeychainHelper.get(Self.tokenKey) }
-        set { _ = KeychainHelper.set(newValue ?? "", for: Self.tokenKey) }
+        get {
+            loadStoredTokensIfNeeded()
+            return cachedAccessToken
+        }
+        set {
+            cachedAccessToken = newValue
+            _ = KeychainHelper.set(newValue ?? "", for: Self.tokenKey)
+        }
     }
 
     private var refreshToken: String? {
-        get { KeychainHelper.get(Self.refreshTokenKey) }
-        set { _ = KeychainHelper.set(newValue ?? "", for: Self.refreshTokenKey) }
+        get {
+            loadStoredTokensIfNeeded()
+            return cachedRefreshToken
+        }
+        set {
+            cachedRefreshToken = newValue
+            _ = KeychainHelper.set(newValue ?? "", for: Self.refreshTokenKey)
+        }
     }
 
     private var tokenExpiry: Date? {
@@ -58,10 +76,33 @@ final class GoogleCalendarService: ObservableObject {
     private var oauthState: String?
 
     private init() {
-        KeychainHelper.migrateUserDefaultsString(defaultsKey: Self.tokenKey, keychainKey: Self.tokenKey)
-        KeychainHelper.migrateUserDefaultsString(defaultsKey: Self.refreshTokenKey, keychainKey: Self.refreshTokenKey)
         UserDefaults.standard.removeObject(forKey: Self.diskCacheKey)
-        isSignedIn = accessToken != nil
+        isSignedIn = UserDefaults.standard.bool(forKey: Self.connectionDefaultsKey)
+    }
+
+    func loadStoredConnectionForUserAction() {
+        loadStoredTokensIfNeeded(allowUserInteraction: true)
+    }
+
+    func loadStoredConnectionSilently() {
+        loadStoredTokensIfNeeded(allowUserInteraction: false)
+    }
+
+    private func loadStoredTokensIfNeeded(allowUserInteraction: Bool = false) {
+        guard !didLoadStoredTokens else { return }
+        didLoadStoredTokens = true
+        cachedAccessToken = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.tokenKey,
+            keychainKey: Self.tokenKey,
+            allowUserInteraction: allowUserInteraction
+        )
+        cachedRefreshToken = KeychainHelper.migrateUserDefaultsString(
+            defaultsKey: Self.refreshTokenKey,
+            keychainKey: Self.refreshTokenKey,
+            allowUserInteraction: allowUserInteraction
+        )
+        isSignedIn = cachedAccessToken != nil || cachedRefreshToken != nil
+        UserDefaults.standard.set(isSignedIn, forKey: Self.connectionDefaultsKey)
     }
 
     private var loopbackPort: UInt16 = 0
@@ -150,6 +191,7 @@ final class GoogleCalendarService: ObservableObject {
         accessToken = nil
         refreshToken = nil
         tokenExpiry = nil
+        UserDefaults.standard.set(false, forKey: Self.connectionDefaultsKey)
         UserDefaults.standard.removeObject(forKey: Self.diskCacheKey)
         isSignedIn = false
         userName = nil
@@ -580,6 +622,7 @@ final class GoogleCalendarService: ObservableObject {
             tokenExpiry = Date().addingTimeInterval(expiresIn - 60) // Refresh 1 min early
         }
         isSignedIn = accessToken != nil
+        UserDefaults.standard.set(isSignedIn, forKey: Self.connectionDefaultsKey)
         print("GoogleCalendar: signed in successfully")
     }
 

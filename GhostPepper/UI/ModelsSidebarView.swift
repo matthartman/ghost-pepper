@@ -14,6 +14,7 @@ struct ModelsSidebarView: View {
     let onDownloadSpeechModel: (String) -> Void
 
     @State private var refreshTick = 0
+    @State private var hasClaudeKey = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -42,7 +43,10 @@ struct ModelsSidebarView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.secondary)
             Spacer()
-            Button(action: { refreshTick += 1 }) {
+            Button(action: {
+                refreshTick += 1
+                hasClaudeKey = (KeychainHelper.get(AnthropicProvider.keychainKey) ?? "").isEmpty == false
+            }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
@@ -285,10 +289,6 @@ struct ModelsSidebarView: View {
 
     private var claudeModel: ClaudeAPIModel {
         ClaudeAPIModel(rawValue: selectedClaudeModelRaw) ?? .sonnet
-    }
-
-    private var hasClaudeKey: Bool {
-        (KeychainHelper.get(AnthropicProvider.keychainKey) ?? "").isEmpty == false
     }
 
     /// Resolved agent backend from the persisted setting. Drives both the
