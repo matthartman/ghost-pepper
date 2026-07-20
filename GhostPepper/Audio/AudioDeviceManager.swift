@@ -92,6 +92,28 @@ class AudioDeviceManager {
         return device.id
     }
 
+    /// Returns the best currently-available input device for UI selection.
+    /// Prefers the user's saved selection, then the system default, then the
+    /// first enumerated microphone if one exists.
+    static func preferredInputDeviceID(
+        defaults: UserDefaults = .standard,
+        inputDevices: () -> [AudioInputDevice] = AudioDeviceManager.listInputDevices,
+        defaultInputDeviceIDProvider: () -> AudioDeviceID? = AudioDeviceManager.defaultInputDeviceID
+    ) -> AudioDeviceID? {
+        let devices = inputDevices()
+
+        if let selectedID = selectedInputDeviceID(defaults: defaults, inputDevices: { devices }) {
+            return selectedID
+        }
+
+        if let defaultID = defaultInputDeviceIDProvider(),
+           devices.contains(where: { $0.id == defaultID }) {
+            return defaultID
+        }
+
+        return devices.first?.id
+    }
+
     /// Sets the system default input device.
     /// Deprecated: prefer setSelectedInputDevice() + targeting the audio unit directly.
     static func setDefaultInputDevice(_ deviceID: AudioDeviceID) -> Bool {

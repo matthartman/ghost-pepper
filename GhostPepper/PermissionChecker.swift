@@ -2,6 +2,88 @@ import Cocoa
 import AVFoundation
 import CoreGraphics
 import IOKit.hidsystem
+import SwiftUI
+
+struct RunningAppDragTile: View {
+    private let appURL = Bundle.main.bundleURL
+
+    var body: some View {
+        HStack(spacing: 10) {
+            DraggableAppIcon(appURL: appURL)
+                .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Drag this app into the permission list")
+                    .font(.caption.weight(.semibold))
+                Text(appURL.path)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .strokeBorder(Color(nsColor: .separatorColor))
+        )
+        .help("Drag the exact running Ghost Pepper app into System Settings")
+    }
+}
+
+private struct DraggableAppIcon: NSViewRepresentable {
+    let appURL: URL
+
+    func makeNSView(context: Context) -> AppBundleDragImageView {
+        AppBundleDragImageView(appURL: appURL)
+    }
+
+    func updateNSView(_ view: AppBundleDragImageView, context: Context) {
+        view.appURL = appURL
+    }
+}
+
+private final class AppBundleDragImageView: NSImageView, NSDraggingSource {
+    var appURL: URL {
+        didSet { image = NSWorkspace.shared.icon(forFile: appURL.path) }
+    }
+
+    init(appURL: URL) {
+        self.appURL = appURL
+        super.init(frame: .zero)
+        image = NSWorkspace.shared.icon(forFile: appURL.path)
+        imageScaling = .scaleProportionallyUpOrDown
+        toolTip = "Drag \(appURL.lastPathComponent) into System Settings"
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setString(appURL.absoluteString, forType: .fileURL)
+
+        let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        let iconSize = NSSize(width: 44, height: 44)
+        let origin = NSPoint(
+            x: bounds.midX - iconSize.width / 2,
+            y: bounds.midY - iconSize.height / 2
+        )
+        draggingItem.setDraggingFrame(NSRect(origin: origin, size: iconSize), contents: image)
+        beginDraggingSession(with: [draggingItem], event: event, source: self)
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        .copy
+    }
+}
 
 enum MicrophonePermissionStatus: Equatable {
     case authorized

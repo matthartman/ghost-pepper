@@ -1137,8 +1137,8 @@ final class GhostPepperTests: XCTestCase {
     }
 
     func testClipboardFallbackOverlayMessageUsesExpectedCopy() {
-        XCTAssertEqual(OverlayMessage.clipboardFallback.primaryText, "Copied to clipboard")
-        XCTAssertEqual(OverlayMessage.clipboardFallback.secondaryText, "⌘V to paste")
+        XCTAssertEqual(OverlayMessage.clipboardFallback(appName: "ChatGPT").primaryText, "Copied to clipboard")
+        XCTAssertEqual(OverlayMessage.clipboardFallback(appName: "ChatGPT").secondaryText, "⌘V to paste")
     }
 
     func testOverlayHostingViewDoesNotManageWindowSizingConstraints() {
@@ -3019,6 +3019,44 @@ final class GhostPepperTests: XCTestCase {
         )
 
         XCTAssertNil(resolvedID)
+    }
+
+    func testAudioDeviceManagerPreferredInputDeviceFallsBackToSystemDefault() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        let resolvedID = AudioDeviceManager.preferredInputDeviceID(
+            defaults: defaults,
+            inputDevices: {
+                [
+                    AudioInputDevice(id: 142, uid: "studio-display", name: "Studio Display Microphone"),
+                    AudioInputDevice(id: 314, uid: "usb-mic", name: "USB Microphone"),
+                ]
+            },
+            defaultInputDeviceIDProvider: { 314 }
+        )
+
+        XCTAssertEqual(resolvedID, 314)
+    }
+
+    func testAudioDeviceManagerPreferredInputDeviceFallsBackToFirstAvailableMicrophone() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+
+        let resolvedID = AudioDeviceManager.preferredInputDeviceID(
+            defaults: defaults,
+            inputDevices: {
+                [
+                    AudioInputDevice(id: 142, uid: "studio-display", name: "Studio Display Microphone"),
+                    AudioInputDevice(id: 314, uid: "usb-mic", name: "USB Microphone"),
+                ]
+            },
+            defaultInputDeviceIDProvider: { 999 }
+        )
+
+        XCTAssertEqual(resolvedID, 142)
     }
 
     func testResetAudioEngineClearsLiveRecordingNoInputErrorWhenIdle() throws {

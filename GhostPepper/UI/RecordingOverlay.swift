@@ -6,7 +6,7 @@ enum OverlayMessage: Equatable {
     case modelLoading
     case cleaningUp
     case transcribing
-    case clipboardFallback
+    case clipboardFallback(appName: String?)
     case noSoundDetected
     case learnedCorrection(MisheardReplacement)
 
@@ -49,6 +49,7 @@ class RecordingOverlayController {
     private var dismissWorkItem: DispatchWorkItem?
     private var currentMessage: OverlayMessage?
     var onNoSoundSettingsTapped: (() -> Void)?
+    var onAlwaysAllowPaste: (() -> Void)?
 
     func show(message: OverlayMessage = .recording) {
         dismissWorkItem?.cancel()
@@ -56,9 +57,9 @@ class RecordingOverlayController {
 
         if let hostingView = hostingView, let panel = panel {
             let size = panelSize(for: message)
-            hostingView.rootView = OverlayPillView(message: message, onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil)
+            hostingView.rootView = makePillView(for: message)
             panel.setContentSize(size)
-            panel.ignoresMouseEvents = message != .noSoundDetected
+            panel.ignoresMouseEvents = !isInteractive(message)
             panel.contentViewController?.view.frame = NSRect(origin: .zero, size: size)
             hostingView.frame = NSRect(origin: .zero, size: size)
             position(panel: panel)
@@ -79,11 +80,11 @@ class RecordingOverlayController {
         panel.backgroundColor = .clear
         panel.level = .floating
         panel.hasShadow = true
-        panel.ignoresMouseEvents = message != .noSoundDetected
+        panel.ignoresMouseEvents = !isInteractive(message)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let container = NSView(frame: NSRect(origin: .zero, size: size))
-        let hosting = NSHostingView(rootView: OverlayPillView(message: message, onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil))
+        let hosting = NSHostingView(rootView: makePillView(for: message))
         hosting.sizingOptions = []
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
@@ -128,17 +129,37 @@ class RecordingOverlayController {
 
     private func panelSize(for message: OverlayMessage) -> NSSize {
         switch message {
-        case .clipboardFallback, .learnedCorrection, .noSoundDetected:
+        case .clipboardFallback:
+            return NSSize(width: 520, height: 112)
+        case .learnedCorrection, .noSoundDetected:
             return NSSize(width: 420, height: 84)
         default:
             return NSSize(width: 300, height: 60)
         }
     }
 
+    private func isInteractive(_ message: OverlayMessage) -> Bool {
+        if case .clipboardFallback = message { return true }
+        return message == .noSoundDetected
+    }
+
+    private func makePillView(for message: OverlayMessage) -> OverlayPillView {
+        OverlayPillView(
+            message: message,
+            onTap: message == .noSoundDetected ? { [weak self] in self?.onNoSoundSettingsTapped?() } : nil,
+            onAlwaysAllowPaste: { [weak self] in self?.onAlwaysAllowPaste?() }
+        )
+    }
+
     private func scheduleDismissIfNeeded(for message: OverlayMessage) {
         switch message {
         case .clipboardFallback, .learnedCorrection, .noSoundDetected:
-            let delay: TimeInterval = message == .noSoundDetected ? 5 : 3
+            let delay: TimeInterval
+            if case .clipboardFallback = message {
+                delay = 8
+            } else {
+                delay = message == .noSoundDetected ? 5 : 3
+            }
             let workItem = DispatchWorkItem { [weak self] in
                 self?.dismiss()
             }
@@ -153,6 +174,7 @@ class RecordingOverlayController {
 struct OverlayPillView: View {
     let message: OverlayMessage
     var onTap: (() -> Void)?
+    var onAlwaysAllowPaste: (() -> Void)?
     @AppStorage(AppTheme.storageKey) private var selectedThemeID = AppThemeID.current.rawValue
     @State private var isPulsing = false
 
@@ -219,6 +241,15 @@ struct OverlayPillView: View {
                         .foregroundStyle(textColor.opacity(0.8))
                         .lineLimit(2)
                 }
+            }
+
+            if case .clipboardFallback(let appName) = message, let appName {
+                Spacer(minLength: 4)
+                Button("Always allow in \(appName)") {
+                    onAlwaysAllowPaste?()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
             }
         }
         .padding(.horizontal, 16)

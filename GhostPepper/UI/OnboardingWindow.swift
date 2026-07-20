@@ -404,6 +404,11 @@ struct SetupStep: View {
                     }
                 }
 
+                if !accessibilityGranted {
+                    RunningAppDragTile()
+                        .padding(.horizontal, 4)
+                }
+
                 SetupRow(
                     icon: "rectangle.on.rectangle",
                     title: "Screen Recording (optional)",

@@ -12,12 +12,20 @@ enum PasteResult: Equatable {
     case copiedToClipboard
 }
 
+struct PasteTargetApplication: Codable, Equatable, Identifiable {
+    let bundleIdentifier: String
+    let displayName: String
+
+    var id: String { bundleIdentifier }
+}
+
 /// Pastes transcribed text into the focused text field by simulating Cmd+V.
 /// Saves and restores the clipboard around the paste operation to avoid clobbering user data.
 /// Requires Accessibility permission for CGEvent posting.
 final class TextPaster {
     typealias PasteSessionProvider = @Sendable (String, Date) -> PasteSession?
     typealias PasteScheduler = (TimeInterval, @escaping () -> Void) -> Void
+    typealias FrontmostApplicationProvider = () -> PasteTargetApplication?
 
     struct AccessibilitySnapshot {
         let role: String?
@@ -70,29 +78,53 @@ final class TextPaster {
     var onPaste: ((PasteSession) -> Void)?
     var onPasteStart: (() -> Void)?
     var onPasteEnd: (() -> Void)?
+    private(set) var lastPasteTargetApplication: PasteTargetApplication?
 
     private let pasteSessionProvider: PasteSessionProvider
     private let pasteboard: NSPasteboard
     private let canPasteIntoFocusedElement: () -> Bool
+    private let frontmostAppHasPasteMenuItem: () -> Bool
     private let prepareCommandV: () -> (() -> Void)?
     private let schedule: PasteScheduler
+    private let frontmostApplicationProvider: FrontmostApplicationProvider
+    private var isApplicationAlwaysAllowed: (String) -> Bool = { _ in false }
 
     init(
         pasteboard: NSPasteboard = .general,
         canPasteIntoFocusedElement: @escaping () -> Bool = { TextPaster.defaultCanPasteIntoFocusedElement() },
+        frontmostAppHasPasteMenuItem: @escaping () -> Bool = TextPaster.frontmostAppHasPasteMenuItem,
         prepareCommandV: @escaping () -> (() -> Void)? = { TextPaster.defaultCommandVPasteAction() },
         pasteSessionProvider: @escaping PasteSessionProvider = { text, date in
             FocusedElementLocator().capturePasteSession(for: text, at: date)
         },
+        frontmostApplicationProvider: @escaping FrontmostApplicationProvider = TextPaster.frontmostApplication,
         schedule: @escaping PasteScheduler = { delay, action in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
         }
     ) {
         self.pasteboard = pasteboard
         self.canPasteIntoFocusedElement = canPasteIntoFocusedElement
+        self.frontmostAppHasPasteMenuItem = frontmostAppHasPasteMenuItem
         self.prepareCommandV = prepareCommandV
         self.pasteSessionProvider = pasteSessionProvider
+        self.frontmostApplicationProvider = frontmostApplicationProvider
         self.schedule = schedule
+    }
+
+    func configureAlwaysAllowedApplications(_ isAllowed: @escaping (String) -> Bool) {
+        isApplicationAlwaysAllowed = isAllowed
+    }
+
+    @discardableResult
+    func retryLastClipboardPaste() -> PasteResult? {
+        guard let lastPasteTargetApplication,
+              frontmostApplicationProvider()?.bundleIdentifier == lastPasteTargetApplication.bundleIdentifier,
+              isApplicationAlwaysAllowed(lastPasteTargetApplication.bundleIdentifier),
+              let text = pasteboard.string(forType: .string) else {
+            return nil
+        }
+
+        return paste(text: text)
     }
 
     // MARK: - Clipboard Operations
@@ -151,12 +183,18 @@ final class TextPaster {
     /// - Parameter text: The text to paste.
     func paste(text: String) -> PasteResult {
         onPasteStart?()
+        let targetApplication = frontmostApplicationProvider()
+        lastPasteTargetApplication = targetApplication
         let savedState = saveClipboard()
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        guard canPasteIntoFocusedElement() || Self.frontmostAppHasPasteMenuItem(), let postCommandV = prepareCommandV() else {
+        let isAlwaysAllowed = targetApplication.map {
+            isApplicationAlwaysAllowed($0.bundleIdentifier)
+        } ?? false
+        guard canPasteIntoFocusedElement() || frontmostAppHasPasteMenuItem() || isAlwaysAllowed,
+              let postCommandV = prepareCommandV() else {
             onPasteEnd?()
             return .copiedToClipboard
         }
@@ -180,6 +218,19 @@ final class TextPaster {
         }
 
         return .pasted
+    }
+
+    private static func frontmostApplication() -> PasteTargetApplication? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              let bundleIdentifier = app.bundleIdentifier,
+              bundleIdentifier != Bundle.main.bundleIdentifier else {
+            return nil
+        }
+
+        return PasteTargetApplication(
+            bundleIdentifier: bundleIdentifier,
+            displayName: app.localizedName ?? bundleIdentifier
+        )
     }
 
     // MARK: - Accessibility Preflight

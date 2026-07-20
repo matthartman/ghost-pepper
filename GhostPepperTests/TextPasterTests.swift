@@ -236,6 +236,54 @@ final class TextPasterTests: XCTestCase {
         pasteboard.releaseGlobally()
     }
 
+    func testPasteSchedulesCommandVForAlwaysAllowedApplication() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        var scheduledActions: [() -> Void] = []
+        var postedCommandV = 0
+        let paster = TextPaster(
+            pasteboard: pasteboard,
+            canPasteIntoFocusedElement: { false },
+            frontmostAppHasPasteMenuItem: { false },
+            prepareCommandV: { { postedCommandV += 1 } },
+            frontmostApplicationProvider: {
+                PasteTargetApplication(bundleIdentifier: "com.openai.chat", displayName: "ChatGPT")
+            },
+            schedule: { _, action in scheduledActions.append(action) }
+        )
+        paster.configureAlwaysAllowedApplications { $0 == "com.openai.chat" }
+
+        XCTAssertEqual(paster.paste(text: "hello"), .pasted)
+        XCTAssertEqual(scheduledActions.count, 1)
+        scheduledActions.removeFirst()()
+        XCTAssertEqual(postedCommandV, 1)
+    }
+
+    func testRetryLastClipboardPasteRunsAfterApplicationBecomesAllowed() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        var isAllowed = false
+        var scheduledActions: [() -> Void] = []
+        let target = PasteTargetApplication(
+            bundleIdentifier: "com.openai.chat",
+            displayName: "ChatGPT"
+        )
+        let paster = TextPaster(
+            pasteboard: pasteboard,
+            canPasteIntoFocusedElement: { false },
+            frontmostAppHasPasteMenuItem: { false },
+            prepareCommandV: { {} },
+            frontmostApplicationProvider: { target },
+            schedule: { _, action in scheduledActions.append(action) }
+        )
+        paster.configureAlwaysAllowedApplications { _ in isAllowed }
+
+        XCTAssertEqual(paster.paste(text: "hello"), .copiedToClipboard)
+        isAllowed = true
+        XCTAssertEqual(paster.retryLastClipboardPaste(), .pasted)
+        XCTAssertEqual(scheduledActions.count, 1)
+    }
+
     func testPasteCapturesSessionAfterPasteDelay() {
         let pasteboard = NSPasteboard.withUniqueName()
         pasteboard.clearContents()

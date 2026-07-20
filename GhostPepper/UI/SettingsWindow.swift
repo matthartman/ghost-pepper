@@ -387,8 +387,7 @@ struct SettingsView: View {
         .tint(appTheme.accent)
         .frame(minWidth: 900, minHeight: 680)
         .onAppear {
-            inputDevices = AudioDeviceManager.listInputDevices()
-            selectedDeviceID = AudioDeviceManager.selectedInputDeviceID() ?? AudioDeviceManager.defaultInputDeviceID() ?? 0
+            refreshInputDevices()
             refreshScreenRecordingPermission()
             refreshRequiredPermissions()
             startPermissionPollingIfNeeded()
@@ -397,6 +396,7 @@ struct SettingsView: View {
             reloadRecognizedVoices()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshInputDevices()
             refreshScreenRecordingPermission()
             refreshRequiredPermissions()
         }
@@ -430,6 +430,14 @@ struct SettingsView: View {
 
     private func refreshScreenRecordingPermission() {
         hasScreenRecordingPermission = PermissionChecker.hasScreenRecordingPermission()
+    }
+
+    private func refreshInputDevices() {
+        let devices = AudioDeviceManager.listInputDevices()
+        inputDevices = devices
+        selectedDeviceID = AudioDeviceManager.preferredInputDeviceID(
+            inputDevices: { devices }
+        ) ?? 0
     }
 
     private func downloadModel(_ row: RuntimeModelRow) {
@@ -922,7 +930,9 @@ struct SettingsView: View {
                             }
                         )
 
-                        Text("Both permissions are required for hotkeys and pasting to work reliably. If Ghost Pepper does not appear in a privacy list, click + and select it from Applications, then quit and reopen Ghost Pepper.")
+                        RunningAppDragTile()
+
+                        Text("Both permissions are required for hotkeys and pasting to work reliably. Open each permission list, then drag the app shown above into it. Quit and reopen Ghost Pepper after granting access.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -962,16 +972,35 @@ struct SettingsView: View {
             SettingsCard("Input") {
                 VStack(alignment: .leading, spacing: 18) {
                     SettingsField("Microphone") {
-                        Picker("Microphone", selection: $selectedDeviceID) {
-                            ForEach(inputDevices) { device in
-                                Text(device.name).tag(device.id)
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .center, spacing: 12) {
+                                if inputDevices.isEmpty {
+                                    Text("No microphones detected")
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Picker("Microphone", selection: $selectedDeviceID) {
+                                        ForEach(inputDevices) { device in
+                                            Text(device.name).tag(device.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .frame(maxWidth: 320, alignment: .leading)
+                                    .onChange(of: selectedDeviceID) { _, newValue in
+                                        AudioDeviceManager.setSelectedInputDevice(newValue)
+                                        appState.resetAudioEngine()
+                                    }
+                                }
+
+                                Button("Detect available microphones") {
+                                    refreshInputDevices()
+                                }
+                                .buttonStyle(.bordered)
                             }
-                        }
-                        .labelsHidden()
-                        .frame(maxWidth: 320, alignment: .leading)
-                        .onChange(of: selectedDeviceID) { _, newValue in
-                            AudioDeviceManager.setSelectedInputDevice(newValue)
-                            appState.resetAudioEngine()
+
+                            Text("If you plugged in a microphone after opening Settings, click Detect available microphones to rescan.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
 
@@ -997,6 +1026,42 @@ struct SettingsView: View {
                             )
                         )
                         .disabled(!speakerFilteringToggleState.isEnabled)
+                    }
+                }
+            }
+
+            SettingsCard("Automatic Pasting") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Ghost Pepper normally verifies that an editable field is focused before pressing ⌘V. Apps listed here are allowed even when their text editor cannot be detected reliably.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if appState.alwaysAllowedPasteApplications.isEmpty {
+                        Text("No apps are always allowed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(appState.alwaysAllowedPasteApplications) { application in
+                            HStack(spacing: 10) {
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: NSWorkspace.shared.urlForApplication(withBundleIdentifier: application.bundleIdentifier)?.path ?? ""))
+                                    .resizable()
+                                    .frame(width: 24, height: 24)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(application.displayName)
+                                    Text(application.bundleIdentifier)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Remove") {
+                                    appState.removeAlwaysAllowedPasteApplication(
+                                        bundleIdentifier: application.bundleIdentifier
+                                    )
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
                     }
                 }
             }

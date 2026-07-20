@@ -182,6 +182,7 @@ class AppState: ObservableObject {
             )
         }
     }
+    @Published private(set) var alwaysAllowedPasteApplications: [PasteTargetApplication] = []
     @AppStorage("cleanupEnabled") var cleanupEnabled: Bool = true
     @AppStorage("transcriptionLabEnabled") var transcriptionLabEnabled: Bool = false
     @AppStorage("cleanupPrompt") var cleanupPrompt: String = TextCleaner.defaultPrompt
@@ -322,6 +323,7 @@ class AppState: ObservableObject {
     private static let ignoreOtherSpeakersDefaultsKey = "ignoreOtherSpeakers"
     private static let selectedWikiModelDefaultsKey = "selectedWikiModelKind"
     private static let playSoundsDefaultsKey = "playSounds"
+    private static let alwaysAllowedPasteApplicationsDefaultsKey = "alwaysAllowedPasteApplications"
     private static let pepperChatEnabledDefaultsKey = "pepperChatEnabled"
     private static let pepperChatApiKeychainKey = "pepperChatApiKey"
     private static let trelloApiKeyKeychainKey = "trelloApiKey"
@@ -430,6 +432,9 @@ class AppState: ObservableObject {
         self.frontmostWindowContextEnabled = storedFrontmostWindowContextEnabled
         self.postPasteLearningEnabled = storedPostPasteLearningEnabled
         self.ignoreOtherSpeakers = storedIgnoreOtherSpeakers
+        self.alwaysAllowedPasteApplications = Self.loadAlwaysAllowedPasteApplications(
+            defaults: cleanupSettingsDefaults
+        )
         let storedWikiModelKind = LocalCleanupModelKind(
             rawValue: cleanupSettingsDefaults.string(forKey: Self.selectedWikiModelDefaultsKey) ?? ""
         )
@@ -543,6 +548,11 @@ class AppState: ObservableObject {
         hotkeyMonitor.updateBindings(shortcutBindings)
         self.textPaster.onPaste = { [postPasteLearningCoordinator = self.postPasteLearningCoordinator] session in
             postPasteLearningCoordinator.handlePaste(session)
+        }
+        self.textPaster.configureAlwaysAllowedApplications { [weak self] bundleIdentifier in
+            self?.alwaysAllowedPasteApplications.contains {
+                $0.bundleIdentifier == bundleIdentifier
+            } ?? false
         }
         self.audioRecorder.onRecordingStarted = { [weak self] in
             Task { @MainActor in
@@ -683,6 +693,9 @@ class AppState: ObservableObject {
         // Wire up "no sound" overlay to open settings
         overlay.onNoSoundSettingsTapped = { [weak self] in
             self?.showSettings()
+        }
+        overlay.onAlwaysAllowPaste = { [weak self] in
+            self?.alwaysAllowLastPasteTarget()
         }
 
         // Pre-warm audio engine so first recording starts faster
@@ -1207,10 +1220,44 @@ class AppState: ObservableObject {
     }
 
     private func showClipboardFallbackMessage() {
-        overlay.show(message: .clipboardFallback)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            self?.overlay.dismiss(ifShowing: .clipboardFallback)
+        overlay.show(message: .clipboardFallback(
+            appName: textPaster.lastPasteTargetApplication?.displayName
+        ))
+    }
+
+    func removeAlwaysAllowedPasteApplication(bundleIdentifier: String) {
+        alwaysAllowedPasteApplications.removeAll { $0.bundleIdentifier == bundleIdentifier }
+        persistAlwaysAllowedPasteApplications()
+    }
+
+    private func alwaysAllowLastPasteTarget() {
+        guard let application = textPaster.lastPasteTargetApplication else { return }
+        if !alwaysAllowedPasteApplications.contains(where: {
+            $0.bundleIdentifier == application.bundleIdentifier
+        }) {
+            alwaysAllowedPasteApplications.append(application)
+            alwaysAllowedPasteApplications.sort {
+                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            }
+            persistAlwaysAllowedPasteApplications()
         }
+        _ = textPaster.retryLastClipboardPaste()
+        overlay.dismiss()
+    }
+
+    private func persistAlwaysAllowedPasteApplications() {
+        guard let data = try? JSONEncoder().encode(alwaysAllowedPasteApplications) else { return }
+        cleanupSettingsDefaults.set(data, forKey: Self.alwaysAllowedPasteApplicationsDefaultsKey)
+    }
+
+    private static func loadAlwaysAllowedPasteApplications(
+        defaults: UserDefaults
+    ) -> [PasteTargetApplication] {
+        guard let data = defaults.data(forKey: alwaysAllowedPasteApplicationsDefaultsKey),
+              let applications = try? JSONDecoder().decode([PasteTargetApplication].self, from: data) else {
+            return []
+        }
+        return applications
     }
 
     private let settingsController = SettingsWindowController()
