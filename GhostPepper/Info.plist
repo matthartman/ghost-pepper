@@ -9,7 +9,7 @@
 	<key>CFBundleName</key>
 	<string>Ghost Pepper</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.4.2</string>
+	<string>2.4.3</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -22,7 +22,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>20</string>
+	<string>21</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
@@ -31,6 +31,8 @@
 	<string>Ghost Pepper uses on-device speech recognition to transcribe your recordings.</string>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/matthartman/ghost-pepper/main/appcast.xml</string>
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 	<key>SUPublicEDKey</key>
 	<string>aU72TC8lOwqKtnWlwAkT8z7LhIvB+LRnUNRNNw9DmDQ=</string>
 </dict>

@@ -50,15 +50,12 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 
 echo "==> Re-signing app and frameworks with hardened runtime..."
-# Strip debug entitlements and re-sign everything with timestamp + hardened runtime
-find "$APP_PATH" -type f -perm +111 -o -name "*.dylib" -o -name "*.framework" | while read -r binary; do
-  codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$binary" 2>/dev/null || true
-done
-# Sign XPC services
+# Sign nested code inside-out, leaving the app's main executable for the final
+# bundle signature. Signing every executable independently invalidates the
+# bundle signature after subsequent nested-code changes.
 find "$APP_PATH" -name "*.xpc" -type d | while read -r xpc; do
   codesign --force --deep --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$xpc" 2>/dev/null || true
 done
-# Sign frameworks
 find "$APP_PATH" -name "*.framework" -type d | while read -r fw; do
   codesign --force --deep --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$fw" 2>/dev/null || true
 done
@@ -66,6 +63,9 @@ done
 ENTITLEMENTS_PLIST=$(mktemp)
 cp "$SOURCE_ENTITLEMENTS" "$ENTITLEMENTS_PLIST"
 /usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
+BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Contents/Info.plist")
+/usr/libexec/PlistBuddy -c "Set :com.apple.security.temporary-exception.mach-lookup.global-name:0 ${BUNDLE_ID}-spks" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Set :com.apple.security.temporary-exception.mach-lookup.global-name:1 ${BUNDLE_ID}-spki" "$ENTITLEMENTS_PLIST" >/dev/null 2>&1 || true
 codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime --entitlements "$ENTITLEMENTS_PLIST" "$APP_PATH"
 rm "$ENTITLEMENTS_PLIST"
 
@@ -95,6 +95,7 @@ echo "$NOTARIZE_OUTPUT"
 if echo "$NOTARIZE_OUTPUT" | grep -q "status: Accepted"; then
   echo "==> Stapling notarization ticket..."
   xcrun stapler staple "$BUILD_DIR/$DMG_NAME.dmg"
+  xcrun stapler validate "$BUILD_DIR/$DMG_NAME.dmg"
   echo "  Notarization complete!"
 else
   echo ""
@@ -102,11 +103,15 @@ else
   echo "If you haven't set up notarytool credentials, run:"
   echo "  xcrun notarytool store-credentials notarytool --apple-id YOUR_APPLE_ID --team-id $TEAM_ID"
   echo ""
-  echo "Continuing without notarization..."
+  echo "ERROR: Refusing to continue without an accepted notarization."
+  exit 1
 fi
 
 echo "==> Generating Sparkle signature..."
-SPARKLE_SIGN=$(find ~/Library/Developer/Xcode/DerivedData/GhostPepper-*/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update 2>/dev/null | head -1)
+SPARKLE_SIGN="$BUILD_DIR/derived/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+if [ ! -x "$SPARKLE_SIGN" ]; then
+  SPARKLE_SIGN=$(find ~/Library/Developer/Xcode/DerivedData/GhostPepper-*/SourcePackages/artifacts/sparkle/Sparkle/bin -name sign_update -type f -perm +111 -print -quit 2>/dev/null || true)
+fi
 if [ -n "$SPARKLE_SIGN" ]; then
   SIGNATURE=$("$SPARKLE_SIGN" "$BUILD_DIR/$DMG_NAME.dmg" 2>&1)
   echo "$SIGNATURE"
