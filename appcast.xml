@@ -4,23 +4,6 @@
     <title>Ghost Pepper</title>
     <link>https://github.com/matthartman/ghost-pepper</link>
     <item>
-      <title>Version 2.4.3</title>
-      <sparkle:version>21</sparkle:version>
-      <sparkle:shortVersionString>2.4.3</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <description><![CDATA[
-        <p>This release repairs automatic update installation for sandboxed Ghost Pepper builds.</p>
-        <p><strong>If Ghost Pepper shows “Update Error” while installing:</strong>
-        <a href="https://github.com/matthartman/ghost-pepper/releases/download/v2.4.3/GhostPepper.dmg">download Ghost Pepper 2.4.3 directly</a>, open the DMG, and drag Ghost Pepper into Applications once. Your settings and data are preserved. Future updates will install normally.</p>
-      ]]></description>
-      <enclosure
-        url="https://github.com/matthartman/ghost-pepper/releases/download/v2.4.3/GhostPepper.dmg"
-        type="application/octet-stream"
-        sparkle:edSignature="Ce5WjaTp3kxSWKEgLZ5ueMWd0Jc83sdvkwhIKTc2FxHmmS7hDhFaCRa3PlL8L/BLqPkxdI9X7rwvFxaXRYHaBQ=="
-        length="28164570"
-      />
-    </item>
-    <item>
       <title>Version 2.4.2</title>
       <sparkle:version>20</sparkle:version>
       <sparkle:shortVersionString>2.4.2</sparkle:shortVersionString>
