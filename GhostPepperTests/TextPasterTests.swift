@@ -178,6 +178,7 @@ final class TextPasterTests: XCTestCase {
         let paster = TextPaster(
             pasteboard: pasteboard,
             canPasteIntoFocusedElement: { false },
+            frontmostAppHasPasteMenuItem: { false },
             prepareCommandV: {
                 XCTFail("prepareCommandV should not be called when no focused input is available")
                 return nil

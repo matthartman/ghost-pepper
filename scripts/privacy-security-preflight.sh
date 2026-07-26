@@ -9,6 +9,18 @@ echo "==> Running privacy/security preflight..."
 failures=0
 warnings=0
 
+# GhostPepper must inspect the focused UI element in other applications before
+# posting Command-V. App Sandbox blocks that core Accessibility API workflow.
+if /usr/libexec/PlistBuddy -c "Print :com.apple.security.app-sandbox" \
+    GhostPepper/GhostPepper.entitlements >/dev/null 2>&1 \
+    || rg -q 'ENABLE_APP_SANDBOX: YES|com\.apple\.security\.app-sandbox: true' project.yml \
+    || rg -q 'ENABLE_APP_SANDBOX = YES' GhostPepper.xcodeproj/project.pbxproj; then
+  echo ""
+  echo "ERROR: App Sandbox is enabled."
+  echo "GhostPepper requires cross-app Accessibility access to detect focused input fields."
+  failures=$((failures + 1))
+fi
+
 check_no_output() {
   local label="$1"
   local command="$2"

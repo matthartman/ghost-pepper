@@ -34,9 +34,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: GhostPepper/GhostPepper.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.github.matthartman.ghostpepper
-        ENABLE_APP_SANDBOX: YES
+        ENABLE_APP_SANDBOX: NO
         CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
-        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_HARDENED_RUNTIME: YES
     dependencies:
       - package: WhisperKit
       - package: FluidAudio
@@ -46,7 +46,6 @@ targets:
     entitlements:
       path: GhostPepper/GhostPepper.entitlements
       properties:
-        com.apple.security.app-sandbox: true
         com.apple.security.device.audio-input: true
         com.apple.security.files.user-selected.read-write: true
         com.apple.security.network.client: true
