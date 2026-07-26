@@ -345,14 +345,23 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
         }
     }
 
+    /// All standard modifier keycodes except Caps Lock (57), whose flag bit reflects the
+    /// lock toggle state rather than whether the key is currently held down.
+    private static let physicalModifierKeyCodes: [UInt16] = [54, 55, 56, 58, 59, 60, 61, 62, 63]
+
+    /// Reports every physically held modifier key, regardless of whether it's part of a
+    /// configured binding. Matching must see extra held modifiers (e.g. Option held alongside
+    /// a Control+Space chord) so it can reject the match instead of only comparing against
+    /// modifiers that happen to be bound.
     private func modifierPressedKeys(from flags: CGEventFlags) -> Set<PhysicalKey> {
-        monitoredKeys.filter { key in
+        Set(Self.physicalModifierKeyCodes.compactMap { keyCode in
+            let key = PhysicalKey(keyCode: keyCode)
             guard let modifierMaskRawValue = key.modifierMaskRawValue else {
-                return false
+                return nil
             }
 
-            return flags.rawValue & modifierMaskRawValue == modifierMaskRawValue
-        }
+            return flags.rawValue & modifierMaskRawValue == modifierMaskRawValue ? key : nil
+        })
     }
 
     private func currentStateReflectsCurrentEvent(
