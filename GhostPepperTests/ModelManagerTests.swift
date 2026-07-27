@@ -30,7 +30,11 @@ final class ModelManagerTests: XCTestCase {
     }
 
     func testDeleteCachedModelNotifiesObserversForInventoryRefresh() throws {
-        let manager = ModelManager(modelName: "openai_whisper-small.en")
+        var deletedModel: SpeechModelDescriptor?
+        let manager = ModelManager(
+            modelName: "openai_whisper-small.en",
+            modelDeletionOverride: { deletedModel = $0 }
+        )
         let expectation = expectation(description: "model manager publishes cache deletion")
         var cancellable: AnyCancellable? = manager.objectWillChange.sink {
             expectation.fulfill()
@@ -40,14 +44,17 @@ final class ModelManagerTests: XCTestCase {
         manager.deleteCachedModel(model)
 
         wait(for: [expectation], timeout: 1.0)
+        XCTAssertEqual(deletedModel, model)
         withExtendedLifetime(cancellable) {}
         cancellable = nil
     }
 
     func testDeleteCachedCurrentModelResetsReadyState() async throws {
+        var deletedModel: SpeechModelDescriptor?
         let manager = ModelManager(
             modelName: "openai_whisper-small.en",
-            modelLoadOverride: { _ in }
+            modelLoadOverride: { _ in },
+            modelDeletionOverride: { deletedModel = $0 }
         )
 
         await manager.loadModel(name: "openai_whisper-small.en")
@@ -55,6 +62,7 @@ final class ModelManagerTests: XCTestCase {
 
         manager.deleteCachedModel(model)
 
+        XCTAssertEqual(deletedModel, model)
         XCTAssertEqual(manager.state, .idle)
         XCTAssertNil(manager.error)
     }

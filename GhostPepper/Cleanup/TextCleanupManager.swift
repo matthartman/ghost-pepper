@@ -276,6 +276,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     private let cleanupModelAvailabilityOverrides: [LocalCleanupModelKind: Bool]
     private let probeExecutionOverride: CleanupModelProbeExecutionOverride?
     private let backendShutdownOverride: (() -> Void)?
+    private let modelsDirectory: URL
     private let probeExecutionGate = CleanupProbeExecutionGate()
     private var promptPrefillTask: Task<Void, Never>?
     private var preparedPromptContext: PreparedPromptContext?
@@ -289,12 +290,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         selectedCleanupModelKind: LocalCleanupModelKind? = nil,
         cleanupModelAvailabilityOverrides: [LocalCleanupModelKind: Bool] = [:],
         probeExecutionOverride: CleanupModelProbeExecutionOverride? = nil,
-        backendShutdownOverride: (() -> Void)? = nil
+        backendShutdownOverride: (() -> Void)? = nil,
+        modelsDirectory: URL? = nil
     ) {
         self.defaults = defaults
         self.cleanupModelAvailabilityOverrides = cleanupModelAvailabilityOverrides
         self.probeExecutionOverride = probeExecutionOverride
         self.backendShutdownOverride = backendShutdownOverride
+        self.modelsDirectory = modelsDirectory ?? Self.modelsDirectory
 
         let storedKind = LocalCleanupModelKind(
             rawValue: defaults.string(forKey: Self.selectedCleanupModelDefaultsKey) ?? ""
@@ -322,10 +325,6 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         case .error:
             return errorMessage ?? "Cleanup model error"
         }
-    }
-
-    private var modelsDirectory: URL {
-        Self.modelsDirectory
     }
 
     private func modelPath(for fileName: String) -> URL {

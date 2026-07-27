@@ -7,6 +7,7 @@ import WhisperKit
 final class ModelManager: ObservableObject {
     typealias ModelLoadOverride = @MainActor (SpeechModelDescriptor) async throws -> Void
     typealias RetryDelayOverride = @MainActor () async -> Void
+    typealias ModelDeletionOverride = @MainActor (SpeechModelDescriptor) -> Void
     typealias NemotronModelFactory = @MainActor (
         _ repository: String
     ) async throws -> any NemotronStreamingModel
@@ -50,6 +51,7 @@ final class ModelManager: ObservableObject {
 
     private let modelLoadOverride: ModelLoadOverride?
     private let loadRetryDelayOverride: RetryDelayOverride?
+    private let modelDeletionOverride: ModelDeletionOverride?
     private let nemotronModelFactory: NemotronModelFactory?
     private let speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory?
     private var queuedLoadRequest: (name: String, language: String?)?
@@ -59,12 +61,14 @@ final class ModelManager: ObservableObject {
         modelName: String = SpeechModelCatalog.defaultModelID,
         modelLoadOverride: ModelLoadOverride? = nil,
         loadRetryDelayOverride: RetryDelayOverride? = nil,
+        modelDeletionOverride: ModelDeletionOverride? = nil,
         nemotronModelFactory: NemotronModelFactory? = nil,
         speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory? = nil
     ) {
         self.modelName = modelName
         self.modelLoadOverride = modelLoadOverride
         self.loadRetryDelayOverride = loadRetryDelayOverride
+        self.modelDeletionOverride = modelDeletionOverride
         self.nemotronModelFactory = nemotronModelFactory
         self.speechAnalyzerBackendFactory = speechAnalyzerBackendFactory
     }
@@ -710,7 +714,11 @@ final class ModelManager: ObservableObject {
         guard model.isSystemManaged == false else {
             return
         }
-        Self.removeCachedModelFiles(for: model)
+        if let modelDeletionOverride = modelDeletionOverride {
+            modelDeletionOverride(model)
+        } else {
+            Self.removeCachedModelFiles(for: model)
+        }
 
         if model.name == modelName {
             clearLoadedModelInstances()

@@ -221,8 +221,16 @@ final class TextCleanupManagerTests: XCTestCase {
         }
     }
 
-    func testDeleteCachedModelNotifiesObserversForInventoryRefresh() {
-        let manager = TextCleanupManager()
+    func testDeleteCachedModelRemovesOnlyTheConfiguredCacheFileAndNotifiesObservers() throws {
+        let modelsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: modelsDirectory) }
+
+        let modelFile = modelsDirectory.appendingPathComponent(TextCleanupManager.compactModel.fileName)
+        try Data("cached model".utf8).write(to: modelFile)
+
+        let manager = TextCleanupManager(modelsDirectory: modelsDirectory)
         let expectation = expectation(description: "cleanup manager publishes cache deletion")
         var cancellable: AnyCancellable? = manager.objectWillChange.sink {
             expectation.fulfill()
@@ -231,6 +239,7 @@ final class TextCleanupManagerTests: XCTestCase {
         manager.deleteCachedModel(kind: .qwen35_0_8b_q4_k_m)
 
         wait(for: [expectation], timeout: 1.0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: modelFile.path))
         withExtendedLifetime(cancellable) {}
         cancellable = nil
     }
