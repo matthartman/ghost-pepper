@@ -7,6 +7,8 @@ final class HotkeyMonitorTests: XCTestCase {
     private let a = PhysicalKey(keyCode: 0)
     private let rightCommand = PhysicalKey(keyCode: 54)
     private let rightOption = PhysicalKey(keyCode: 61)
+    private let leftOption = PhysicalKey(keyCode: 58)
+    private let leftControl = PhysicalKey(keyCode: 59)
     private let space = PhysicalKey(keyCode: 49)
 
     func testPushChordTriggersStartAndStopCallbacks() throws {
@@ -504,6 +506,78 @@ final class HotkeyMonitorTests: XCTestCase {
             event: modifierEvent(
                 key: space,
                 flagsRawValue: UInt64(NX_COMMANDMASK | NX_ALTERNATEMASK | NX_DEVICERCMDKEYMASK | NX_DEVICERALTKEYMASK)
+            )
+        )
+
+        XCTAssertEqual(events, ["start"])
+    }
+
+    func testUnboundModifierHeldAlongsideChordPreventsMatch() throws {
+        let monitor = HotkeyMonitor(
+            bindings: [
+                .pushToTalk: try XCTUnwrap(KeyChord(keys: Set([leftControl, space])))
+            ],
+            keyStateProvider: { _ in false },
+            eventProcessor: { work in work() }
+        )
+        var events: [String] = []
+
+        monitor.onRecordingStart = {
+            events.append("start")
+        }
+        monitor.onRecordingStop = {
+            events.append("stop")
+        }
+
+        monitor.handleEvent(
+            .flagsChanged,
+            event: modifierEvent(
+                key: leftControl,
+                flagsRawValue: UInt64(NX_CONTROLMASK | NX_DEVICELCTLKEYMASK)
+            )
+        )
+
+        // Left Option is also physically held, even though it isn't part of the Control+Space
+        // binding. The chord must not match just because Option happens to be unbound.
+        monitor.handleEvent(
+            .keyDown,
+            event: modifierEvent(
+                key: space,
+                flagsRawValue: UInt64(
+                    NX_CONTROLMASK | NX_DEVICELCTLKEYMASK | NX_ALTERNATEMASK | NX_DEVICELALTKEYMASK
+                )
+            )
+        )
+
+        XCTAssertEqual(events, [])
+    }
+
+    func testChordStillMatchesWhenOnlyItsOwnModifierIsHeld() throws {
+        let monitor = HotkeyMonitor(
+            bindings: [
+                .pushToTalk: try XCTUnwrap(KeyChord(keys: Set([leftControl, space])))
+            ],
+            keyStateProvider: { _ in false },
+            eventProcessor: { work in work() }
+        )
+        var events: [String] = []
+
+        monitor.onRecordingStart = {
+            events.append("start")
+        }
+
+        monitor.handleEvent(
+            .flagsChanged,
+            event: modifierEvent(
+                key: leftControl,
+                flagsRawValue: UInt64(NX_CONTROLMASK | NX_DEVICELCTLKEYMASK)
+            )
+        )
+        monitor.handleEvent(
+            .keyDown,
+            event: modifierEvent(
+                key: space,
+                flagsRawValue: UInt64(NX_CONTROLMASK | NX_DEVICELCTLKEYMASK)
             )
         )
 
