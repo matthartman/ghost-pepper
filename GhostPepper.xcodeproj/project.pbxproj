@@ -1010,6 +1010,10 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
+					7EC925A714005FEB57488230 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 				};
 			};
 			buildConfigurationList = 4DD304029FEB6147483470FD /* Build configuration list for PBXProject "GhostPepper" */;
@@ -1318,6 +1322,7 @@
 		};
 		5A5A6FF9BFB695BDD467C31A /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
@@ -1349,6 +1354,7 @@
 		};
 		84D221D8273E90FEF61D490D /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
