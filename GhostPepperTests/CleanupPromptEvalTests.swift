@@ -158,11 +158,15 @@ final class CleanupPromptEvalTests: XCTestCase {
     /// Shared eval runner for any model kind.
     @MainActor
     private func runEvalSuite(modelKind: LocalCleanupModelKind) async throws {
+        guard TextCleanupManager.isModelDownloaded(modelKind) else {
+            throw XCTSkip("Cleanup model \(modelKind.rawValue) not available (not downloaded)")
+        }
+
         let manager = TextCleanupManager(selectedCleanupModelKind: modelKind)
         await manager.loadModel(kind: modelKind)
 
         guard manager.state == .ready else {
-            throw XCTSkip("Cleanup model \(modelKind.rawValue) not available (not downloaded)")
+            throw XCTSkip("Cleanup model \(modelKind.rawValue) could not be loaded")
         }
 
         manager.activeLLM?.seed = 1

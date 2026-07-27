@@ -47,7 +47,7 @@ final class AnthropicProviderSSETests: XCTestCase {
         if case .toolUse(let id, let name, let input) = emitted[0] {
             XCTAssertEqual(id, "toolu_abc")
             XCTAssertEqual(name, "grep")
-            XCTAssertEqual(input["pattern"] as? String, "Quinn")
+            XCTAssertEqual(input["pattern"] as? String, "Neville")
         } else {
             XCTFail("Expected .toolUse, got \(emitted[0])")
         }

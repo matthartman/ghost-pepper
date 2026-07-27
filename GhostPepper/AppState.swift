@@ -828,7 +828,9 @@ class AppState: ObservableObject {
                 activeRecordingTranscriptionSession = recordingTranscriptionSessionFactory(
                     speechModelDescriptor
                 )
-            } else if let recordingTranscriptionSession = modelManager.makeRecordingTranscriptionSession() {
+            } else if let recordingTranscriptionSession = modelManager.makeRecordingTranscriptionSession(
+                language: preferredLanguage == "auto" ? nil : preferredLanguage
+            ) {
                 activeRecordingTranscriptionSession = recordingTranscriptionSession
             } else if speechModelDescriptor.backend == .fluidAudio {
                 activeRecordingTranscriptionSession = ChunkedRecordingTranscriptionSession(

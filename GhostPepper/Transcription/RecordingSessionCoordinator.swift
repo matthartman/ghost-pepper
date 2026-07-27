@@ -10,6 +10,87 @@ protocol RecordingTranscriptionSession: AnyObject {
     func cancel()
 }
 
+protocol NemotronStreamSessionBackend: AnyObject {
+    func step(_ samples: [Float])
+    func finish() -> String
+}
+
+final class NemotronRecordingTranscriptionSession: RecordingTranscriptionSession, @unchecked Sendable {
+    private let backend: NemotronStreamSessionBackend
+    private let stateQueue = DispatchQueue(
+        label: "GhostPepper.NemotronRecordingTranscriptionSession.state"
+    )
+
+    private var isCancelled = false
+    private var isFinishing = false
+    private var appendTask: Task<Void, Never>?
+
+    let allowsBatchFallback = false
+    let supportsConcurrentFinalization = false
+
+    init(backend: NemotronStreamSessionBackend) {
+        self.backend = backend
+    }
+
+    func appendAudioChunk(_ samples: [Float]) {
+        guard samples.isEmpty == false else {
+            return
+        }
+
+        stateQueue.sync {
+            guard isCancelled == false, isFinishing == false else {
+                return
+            }
+
+            let previousTask = appendTask
+            appendTask = Task {
+                _ = await previousTask?.value
+
+                let canProcess = self.stateQueue.sync {
+                    self.isCancelled == false
+                }
+                guard canProcess else {
+                    return
+                }
+
+                self.backend.step(samples)
+            }
+        }
+    }
+
+    func finishTranscription() async -> String? {
+        let finishState = stateQueue.sync { () -> (shouldFinish: Bool, pendingTask: Task<Void, Never>?) in
+            guard isCancelled == false, isFinishing == false else {
+                return (false, nil)
+            }
+
+            isFinishing = true
+            return (true, appendTask)
+        }
+
+        guard finishState.shouldFinish else {
+            return nil
+        }
+
+        _ = await finishState.pendingTask?.value
+
+        guard stateQueue.sync(execute: { isCancelled == false }) else {
+            return nil
+        }
+
+        let transcript = backend.finish()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return transcript.isEmpty ? nil : transcript
+    }
+
+    func cancel() {
+        stateQueue.sync {
+            isCancelled = true
+            isFinishing = true
+        }
+    }
+}
+
 private final class OrderedChunkProcessor {
     private let queue = DispatchQueue(
         label: "GhostPepper.OrderedChunkProcessor.queue",

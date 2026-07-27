@@ -3,6 +3,7 @@ import Foundation
 enum SpeechBackendKind: Equatable {
     case whisperKit
     case fluidAudio
+    case mlxAudio
     case speechAnalyzer
 }
 
@@ -19,6 +20,7 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
     let backend: SpeechBackendKind
     let cachePathComponents: [String]
     let fluidAudioVariant: FluidAudioModelVariant?
+    let mlxAudioRepository: String?
 
     var id: String { name }
 
@@ -31,6 +33,8 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
         case .whisperKit:
             "Whisper \(variantName) (\(pickerTitle.lowercased()))"
         case .fluidAudio:
+            "\(pickerTitle) (\(variantName.lowercased()))"
+        case .mlxAudio:
             "\(pickerTitle) (\(variantName.lowercased()))"
         case .speechAnalyzer:
             pickerTitle
@@ -47,6 +51,10 @@ struct SpeechModelDescriptor: Identifiable, Equatable {
         backend == .speechAnalyzer
     }
 
+    var isEnglishOnly: Bool {
+        name.hasSuffix(".en") || name == SpeechModelCatalog.nemotronSpeechStreamingEnglish.name
+    }
+
     var automaticLanguageLabel: String {
         isSystemManaged ? "System language" : "Auto-detect"
     }
@@ -60,7 +68,8 @@ enum SpeechModelCatalog {
         sizeDescription: "~75 MB",
         backend: .whisperKit,
         cachePathComponents: ["openai", "whisper-tiny.en"],
-        fluidAudioVariant: nil
+        fluidAudioVariant: nil,
+        mlxAudioRepository: nil
     )
 
     static let whisperSmallEnglish = SpeechModelDescriptor(
@@ -70,7 +79,8 @@ enum SpeechModelCatalog {
         sizeDescription: "~466 MB",
         backend: .whisperKit,
         cachePathComponents: ["openai", "whisper-small.en"],
-        fluidAudioVariant: nil
+        fluidAudioVariant: nil,
+        mlxAudioRepository: nil
     )
 
     static let whisperSmallMultilingual = SpeechModelDescriptor(
@@ -80,7 +90,8 @@ enum SpeechModelCatalog {
         sizeDescription: "~466 MB",
         backend: .whisperKit,
         cachePathComponents: ["openai", "whisper-small"],
-        fluidAudioVariant: nil
+        fluidAudioVariant: nil,
+        mlxAudioRepository: nil
     )
 
     static let parakeetV3 = SpeechModelDescriptor(
@@ -90,7 +101,8 @@ enum SpeechModelCatalog {
         sizeDescription: "~1.4 GB",
         backend: .fluidAudio,
         cachePathComponents: ["FluidInference", "parakeet-tdt-0.6b-v3-coreml"],
-        fluidAudioVariant: .parakeetV3
+        fluidAudioVariant: .parakeetV3,
+        mlxAudioRepository: nil
     )
 
     static let qwen3AsrInt8 = SpeechModelDescriptor(
@@ -100,7 +112,36 @@ enum SpeechModelCatalog {
         sizeDescription: "~900 MB",
         backend: .fluidAudio,
         cachePathComponents: [],
-        fluidAudioVariant: .qwen3AsrInt8
+        fluidAudioVariant: .qwen3AsrInt8,
+        mlxAudioRepository: nil
+    )
+
+    static let nemotronSpeechStreamingEnglish = SpeechModelDescriptor(
+        name: "mlx_nemotron-speech-streaming-en-0.6b-8bit",
+        pickerTitle: "Nemotron Speech 0.6B",
+        variantName: "8-bit, English streaming",
+        sizeDescription: "~633 MB",
+        backend: .mlxAudio,
+        cachePathComponents: [
+            "mlx-audio",
+            "animaslabs_nemotron-speech-streaming-en-0.6b-mlx-8bit",
+        ],
+        fluidAudioVariant: nil,
+        mlxAudioRepository: "animaslabs/nemotron-speech-streaming-en-0.6b-mlx-8bit"
+    )
+
+    static let nemotron35Streaming = SpeechModelDescriptor(
+        name: "mlx_nemotron-3.5-asr-streaming-0.6b-8bit",
+        pickerTitle: "Nemotron 3.5 ASR 0.6B",
+        variantName: "8-bit, 40 language-locales",
+        sizeDescription: "~721 MB",
+        backend: .mlxAudio,
+        cachePathComponents: [
+            "mlx-audio",
+            "mlx-community_nemotron-3.5-asr-streaming-0.6b-8bit",
+        ],
+        fluidAudioVariant: nil,
+        mlxAudioRepository: "mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit"
     )
 
     static let speechAnalyzer = SpeechModelDescriptor(
@@ -110,7 +151,8 @@ enum SpeechModelCatalog {
         sizeDescription: "Managed by macOS",
         backend: .speechAnalyzer,
         cachePathComponents: [],
-        fluidAudioVariant: nil
+        fluidAudioVariant: nil,
+        mlxAudioRepository: nil
     )
 
     /// Models that are always selectable on the current OS.
@@ -119,6 +161,8 @@ enum SpeechModelCatalog {
         whisperSmallEnglish,
         whisperSmallMultilingual,
         parakeetV3,
+        nemotronSpeechStreamingEnglish,
+        nemotron35Streaming,
     ]
 
     static var availableModels: [SpeechModelDescriptor] {

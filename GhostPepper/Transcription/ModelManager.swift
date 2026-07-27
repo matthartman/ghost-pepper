@@ -7,6 +7,10 @@ import WhisperKit
 final class ModelManager: ObservableObject {
     typealias ModelLoadOverride = @MainActor (SpeechModelDescriptor) async throws -> Void
     typealias RetryDelayOverride = @MainActor () async -> Void
+    typealias ModelDeletionOverride = @MainActor (SpeechModelDescriptor) -> Void
+    typealias NemotronModelFactory = @MainActor (
+        _ repository: String
+    ) async throws -> any NemotronStreamingModel
     typealias SpeechAnalyzerBackendFactory = @MainActor (
         _ language: String?
     ) async throws -> any SpeechAnalyzerTranscribing
@@ -19,6 +23,7 @@ final class ModelManager: ObservableObject {
     /// Stored as `Any?` because `Qwen3AsrManager` is `@available(macOS 15, *)`
     /// and the app deploys to macOS 14. Cast at use sites under `#available`.
     private var qwen3AsrManagerStorage: Any?
+    private var nemotronStreamingModel: (any NemotronStreamingModel)?
     private var speechAnalyzerBackend: (any SpeechAnalyzerTranscribing)?
     private var loadedSpeechAnalyzerLanguage: String?
 
@@ -46,6 +51,8 @@ final class ModelManager: ObservableObject {
 
     private let modelLoadOverride: ModelLoadOverride?
     private let loadRetryDelayOverride: RetryDelayOverride?
+    private let modelDeletionOverride: ModelDeletionOverride?
+    private let nemotronModelFactory: NemotronModelFactory?
     private let speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory?
     private var queuedLoadRequest: (name: String, language: String?)?
     private var queuedLoadWaiters: [CheckedContinuation<Void, Never>] = []
@@ -54,11 +61,15 @@ final class ModelManager: ObservableObject {
         modelName: String = SpeechModelCatalog.defaultModelID,
         modelLoadOverride: ModelLoadOverride? = nil,
         loadRetryDelayOverride: RetryDelayOverride? = nil,
+        modelDeletionOverride: ModelDeletionOverride? = nil,
+        nemotronModelFactory: NemotronModelFactory? = nil,
         speechAnalyzerBackendFactory: SpeechAnalyzerBackendFactory? = nil
     ) {
         self.modelName = modelName
         self.modelLoadOverride = modelLoadOverride
         self.loadRetryDelayOverride = loadRetryDelayOverride
+        self.modelDeletionOverride = modelDeletionOverride
+        self.nemotronModelFactory = nemotronModelFactory
         self.speechAnalyzerBackendFactory = speechAnalyzerBackendFactory
     }
 
@@ -156,6 +167,8 @@ final class ModelManager: ObservableObject {
             case .parakeetV3, .none:
                 try await loadFluidAudioModel(requestedModel)
             }
+        case .mlxAudio:
+            try await loadNemotronModel(requestedModel)
         case .speechAnalyzer:
             try await loadSpeechAnalyzer(language: language)
         }
@@ -225,6 +238,12 @@ final class ModelManager: ObservableObject {
                     let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     return cleaned.isEmpty ? nil : cleaned
                 }
+            case .mlxAudio:
+                return await transcribeWithNemotronStreaming(
+                    audioBuffer: audioBuffer,
+                    model: model,
+                    language: language
+                )
             case .speechAnalyzer:
                 guard let speechAnalyzerBackend else { return nil }
                 return try await speechAnalyzerBackend.transcribe(audioBuffer: audioBuffer)
@@ -235,36 +254,44 @@ final class ModelManager: ObservableObject {
         }
     }
 
-    func makeRecordingTranscriptionSession() -> RecordingTranscriptionSession? {
-        guard let model = SpeechModelCatalog.model(named: modelName),
-              model.backend == .fluidAudio else {
+    func makeRecordingTranscriptionSession(language: String? = nil) -> RecordingTranscriptionSession? {
+        guard let model = SpeechModelCatalog.model(named: modelName) else {
             return nil
         }
 
-        switch model.fluidAudioVariant {
-        case .qwen3AsrInt8:
-            if #available(macOS 15, iOS 18, *),
-               let manager = qwen3AsrManagerStorage as? Qwen3AsrManager {
-                return QwenRecordingTranscriptionSession(asrManager: manager)
-            }
-            return nil
-        case .parakeetV3, .none:
-            guard let fluidAudioModels,
-                  let fluidAudioManager else {
-                return nil
-            }
-            return SlidingWindowRecordingTranscriptionSession(
-                models: fluidAudioModels,
-                fullBufferTranscription: { audioBuffer in
-                    do {
-                        let result = try await fluidAudioManager.transcribe(audioBuffer, source: .microphone)
-                        let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return cleaned.isEmpty ? nil : cleaned
-                    } catch {
-                        return nil
-                    }
+        switch model.backend {
+        case .fluidAudio:
+            switch model.fluidAudioVariant {
+            case .qwen3AsrInt8:
+                if #available(macOS 15, iOS 18, *),
+                   let manager = qwen3AsrManagerStorage as? Qwen3AsrManager {
+                    return QwenRecordingTranscriptionSession(asrManager: manager)
                 }
+                return nil
+            case .parakeetV3, .none:
+                guard let fluidAudioModels,
+                      let fluidAudioManager else {
+                    return nil
+                }
+                return SlidingWindowRecordingTranscriptionSession(
+                    models: fluidAudioModels,
+                    fullBufferTranscription: { audioBuffer in
+                        do {
+                            let result = try await fluidAudioManager.transcribe(audioBuffer, source: .microphone)
+                            let cleaned = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            return cleaned.isEmpty ? nil : cleaned
+                        } catch {
+                            return nil
+                        }
+                    }
+                )
+            }
+        case .mlxAudio:
+            return nemotronStreamingModel?.makeSession(
+                language: model.isEnglishOnly ? "en" : language
             )
+        case .whisperKit, .speechAnalyzer:
+            return nil
         }
     }
 
@@ -506,6 +533,39 @@ final class ModelManager: ObservableObject {
         qwen3AsrManagerStorage = manager
     }
 
+    private func loadNemotronModel(_ model: SpeechModelDescriptor) async throws {
+        guard let repository = model.mlxAudioRepository else {
+            throw NSError(
+                domain: "GhostPepper.ModelManager",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "Missing MLX repository for \(model.name)"]
+            )
+        }
+
+        if let nemotronModelFactory {
+            nemotronStreamingModel = try await nemotronModelFactory(repository)
+        } else {
+            nemotronStreamingModel = try await MLXNemotronStreamingModel.load(repository: repository)
+        }
+    }
+
+    private func transcribeWithNemotronStreaming(
+        audioBuffer: [Float],
+        model: SpeechModelDescriptor,
+        language: String?
+    ) async -> String? {
+        guard let session = nemotronStreamingModel?.makeSession(
+            language: model.isEnglishOnly ? "en" : language
+        ) else {
+            return nil
+        }
+
+        for chunk in Self.audioChunks(from: audioBuffer, maxCount: 1280) {
+            session.appendAudioChunk(chunk)
+        }
+        return await session.finishTranscription()
+    }
+
     private func resetLoadedModels() {
         clearLoadedModelInstances()
         state = .idle
@@ -517,6 +577,7 @@ final class ModelManager: ObservableObject {
         fluidAudioModels = nil
         sortformerModels = nil
         qwen3AsrManagerStorage = nil
+        nemotronStreamingModel = nil
         speechAnalyzerBackend = nil
         loadedSpeechAnalyzerLanguage = nil
         downloadProgress = nil
@@ -653,7 +714,11 @@ final class ModelManager: ObservableObject {
         guard model.isSystemManaged == false else {
             return
         }
-        Self.removeCachedModelFiles(for: model)
+        if let modelDeletionOverride = modelDeletionOverride {
+            modelDeletionOverride(model)
+        } else {
+            Self.removeCachedModelFiles(for: model)
+        }
 
         if model.name == modelName {
             clearLoadedModelInstances()
@@ -681,6 +746,15 @@ final class ModelManager: ObservableObject {
             case .qwen3AsrInt8:
                 break // Qwen3 cache cleanup handled by FluidAudio internally
             }
+        case .mlxAudio:
+            guard let repository = model.mlxAudioRepository else { return }
+            if let modelDirectory = mlxAudioModelDirectory(for: model) {
+                try? FileManager.default.removeItem(at: modelDirectory)
+            }
+            let hubRepositoryName = repository.replacingOccurrences(of: "/", with: "--")
+            let hubRepositoryDirectory = huggingFaceHubCacheDirectory
+                .appendingPathComponent("models--\(hubRepositoryName)", isDirectory: true)
+            try? FileManager.default.removeItem(at: hubRepositoryDirectory)
         case .speechAnalyzer:
             break
         }
@@ -710,9 +784,50 @@ final class ModelManager: ObservableObject {
                 }
                 return false
             }
+        case .mlxAudio:
+            guard let modelDirectory = mlxAudioModelDirectory(for: model),
+                  FileManager.default.fileExists(
+                      atPath: modelDirectory.appendingPathComponent("config.json").path
+                  ),
+                  let files = try? FileManager.default.contentsOfDirectory(
+                      at: modelDirectory,
+                      includingPropertiesForKeys: [.fileSizeKey]
+                  ) else {
+                return false
+            }
+            return files.contains { file in
+                guard file.pathExtension == "safetensors" else { return false }
+                return (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 > 0
+            }
         case .speechAnalyzer:
             return true
         }
+    }
+
+    private static func mlxAudioModelDirectory(for model: SpeechModelDescriptor) -> URL? {
+        guard model.mlxAudioRepository != nil else {
+            return nil
+        }
+        return model.cachePathComponents.reduce(huggingFaceHubCacheDirectory) { partialURL, component in
+            partialURL.appendingPathComponent(component, isDirectory: true)
+        }
+    }
+
+    private static var huggingFaceHubCacheDirectory: URL {
+        let environment = ProcessInfo.processInfo.environment
+        if let hubCache = environment["HF_HUB_CACHE"], hubCache.isEmpty == false {
+            return URL(fileURLWithPath: NSString(string: hubCache).expandingTildeInPath)
+        }
+        if let home = environment["HF_HOME"], home.isEmpty == false {
+            return URL(fileURLWithPath: NSString(string: home).expandingTildeInPath)
+                .appendingPathComponent("hub", isDirectory: true)
+        }
+        if environment["APP_SANDBOX_CONTAINER_ID"] != nil {
+            return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("huggingface/hub", isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub", isDirectory: true)
     }
 
     private static var whisperModelsDirectory: URL {

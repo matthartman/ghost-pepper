@@ -1,6 +1,7 @@
 import XCTest
 @testable import GhostPepper
 
+@MainActor
 final class MeetingCardTests: XCTestCase {
     private var tempDir: URL!
 

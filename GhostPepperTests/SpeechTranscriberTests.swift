@@ -14,12 +14,16 @@ final class SpeechTranscriberTests: XCTestCase {
             "openai_whisper-small.en",
             "openai_whisper-small",
             "fluid_parakeet-v3",
+            "mlx_nemotron-speech-streaming-en-0.6b-8bit",
+            "mlx_nemotron-3.5-asr-streaming-0.6b-8bit",
         ]
         var expectedBackends: [SpeechBackendKind] = [
             .whisperKit,
             .whisperKit,
             .whisperKit,
             .fluidAudio,
+            .mlxAudio,
+            .mlxAudio,
         ]
 
         if #available(macOS 15, iOS 18, *) {
@@ -34,6 +38,30 @@ final class SpeechTranscriberTests: XCTestCase {
         XCTAssertEqual(ids, expectedIDs)
         XCTAssertEqual(backends, expectedBackends)
         XCTAssertEqual(SpeechModelCatalog.defaultModelID, "openai_whisper-small.en")
+    }
+
+    func testNemotronDescriptorsUseMLXStreamingRepositories() {
+        let english = SpeechModelCatalog.nemotronSpeechStreamingEnglish
+        XCTAssertEqual(english.name, "mlx_nemotron-speech-streaming-en-0.6b-8bit")
+        XCTAssertEqual(english.backend, .mlxAudio)
+        XCTAssertEqual(
+            english.mlxAudioRepository,
+            "animaslabs/nemotron-speech-streaming-en-0.6b-mlx-8bit"
+        )
+        XCTAssertTrue(english.isEnglishOnly)
+        XCTAssertFalse(english.supportsSpeakerFiltering)
+        XCTAssertTrue(english.pickerLabel.contains("English streaming"))
+
+        let multilingual = SpeechModelCatalog.nemotron35Streaming
+        XCTAssertEqual(multilingual.name, "mlx_nemotron-3.5-asr-streaming-0.6b-8bit")
+        XCTAssertEqual(multilingual.backend, .mlxAudio)
+        XCTAssertEqual(
+            multilingual.mlxAudioRepository,
+            "mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit"
+        )
+        XCTAssertFalse(multilingual.isEnglishOnly)
+        XCTAssertFalse(multilingual.supportsSpeakerFiltering)
+        XCTAssertTrue(multilingual.pickerLabel.contains("40 language-locales"))
     }
 
     func testSpeechAnalyzerDescriptorIsSystemManagedAndDoesNotFilterSpeakers() {
