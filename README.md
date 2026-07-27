@@ -44,6 +44,8 @@ Ghost Pepper uses open-source models that run entirely on your Mac. Models downl
 | Whisper small (multilingual) | ~466 MB | Multi-language support |
 | Parakeet v3 (25 languages) | ~1.4 GB | Multi-language via [FluidAudio](https://github.com/FluidInference/FluidAudio) |
 | Qwen3-ASR 0.6B int8 (50+ languages) | ~900 MB | Highest multilingual quality, macOS 15+ required |
+| Nemotron Speech Streaming 0.6B 8-bit | ~633 MB | Low-latency English streaming via [MLX Audio](https://github.com/Blaizzy/mlx-audio-swift) |
+| Nemotron 3.5 ASR Streaming 0.6B 8-bit | ~721 MB | Low-latency multilingual streaming via [MLX Audio](https://github.com/Blaizzy/mlx-audio-swift) |
 
 ### Cleanup models
 
@@ -53,7 +55,7 @@ Ghost Pepper uses open-source models that run entirely on your Mac. Models downl
 | Qwen 3.5 2B | ~1.3 GB | Fast (~4-5s) |
 | Qwen 3.5 4B | ~2.8 GB | Full quality (~5-7s) |
 
-Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit). Cleanup models powered by [LLM.swift](https://github.com/eastriverlee/LLM.swift). All models served by [Hugging Face](https://huggingface.co/).
+Speech models powered by [WhisperKit](https://github.com/argmaxinc/WhisperKit), [FluidAudio](https://github.com/FluidInference/FluidAudio), and [MLX Audio](https://github.com/Blaizzy/mlx-audio-swift). Cleanup models powered by [LLM.swift](https://github.com/eastriverlee/LLM.swift). All models served by [Hugging Face](https://huggingface.co/).
 
 ## Getting started
 
@@ -83,7 +85,7 @@ Every core feature runs 100% on your Mac — verified by AI code review. No trus
 
 | Feature | Status | What was checked |
 |---|---|---|
-| Speech-to-text | :white_check_mark: Local | WhisperKit/FluidAudio inference, no audio sent anywhere |
+| Speech-to-text | :white_check_mark: Local | WhisperKit/FluidAudio/MLX Audio inference, no audio sent anywhere |
 | Text cleanup | :white_check_mark: Local | Qwen LLM runs on-device via LLM.swift |
 | Audio recording | :white_check_mark: Local | AVAudioEngine + ScreenCaptureKit, no streaming |
 | Meeting transcription & storage | :white_check_mark: Local | Chunked transcription, markdown files on disk |

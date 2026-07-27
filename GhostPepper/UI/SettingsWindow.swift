@@ -1333,7 +1333,7 @@ struct SettingsView: View {
                     }
                 }
 
-                if appState.preferredLanguage != "auto" && appState.preferredLanguage != "en" && appState.speechModel.hasSuffix(".en") {
+                if appState.preferredLanguage != "auto" && appState.preferredLanguage != "en" && SpeechModelCatalog.model(named: appState.speechModel)?.isEnglishOnly == true {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)

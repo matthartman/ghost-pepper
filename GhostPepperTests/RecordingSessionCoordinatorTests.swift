@@ -306,6 +306,69 @@ final class RecordingSessionCoordinatorTests: XCTestCase {
 
         XCTAssertNil(transcript)
     }
+
+    func testNemotronRecordingTranscriptionSessionStreamsChunksInOrderBeforeFinishing() async {
+        let backend = StubNemotronStreamSessionBackend(finalText: "  stable transcript  ")
+        let session = NemotronRecordingTranscriptionSession(backend: backend)
+
+        session.appendAudioChunk([1, 2])
+        session.appendAudioChunk([3, 4])
+
+        let transcript = await session.finishTranscription()
+
+        XCTAssertEqual(transcript, "stable transcript")
+        XCTAssertEqual(backend.appendedChunks, [[1, 2], [3, 4]])
+        XCTAssertTrue(backend.didFinish)
+        XCTAssertFalse(session.allowsBatchFallback)
+        XCTAssertFalse(session.supportsConcurrentFinalization)
+    }
+
+    func testNemotronRecordingTranscriptionSessionCancelPreventsFinalTranscript() async {
+        let backend = StubNemotronStreamSessionBackend(finalText: "should not be returned")
+        let session = NemotronRecordingTranscriptionSession(backend: backend)
+
+        session.appendAudioChunk([1, 2, 3, 4])
+        session.cancel()
+
+        let transcript = await session.finishTranscription()
+
+        XCTAssertNil(transcript)
+        XCTAssertFalse(backend.didFinish)
+    }
+}
+
+private final class StubNemotronStreamSessionBackend: NemotronStreamSessionBackend, @unchecked Sendable {
+    private let stateQueue = DispatchQueue(
+        label: "RecordingSessionCoordinatorTests.StubNemotronStreamSessionBackend"
+    )
+    private let finalText: String
+    private var storedChunks: [[Float]] = []
+    private var storedDidFinish = false
+
+    var appendedChunks: [[Float]] {
+        stateQueue.sync { storedChunks }
+    }
+
+    var didFinish: Bool {
+        stateQueue.sync { storedDidFinish }
+    }
+
+    init(finalText: String) {
+        self.finalText = finalText
+    }
+
+    func step(_ samples: [Float]) {
+        stateQueue.sync {
+            storedChunks.append(samples)
+        }
+    }
+
+    func finish() -> String {
+        stateQueue.sync {
+            storedDidFinish = true
+        }
+        return finalText
+    }
 }
 
 private actor LockedValue<Value> {

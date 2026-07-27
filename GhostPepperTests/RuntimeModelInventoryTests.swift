@@ -19,6 +19,8 @@ final class RuntimeModelInventoryTests: XCTestCase {
         XCTAssertTrue(rows.map(\.name).contains("Whisper small.en (accuracy)"))
         XCTAssertTrue(rows.map(\.name).contains("Whisper small (multilingual)"))
         XCTAssertTrue(rows.map(\.name).contains("Parakeet v3 (25 languages)"))
+        XCTAssertTrue(rows.map(\.name).contains("Nemotron Speech 0.6B (8-bit, english streaming)"))
+        XCTAssertTrue(rows.map(\.name).contains("Nemotron 3.5 ASR 0.6B (8-bit, 40 language-locales)"))
         XCTAssertTrue(rows.map(\.name).contains("Qwen 3.5 0.8B Q4_K_M (Very fast)"))
         XCTAssertTrue(rows.map(\.name).contains("Qwen 3.5 2B Q4_K_M (Fast)"))
         XCTAssertTrue(rows.map(\.name).contains("Qwen 3.5 4B Q4_K_M (Full)"))
@@ -34,6 +36,12 @@ final class RuntimeModelInventoryTests: XCTestCase {
 
         XCTAssertEqual(row(named: "Parakeet v3 (25 languages)", in: rows)?.status, .notLoaded)
         XCTAssertEqual(row(named: "Parakeet v3 (25 languages)", in: rows)?.isSelected, false)
+
+        XCTAssertEqual(row(named: "Nemotron Speech 0.6B (8-bit, english streaming)", in: rows)?.status, .notLoaded)
+        XCTAssertEqual(row(named: "Nemotron Speech 0.6B (8-bit, english streaming)", in: rows)?.isSelected, false)
+
+        XCTAssertEqual(row(named: "Nemotron 3.5 ASR 0.6B (8-bit, 40 language-locales)", in: rows)?.status, .notLoaded)
+        XCTAssertEqual(row(named: "Nemotron 3.5 ASR 0.6B (8-bit, 40 language-locales)", in: rows)?.isSelected, false)
 
         XCTAssertEqual(row(named: "Qwen 3.5 0.8B Q4_K_M (Very fast)", in: rows)?.status, .loaded)
         XCTAssertEqual(row(named: "Qwen 3.5 0.8B Q4_K_M (Very fast)", in: rows)?.isSelected, false)

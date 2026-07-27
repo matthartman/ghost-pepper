@@ -12,6 +12,9 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
     from: "0.13.6"
+  MLXAudio:
+    url: https://github.com/obra/mlx-audio-swift.git
+    revision: "6361aebbb1e580fffac4e00241413fe018d73b0c"
   LLM.swift:
     url: https://github.com/obra/LLM.swift.git
     branch: main
@@ -40,6 +43,8 @@ targets:
     dependencies:
       - package: WhisperKit
       - package: FluidAudio
+      - package: MLXAudio
+        product: MLXAudioSTT
       - package: LLM.swift
         product: LLM
       - package: Sparkle
