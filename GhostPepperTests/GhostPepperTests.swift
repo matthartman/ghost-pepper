@@ -1290,6 +1290,7 @@ final class GhostPepperTests: XCTestCase {
                 chordBindingStore: ChordBindingStore(defaults: defaults),
                 cleanupSettingsDefaults: defaults
             )
+            appState.loadStoredIntegrationKeysIfNeeded()
 
             XCTAssertTrue(appState.pepperChatEnabled)
         }
@@ -1304,6 +1305,7 @@ final class GhostPepperTests: XCTestCase {
                 chordBindingStore: ChordBindingStore(defaults: defaults),
                 cleanupSettingsDefaults: defaults
             )
+            appState.loadStoredIntegrationKeysIfNeeded()
 
             XCTAssertFalse(appState.pepperChatEnabled)
         }
@@ -1321,6 +1323,7 @@ final class GhostPepperTests: XCTestCase {
                 chordBindingStore: ChordBindingStore(defaults: defaults),
                 cleanupSettingsDefaults: defaults
             )
+            appState.loadStoredIntegrationKeysIfNeeded()
 
             XCTAssertFalse(appState.pepperChatEnabled)
         }

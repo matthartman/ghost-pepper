@@ -45,7 +45,10 @@ struct MeetingQATools {
         // get context "for free" without needing a follow-up read_file. grep
         // emits "--" separators between non-adjacent match groups; we split
         // on those and cap by group count rather than raw line count.
-        var args: [String] = ["-r", "-n", "--include=*.md", "--exclude-dir=.git", "-B", "2", "-A", "2"]
+        let isRipgrep = URL(fileURLWithPath: binary).lastPathComponent == "rg"
+        var args: [String] = isRipgrep
+            ? ["-n", "--glob=*.md", "--glob=!.git/**", "-B", "2", "-A", "2"]
+            : ["-r", "-n", "--include=*.md", "--exclude-dir=.git", "-B", "2", "-A", "2"]
         if caseInsensitive { args.append("-i") }
         args.append("-e")
         args.append(pattern)

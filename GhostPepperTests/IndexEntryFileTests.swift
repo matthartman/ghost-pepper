@@ -73,7 +73,7 @@ final class IndexEntryFileTests: XCTestCase {
         XCTAssertThrowsError(try IndexEntryFile.parse("# Just a heading\n\nNo frontmatter."))
     }
 
-    func testRejectsUnknownIndexType() {
+    func testPreservesUnknownIndexTypeForRemovedCustomWiki() throws {
         let text = """
         ---
         index_type: aliens
@@ -85,7 +85,10 @@ final class IndexEntryFileTests: XCTestCase {
 
         Body
         """
-        XCTAssertThrowsError(try IndexEntryFile.parse(text))
+        let entry = try IndexEntryFile.parse(text)
+
+        XCTAssertEqual(entry.kind.rawValue, "aliens")
+        XCTAssertEqual(entry.kind.displayName, "Aliens")
     }
 
     func testQuotesNamesContainingColons() throws {

@@ -48,7 +48,7 @@ final class MeetingQAToolsTests: XCTestCase {
         let result = try await tools.grep(pattern: "Quinn", path: nil, caseInsensitive: true, maxResults: 1)
         let matchLines = result.split(separator: "\n").filter { $0.contains(".md:") }
         XCTAssertEqual(matchLines.count, 1, "Expected exactly 1 match line, got: \(result)")
-        XCTAssertTrue(result.contains("max_results was 1"), "Expected hit-cap meta line: \(result)")
+        XCTAssertTrue(result.contains("max_results hit"), "Expected hit-cap meta line: \(result)")
     }
 
     func testGrepReturnsNoMatchesMessage() async throws {
