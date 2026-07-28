@@ -1064,6 +1064,13 @@ enum MeetingTranscriptWindowPresentation {
     ) -> NSWindow.Level {
         shouldFloatWhileRecording && hasActiveRecording ? .floating : .normal
     }
+
+    static func shouldOpenAtLaunch(
+        transcriptionEnabled: Bool,
+        opensAtLaunch: Bool
+    ) -> Bool {
+        transcriptionEnabled && opensAtLaunch
+    }
 }
 
 enum MeetingRecordingStartError: LocalizedError {
@@ -1081,6 +1088,7 @@ enum MeetingRecordingStartError: LocalizedError {
 @MainActor
 final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    var isWindowOpen: Bool { window != nil }
     var onOpenSettings: (() -> Void)?
     var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) throws -> MeetingSession)?
     var onStopRecording: ((MeetingSession) -> Void)?

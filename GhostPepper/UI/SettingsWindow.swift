@@ -2619,6 +2619,12 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
+                        Toggle("Open the meeting window at launch", isOn: $appState.meetingWindowOpensAtLaunch)
+
+                        Text("Opens the meeting window automatically when Ghost Pepper starts. Off by default — the window is also available from the menu bar.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
                         Toggle(
                             "Float the meeting window while recording",
                             isOn: $appState.meetingWindowFloatsWhileRecording

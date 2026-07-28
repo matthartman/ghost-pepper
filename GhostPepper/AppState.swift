@@ -219,6 +219,7 @@ class AppState: ObservableObject {
     @Published var showWhatsNew = false
     @AppStorage("meetingAutoDetectEnabled") var meetingAutoDetectEnabled: Bool = true
     @AppStorage("meetingWindowFloatsWhileRecording") var meetingWindowFloatsWhileRecording: Bool = true
+    @AppStorage("meetingWindowOpensAtLaunch") var meetingWindowOpensAtLaunch: Bool = false
     @AppStorage("meetingSummaryPrompt") var meetingSummaryPrompt: String = MeetingSummaryGenerator.defaultPrompt
     @AppStorage("claudeAPIModel") var claudeAPIModel: String = ClaudeAPIModel.sonnet.rawValue
     @AppStorage("pauseMediaWhileRecording") var pauseMediaWhileRecording: Bool = true
@@ -1849,12 +1850,24 @@ class AppState: ObservableObject {
     }
 
     func showMeetingTranscriptWindow() {
+        guard meetingTranscriptEnabled else { return }
+        meetingTranscriptWindowController.show()
+    }
+
+    func showMeetingTranscriptWindowAtLaunch() {
+        guard MeetingTranscriptWindowPresentation.shouldOpenAtLaunch(
+            transcriptionEnabled: meetingTranscriptEnabled,
+            opensAtLaunch: meetingWindowOpensAtLaunch
+        ) else { return }
         meetingTranscriptWindowController.show()
     }
 
     func showOrCreateMeetingWindow() {
+        guard meetingTranscriptEnabled else { return }
         meetingTranscriptWindowController.show()
     }
+
+    var isMeetingWindowOpen: Bool { meetingTranscriptWindowController.isWindowOpen }
 
     func refreshMeetingTranscriptWindowPresentation() {
         meetingTranscriptWindowController.refreshPresentation()
