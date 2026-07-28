@@ -73,6 +73,66 @@ final class ChordEngineTests: XCTestCase {
         XCTAssertNil(engine.activeRecordingAction)
     }
 
+    func testSimpleActionFiresOnceOnKeyDownEdgeAndSuppressesRepeat() throws {
+        var engine = ChordEngine(bindings: [
+            .copyLastVocalRecording: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space])))
+        ])
+
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.keyDown(space)), [.fireSimpleAction(.copyLastVocalRecording)])
+        XCTAssertNil(engine.activeRecordingAction)
+
+        XCTAssertEqual(engine.handle(.keyDown(space)), [])
+        XCTAssertEqual(engine.handle(.keyUp(space)), [])
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+    }
+
+    func testSimpleActionDoesNotRefireWhenChordIsReenteredFromASuperset() throws {
+        let extra = PhysicalKey(keyCode: 4) // H
+        var engine = ChordEngine(bindings: [
+            .copyLastVocalRecording: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space])))
+        ])
+
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.keyDown(space)), [.fireSimpleAction(.copyLastVocalRecording)])
+
+        // Extend past the chord, then collapse back to the exact set — must not re-fire.
+        XCTAssertEqual(engine.handle(.keyDown(extra)), [])
+        XCTAssertEqual(engine.handle(.keyUp(extra)), [])
+
+        // Releasing a chord key breaks the superset, so a fresh press fires again.
+        XCTAssertEqual(engine.handle(.keyUp(space)), [])
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.keyDown(space)), [.fireSimpleAction(.copyLastVocalRecording)])
+    }
+
+    func testOverlappingSimpleActionDoesNotRefireWhenSupersetCollapses() throws {
+        let extra = PhysicalKey(keyCode: 4) // H
+        var engine = ChordEngine(bindings: [
+            .copyLastVocalRecording: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space]))),
+            .openHistory: try XCTUnwrap(KeyChord(keys: Set([rightCommand, space, extra])))
+        ])
+
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.keyDown(space)), [.fireSimpleAction(.copyLastVocalRecording)])
+        XCTAssertEqual(engine.handle(.keyDown(extra)), [.fireSimpleAction(.openHistory)])
+
+        // Collapsing the superset back to the smaller chord must not re-fire it.
+        XCTAssertEqual(engine.handle(.keyUp(extra)), [])
+    }
+
+    func testRecordingChordStillStartsWhenASimpleActionIsAlsoBound() throws {
+        var engine = ChordEngine(bindings: [
+            .pushToTalk: try XCTUnwrap(KeyChord(keys: Set([rightCommand, rightOption]))),
+            .openHistory: try XCTUnwrap(KeyChord(keys: Set([leftCommand, space])))
+        ])
+
+        XCTAssertEqual(engine.handle(.flagsChanged(rightCommand)), [])
+        XCTAssertEqual(engine.handle(.flagsChanged(rightOption)), [.startRecording])
+        XCTAssertEqual(engine.activeRecordingAction, .pushToTalk)
+    }
+
     func testPushToTalkStopsWhenAnyRequiredKeyReleases() throws {
         var engine = ChordEngine(bindings: [
             .pushToTalk: try XCTUnwrap(KeyChord(keys: Set([rightCommand, rightOption]))),

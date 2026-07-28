@@ -9,6 +9,7 @@ struct ChordEngine {
         case startRecording
         case stopRecording
         case restartRecording
+        case fireSimpleAction(ChordAction)
     }
 
     private let bindings: [ChordAction: KeyChord]
@@ -20,18 +21,19 @@ struct ChordEngine {
     }
 
     mutating func handle(_ inputEvent: InputEvent) -> [Effect] {
+        let previousPressedKeys = pressedKeys
         guard updatePressedKeys(for: inputEvent) else { return [] }
-        return evaluateStateTransition()
+        return evaluateStateTransition(previousPressedKeys: previousPressedKeys)
     }
 
     mutating func syncPressedKeys(_ pressedKeys: Set<PhysicalKey>) -> [Effect] {
         guard self.pressedKeys != pressedKeys else { return [] }
+        let previousPressedKeys = self.pressedKeys
         self.pressedKeys = pressedKeys
-        return evaluateStateTransition()
+        return evaluateStateTransition(previousPressedKeys: previousPressedKeys)
     }
 
-    private mutating func evaluateStateTransition() -> [Effect] {
-        
+    private mutating func evaluateStateTransition(previousPressedKeys: Set<PhysicalKey>) -> [Effect] {
         switch activeRecordingAction {
         case .pushToTalk:
             if matchResult() == .exact(.toggleToTalk) {
@@ -72,8 +74,18 @@ struct ChordEngine {
 
             return []
 
+        case .copyLastVocalRecording, .openHistory:
+            // Unreachable: simple actions never become the active recording action.
+            return []
+
         case nil:
             switch matchResult() {
+            case .exact(let action) where action.isSimpleAction:
+                // Fire only when the chord is completed by adding a key, not when a larger
+                // held set collapses back down onto it (which would re-fire on key release).
+                guard let chord = bindings[action],
+                      !previousPressedKeys.isSuperset(of: chord.keys) else { return [] }
+                return [.fireSimpleAction(action)]
             case .exact(let action):
                 activeRecordingAction = action
                 return [.startRecording]

@@ -12,6 +12,7 @@ private final class FakeHotkeyMonitor: HotkeyMonitoring {
     var onToggleToTalkStop: (() -> Void)?
     var onPepperChatStart: (() -> Void)?
     var onPepperChatStop: (() -> Void)?
+    var onSimpleAction: ((ChordAction) -> Void)?
     var onRecordingRestart: (() -> Void)?
 
     var updatedBindings: [ChordAction: KeyChord] = [:]
@@ -1263,6 +1264,154 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertEqual(appState.toggleToTalkChord, originalToggleChord)
         XCTAssertEqual(monitor.updatedBindings[.toggleToTalk], originalToggleChord)
         XCTAssertEqual(appState.shortcutErrorMessage, "That shortcut is already in use.")
+    }
+
+    func testAppStateLeavesMenuShortcutsUnsetByDefault() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let monitor = FakeHotkeyMonitor()
+        let appState = AppState(hotkeyMonitor: monitor, chordBindingStore: ChordBindingStore(defaults: defaults))
+
+        await appState.startHotkeyMonitor()
+
+        XCTAssertNil(appState.copyLastVocalRecordingChord)
+        XCTAssertNil(appState.openHistoryChord)
+        XCTAssertNil(monitor.updatedBindings[.copyLastVocalRecording])
+        XCTAssertNil(monitor.updatedBindings[.openHistory])
+        XCTAssertNotNil(monitor.onSimpleAction)
+    }
+
+    func testAppStateUpdateShortcutBindsMenuActionGlobally() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let monitor = FakeHotkeyMonitor()
+        let appState = AppState(hotkeyMonitor: monitor, chordBindingStore: ChordBindingStore(defaults: defaults))
+        let chord = try XCTUnwrap(KeyChord(keys: Set([
+            PhysicalKey(keyCode: 54),
+            PhysicalKey(keyCode: 4)
+        ])))
+
+        appState.updateShortcut(chord, for: .copyLastVocalRecording)
+
+        XCTAssertEqual(appState.copyLastVocalRecordingChord, chord)
+        XCTAssertEqual(monitor.updatedBindings[.copyLastVocalRecording], chord)
+    }
+
+    func testAppStateClearShortcutUnbindsOptionalMenuAction() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let monitor = FakeHotkeyMonitor()
+        let store = ChordBindingStore(defaults: defaults)
+        let appState = AppState(hotkeyMonitor: monitor, chordBindingStore: store)
+        let chord = try XCTUnwrap(KeyChord(keys: Set([
+            PhysicalKey(keyCode: 54),
+            PhysicalKey(keyCode: 4)
+        ])))
+
+        appState.updateShortcut(chord, for: .copyLastVocalRecording)
+        appState.clearShortcut(for: .copyLastVocalRecording)
+
+        XCTAssertNil(appState.copyLastVocalRecordingChord)
+        XCTAssertNil(store.binding(for: .copyLastVocalRecording))
+        XCTAssertNil(monitor.updatedBindings[.copyLastVocalRecording])
+    }
+
+    func testAppStateRecordsLastVocalRecordingAtDictationFunnel() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        XCTAssertNil(appState.lastVocalRecording)
+
+        appState.transcribeAudioBufferOverride = { _ in "raw transcript" }
+        appState.cleanedTranscriptionResultOverride = { _, _ in
+            (text: "cleaned transcript", prompt: "", attemptedCleanup: true, cleanupUsedFallback: false)
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: nil,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(appState.lastVocalRecording, "cleaned transcript")
+    }
+
+    func testAppStateFallsBackToRawVocalRecordingWhenCleanupReturnsEmpty() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+
+        appState.transcribeAudioBufferOverride = { _ in "raw transcript" }
+        appState.cleanedTranscriptionResultOverride = { _, _ in
+            (text: "", prompt: "", attemptedCleanup: true, cleanupUsedFallback: false)
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: nil,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertEqual(appState.lastVocalRecording, "raw transcript")
+    }
+
+    func testAppStateClearsLastVocalRecordingWhenRecordingHasNoTranscription() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+
+        appState.transcribeAudioBufferOverride = { _ in "previous transcript" }
+        appState.cleanedTranscriptionResultOverride = { text, _ in
+            (text: text, prompt: "", attemptedCleanup: false, cleanupUsedFallback: false)
+        }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: nil,
+            archivedWindowContext: nil
+        )
+
+        appState.transcribeAudioBufferOverride = { _ in nil }
+
+        await appState.finishRecordingForTesting(
+            audioBuffer: [1, 2, 3, 4, 5, 6],
+            recordingSessionCoordinator: nil,
+            recordingTranscriptionSession: nil,
+            archivedWindowContext: nil
+        )
+
+        XCTAssertNil(appState.lastVocalRecording)
+    }
+
+    func testCopyLastVocalRecordingToPasteboardNoOpsWhenEmpty() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("sentinel", forType: .string)
+
+        appState.copyLastVocalRecordingToPasteboard()
+
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "sentinel")
     }
 
     func testAppStateLoadsPersistedCleanupBackendSelection() throws {

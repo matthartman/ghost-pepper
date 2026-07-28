@@ -957,13 +957,35 @@ struct SettingsView: View {
                         appState.updateShortcut(chord, for: .toggleToTalk)
                     }
 
+                    ShortcutRecorderView(
+                        title: "Copy Last Vocal Recording",
+                        chord: appState.copyLastVocalRecordingChord,
+                        onRecordingStateChange: appState.setShortcutCaptureActive,
+                        onClear: {
+                            appState.clearShortcut(for: .copyLastVocalRecording)
+                        }
+                    ) { chord in
+                        appState.updateShortcut(chord, for: .copyLastVocalRecording)
+                    }
+
+                    ShortcutRecorderView(
+                        title: "Open History",
+                        chord: appState.openHistoryChord,
+                        onRecordingStateChange: appState.setShortcutCaptureActive,
+                        onClear: {
+                            appState.clearShortcut(for: .openHistory)
+                        }
+                    ) { chord in
+                        appState.updateShortcut(chord, for: .openHistory)
+                    }
+
                     if let shortcutErrorMessage = appState.shortcutErrorMessage {
                         Text(shortcutErrorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
 
-                    Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord.")
+                    Text("Push to talk records while the hold chord stays down. Toggle recording starts and stops when you press the full toggle chord. Copy Last Vocal Recording and Open History are unset by default — record a chord to enable each as a global shortcut.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
