@@ -32,6 +32,42 @@ final class MeetingTranscriptWindowPresentationTests: XCTestCase {
             .normal
         )
     }
+
+    func testDoesNotOpenAtLaunchWhenBothTranscriptionAndLaunchPreferenceAreOff() {
+        XCTAssertFalse(
+            MeetingTranscriptWindowPresentation.shouldOpenAtLaunch(
+                transcriptionEnabled: false,
+                opensAtLaunch: false
+            )
+        )
+    }
+
+    func testDoesNotOpenAtLaunchWhenTranscriptionIsOffEvenIfLaunchPreferenceIsOn() {
+        XCTAssertFalse(
+            MeetingTranscriptWindowPresentation.shouldOpenAtLaunch(
+                transcriptionEnabled: false,
+                opensAtLaunch: true
+            )
+        )
+    }
+
+    func testDoesNotOpenAtLaunchWhenLaunchPreferenceIsOffEvenIfTranscriptionIsOn() {
+        XCTAssertFalse(
+            MeetingTranscriptWindowPresentation.shouldOpenAtLaunch(
+                transcriptionEnabled: true,
+                opensAtLaunch: false
+            )
+        )
+    }
+
+    func testOpensAtLaunchOnlyWhenBothTranscriptionAndLaunchPreferenceAreOn() {
+        XCTAssertTrue(
+            MeetingTranscriptWindowPresentation.shouldOpenAtLaunch(
+                transcriptionEnabled: true,
+                opensAtLaunch: true
+            )
+        )
+    }
 }
 
 @MainActor
@@ -466,4 +502,56 @@ final class MeetingSessionSpeakerTaggingTests: XCTestCase {
             .remote(name: "Speaker 1")
         ])
     }
+}
+
+@MainActor
+final class MeetingTranscriptLaunchWindowTests: XCTestCase {
+    private let transcriptionKey = "meetingTranscriptEnabled"
+    private let opensAtLaunchKey = "meetingWindowOpensAtLaunch"
+
+    override func setUp() {
+        super.setUp()
+        // Pin both flags to false on the standard defaults before constructing
+        // AppState so the one-time migration in AppState.init (which sets
+        // meetingTranscriptEnabled = true for existing users) cannot fire.
+        UserDefaults.standard.set(false, forKey: transcriptionKey)
+        UserDefaults.standard.set(false, forKey: opensAtLaunchKey)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: transcriptionKey)
+        UserDefaults.standard.removeObject(forKey: opensAtLaunchKey)
+        super.tearDown()
+    }
+
+    func testLaunchWindowDoesNotOpenWhenTranscriptionIsDisabled() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        let appState = AppState(
+            hotkeyMonitor: LaunchWindowFakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults
+        )
+
+        appState.showMeetingTranscriptWindowAtLaunch()
+
+        XCTAssertFalse(appState.isMeetingWindowOpen)
+    }
+}
+
+private final class LaunchWindowFakeHotkeyMonitor: HotkeyMonitoring {
+    var onRecordingStart: (() -> Void)?
+    var onRecordingStop: (() -> Void)?
+    var onRecordingRestart: (() -> Void)?
+    var onPushToTalkStart: (() -> Void)?
+    var onPushToTalkStop: (() -> Void)?
+    var onToggleToTalkStart: (() -> Void)?
+    var onToggleToTalkStop: (() -> Void)?
+    var onPepperChatStart: (() -> Void)?
+    var onPepperChatStop: (() -> Void)?
+
+    func start() -> Bool { true }
+    func stop() {}
+    func updateBindings(_ bindings: [ChordAction: KeyChord]) {}
+    func setSuspended(_ suspended: Bool) {}
 }

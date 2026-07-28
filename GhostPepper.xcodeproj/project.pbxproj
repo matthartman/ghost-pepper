@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -318,7 +318,7 @@
 		59666FBC728BF70A61983188 /* PerformanceTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceTraceTests.swift; sourceTree = "<group>"; };
 		5C926BF4341F8D3448FE7096 /* MeetingCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCardTests.swift; sourceTree = "<group>"; };
 		5D080B6685FCD6476F47C97B /* IndexKindCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexKindCodableTests.swift; sourceTree = "<group>"; };
-		5D68EDD354F149B2EF3963B7 /* CleanupModelProbe */ = {isa = PBXFileReference; includeInIndex = 0; path = CleanupModelProbe; sourceTree = BUILT_PRODUCTS_DIR; };
+		5D68EDD354F149B2EF3963B7 /* CleanupModelProbe */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = text; path = CleanupModelProbe; sourceTree = BUILT_PRODUCTS_DIR; };
 		5DCEBF68EFD590E3779D72D5 /* DiarizationSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiarizationSummary.swift; sourceTree = "<group>"; };
 		5F85AD0262D40047E6FCA3D8 /* UpdaterController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdaterController.swift; sourceTree = "<group>"; };
 		5FA2814A2B1E8A59525306B6 /* WikiEntityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WikiEntityResolver.swift; sourceTree = "<group>"; };
@@ -349,7 +349,7 @@
 		7FC3D36DE7AC456246062883 /* IndexListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexListView.swift; sourceTree = "<group>"; };
 		80731398639640F62FFC4524 /* RecordingOCRPrefetchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOCRPrefetchTests.swift; sourceTree = "<group>"; };
 		8348D35B3C14A52DCB5138E2 /* CleanupBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupBackend.swift; sourceTree = "<group>"; };
-		84630A373DA596D94B45E867 /* Secrets.example */ = {isa = PBXFileReference; path = Secrets.example; sourceTree = "<group>"; };
+		84630A373DA596D94B45E867 /* Secrets.example */ = {isa = PBXFileReference; lastKnownFileType = text; path = Secrets.example; sourceTree = "<group>"; };
 		853418773B99673FB27791AC /* CleanupModelProbeRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CleanupModelProbeRunner.swift; sourceTree = "<group>"; };
 		86139A1597D208E3748C3155 /* MeetingQAAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingQAAgent.swift; sourceTree = "<group>"; };
 		864660499212282B8ADC1AA7 /* HighlightedTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightedTextView.swift; sourceTree = "<group>"; };
@@ -1033,7 +1033,6 @@
 				7193259C7B8193E12A21EF21 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -1307,6 +1306,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1325,6 +1325,7 @@
 			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1357,6 +1358,7 @@
 			baseConfigurationReference = 112E1B08BAA94CE3D91F2E00 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1454,6 +1456,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = GhostPepper/GhostPepper.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;

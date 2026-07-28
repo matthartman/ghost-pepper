@@ -364,14 +364,17 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
     func clean(text: String, prompt: String? = nil, modelKind: LocalCleanupModelKind? = nil) async throws -> String {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind)
 
-        guard model(for: requestedModelKind) != nil else {
-            debugLogger?(
-                .cleanup,
-                "Skipped local cleanup because model \(requestedModelKind.rawValue) was not ready."
-            )
-            throw CleanupBackendError.unavailable
+        if probeExecutionOverride == nil {
+            await loadModel(kind: requestedModelKind)
+
+            guard model(for: requestedModelKind) != nil else {
+                debugLogger?(
+                    .cleanup,
+                    "Skipped local cleanup because model \(requestedModelKind.rawValue) was not ready."
+                )
+                throw CleanupBackendError.unavailable
+            }
         }
 
         let activePrompt = prompt ?? TextCleaner.defaultPrompt
