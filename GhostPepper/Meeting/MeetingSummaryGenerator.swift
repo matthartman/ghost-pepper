@@ -44,7 +44,8 @@ final class MeetingSummaryGenerator {
     func generateSummary(
         transcript: MeetingTranscript,
         chunkPrompt: String = MeetingSummaryGenerator.defaultPrompt,
-        finalPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
+        finalPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt,
+        modelKind: LocalCleanupModelKind? = nil
     ) async -> String? {
         let segments = transcript.segments
         guard !segments.isEmpty else { return nil }
@@ -70,7 +71,7 @@ final class MeetingSummaryGenerator {
             // Short meeting — summarize directly with the final prompt
             let input = "\(notesPrefix)Meeting transcript:\n\n\(chunks[0])"
             do {
-                return try await runLLM(text: input, prompt: finalPrompt)
+                return try await runLLM(text: input, prompt: finalPrompt, modelKind: modelKind)
             } catch {
                 debugLogger?(
                     .model,
@@ -85,7 +86,7 @@ final class MeetingSummaryGenerator {
         for (i, chunk) in chunks.enumerated() {
             let input = "Meeting transcript (part \(i + 1) of \(chunks.count)):\n\n\(chunk)"
             do {
-                let summary = try await runLLM(text: input, prompt: chunkPrompt)
+                let summary = try await runLLM(text: input, prompt: chunkPrompt, modelKind: modelKind)
                 chunkSummaries.append(summary)
             } catch {
                 debugLogger?(
@@ -109,7 +110,7 @@ final class MeetingSummaryGenerator {
 
         let finalInput = "\(notesPrefix)Combined meeting notes:\n\n\(combined)"
         do {
-            return try await runLLM(text: finalInput, prompt: finalPrompt)
+            return try await runLLM(text: finalInput, prompt: finalPrompt, modelKind: modelKind)
         } catch {
             debugLogger?(
                 .model,
@@ -143,8 +144,8 @@ final class MeetingSummaryGenerator {
         return chunks
     }
 
-    private func runLLM(text: String, prompt: String) async throws -> String {
-        let result = try await cleanupManager.clean(text: text, prompt: prompt)
+    private func runLLM(text: String, prompt: String, modelKind: LocalCleanupModelKind?) async throws -> String {
+        let result = try await cleanupManager.clean(text: text, prompt: prompt, modelKind: modelKind)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

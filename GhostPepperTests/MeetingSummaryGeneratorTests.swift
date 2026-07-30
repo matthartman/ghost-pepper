@@ -167,6 +167,33 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         XCTAssertNotEqual(capturedPrompt, TextCleaner.defaultPrompt)
     }
 
+    func testGenerateSummaryUsesExplicitModelKindOverrideNotTheManagersDefault() async {
+        let transcript = makeSingleChunkTranscript()
+        var capturedModelKind: LocalCleanupModelKind?
+        let cleanupManager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, modelKind, _ in
+                capturedModelKind = modelKind
+                return CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: "test",
+                    rawOutput: "Final summary",
+                    elapsed: 0.01
+                )
+            }
+        )
+        let generator = MeetingSummaryGenerator(cleanupManager: cleanupManager)
+
+        let summary = await generator.generateSummary(transcript: transcript, modelKind: .qwen35_4b_q4_k_m)
+
+        XCTAssertEqual(summary, "Final summary")
+        XCTAssertEqual(capturedModelKind, .qwen35_4b_q4_k_m)
+    }
+
     func testGenerateSummarySingleChunkCombineFailureHasNoRollupLine() async {
         let transcript = makeSingleChunkTranscript()
         let cleanupManager = TextCleanupManager(

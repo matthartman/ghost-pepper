@@ -1289,8 +1289,8 @@ class AppState: ObservableObject {
                 await self?.finishMeetingSession(session, logPrefix: "Meeting stopped")
             }
         }
-        controller.onGenerateSummary = { [weak self] transcript in
-            Task { await self?.generateMeetingSummary(for: transcript) }
+        controller.onGenerateSummary = { [weak self] transcript, modelKind in
+            Task { await self?.generateMeetingSummary(for: transcript, modelKind: modelKind) }
         }
         controller.onLoadSpeakerReviewItems = { [weak self] transcript in
             self?.meetingSpeakerReviewItems(for: transcript) ?? []
@@ -1872,7 +1872,7 @@ class AppState: ObservableObject {
         }
     }
 
-    func generateMeetingSummary(for transcript: MeetingTranscript) async {
+    func generateMeetingSummary(for transcript: MeetingTranscript, modelKind: LocalCleanupModelKind? = nil) async {
         guard !transcript.segments.isEmpty else { return }
         transcript.isGeneratingSummary = true
         let generator = MeetingSummaryGenerator(cleanupManager: textCleanupManager)
@@ -1880,7 +1880,8 @@ class AppState: ObservableObject {
         let result = await generator.generateSummary(
             transcript: transcript,
             chunkPrompt: MeetingSummaryGenerator.defaultPrompt,
-            finalPrompt: meetingSummaryPrompt
+            finalPrompt: meetingSummaryPrompt,
+            modelKind: modelKind
         )
         transcript.summary = result
         transcript.isGeneratingSummary = false
