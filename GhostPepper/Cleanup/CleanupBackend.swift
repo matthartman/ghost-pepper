@@ -8,6 +8,7 @@ enum CleanupBackendError: Error, Equatable {
     case unavailable
     case unsupportedRuntime(String)
     case unusableOutput(rawOutput: String)
+    case timedOut(seconds: TimeInterval)
 }
 
 extension CleanupBackendError: LocalizedError {
@@ -19,6 +20,8 @@ extension CleanupBackendError: LocalizedError {
             return message
         case .unusableOutput:
             return "The selected local model returned unusable output."
+        case .timedOut(let seconds):
+            return "The local model timed out after \(Int(seconds))s."
         }
     }
 }
