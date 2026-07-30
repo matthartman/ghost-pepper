@@ -401,6 +401,12 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             case .modelUnavailable:
                 throw CleanupBackendError.unavailable
             }
+        } catch is CancellationError {
+            debugLogger?(
+                .cleanup,
+                "Local cleanup probe failed before producing usable output: timed out after \(Int(Self.timeoutSeconds))s."
+            )
+            throw CleanupBackendError.timedOut(seconds: Self.timeoutSeconds)
         } catch {
             debugLogger?(
                 .cleanup,

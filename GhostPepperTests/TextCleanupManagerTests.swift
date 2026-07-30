@@ -221,6 +221,25 @@ final class TextCleanupManagerTests: XCTestCase {
         }
     }
 
+    func testCleanupThrowsTimedOutWhenProbeIsCancelled() async {
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_2b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, _, _ in
+                throw CancellationError()
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await manager.clean(text: "hello", prompt: "unused")) { error in
+            XCTAssertEqual(
+                error as? CleanupBackendError,
+                .timedOut(seconds: 15.0)
+            )
+        }
+    }
+
     func testDeleteCachedModelRemovesOnlyTheConfiguredCacheFileAndNotifiesObservers() throws {
         let modelsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
