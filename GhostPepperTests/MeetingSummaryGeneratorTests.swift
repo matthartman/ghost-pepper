@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class MeetingSummaryGeneratorTests: XCTestCase {
     private func makeMultiChunkTranscript(chunkCount: Int) -> MeetingTranscript {
-        let transcript = MeetingTranscript(meetingName: "Job Interview with Eric Brengle")
+        let transcript = MeetingTranscript(meetingName: "Long Meeting")
         // ~6000 chars: bigger than the 5000-char chunk limit on its own,
         // so each segment becomes exactly one chunk.
         let oversizedText = String(repeating: "word ", count: 1200)
