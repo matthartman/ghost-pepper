@@ -142,6 +142,31 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         })
     }
 
+    func testGenerateSummaryPassesSummaryPromptAsSystemPromptNotDefaultCleanupPrompt() async {
+        let transcript = makeSingleChunkTranscript()
+        var capturedPrompt: String?
+        let cleanupManager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            probeExecutionOverride: { _, prompt, modelKind, _ in
+                capturedPrompt = prompt
+                return CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: "test",
+                    rawOutput: "Final summary",
+                    elapsed: 0.01
+                )
+            }
+        )
+        let generator = MeetingSummaryGenerator(cleanupManager: cleanupManager)
+
+        let summary = await generator.generateSummary(transcript: transcript)
+
+        XCTAssertEqual(summary, "Final summary")
+        XCTAssertEqual(capturedPrompt, MeetingSummaryGenerator.finalSummaryPrompt)
+        XCTAssertNotEqual(capturedPrompt, TextCleaner.defaultPrompt)
+    }
+
     func testGenerateSummarySingleChunkCombineFailureHasNoRollupLine() async {
         let transcript = makeSingleChunkTranscript()
         let cleanupManager = TextCleanupManager(

@@ -144,8 +144,7 @@ final class MeetingSummaryGenerator {
     }
 
     private func runLLM(text: String, prompt: String) async throws -> String {
-        let fullPrompt = "\(prompt)\n\n\(text)"
-        let result = try await cleanupManager.clean(text: fullPrompt, prompt: nil)
+        let result = try await cleanupManager.clean(text: text, prompt: prompt)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
