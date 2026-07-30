@@ -1876,6 +1876,7 @@ class AppState: ObservableObject {
         guard !transcript.segments.isEmpty else { return }
         transcript.isGeneratingSummary = true
         let generator = MeetingSummaryGenerator(cleanupManager: textCleanupManager)
+        generator.debugLogger = debugLogStore.record
         let result = await generator.generateSummary(
             transcript: transcript,
             chunkPrompt: MeetingSummaryGenerator.defaultPrompt,
