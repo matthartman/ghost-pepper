@@ -177,6 +177,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
     private(set) var activeLLM: LLM?
     private(set) var activeLoadedModelKind: LocalCleanupModelKind?
+    private(set) var activeLoadedContextTokenCount: Int32?
 
     static let compactModel = CleanupModelDescriptor(
         kind: .qwen35_0_8b_q4_k_m,
@@ -388,6 +389,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         if activeLoadedModelKind == kind {
             activeLLM = nil
             activeLoadedModelKind = nil
+            activeLoadedContextTokenCount = nil
             state = .idle
             errorMessage = nil
             return
@@ -647,8 +649,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         await loadModel()
     }
 
-    func loadModel(kind: LocalCleanupModelKind) async {
-        if activeLoadedModelKind == kind && activeLLM != nil {
+    func loadModel(kind: LocalCleanupModelKind, contextTokenCount: Int32) async {
+        let requestedContext = min(contextTokenCount, descriptor(for: kind).maxTokenCount)
+
+        if activeLoadedModelKind == kind && activeLoadedContextTokenCount == requestedContext && activeLLM != nil {
             state = .ready
             errorMessage = nil
             return
@@ -656,7 +660,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
         if case .loadingModel = state {
             await waitForActiveLoad()
-            if activeLoadedModelKind == kind && activeLLM != nil {
+            if activeLoadedModelKind == kind && activeLoadedContextTokenCount == requestedContext && activeLLM != nil {
                 state = .ready
                 errorMessage = nil
                 return
@@ -687,8 +691,6 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             do {
                 try await downloadModel(kind: kind, url: descriptor.url, to: path)
             } catch {
-                // User-initiated cancellation should drop the row back to
-                // "not downloaded" without surfacing a scary red error.
                 let nsError = error as NSError
                 let isCancelled = error is CancellationError
                     || nsError.code == NSURLErrorCancelled
@@ -716,9 +718,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         state = .loadingModel(kind: kind)
         activeLLM = nil
         activeLoadedModelKind = nil
+        activeLoadedContextTokenCount = nil
 
         let loadedModel = await Task.detached { () -> LLM? in
-            guard let llm = LLM(from: path, maxTokenCount: descriptor.maxTokenCount) else {
+            guard let llm = LLM(from: path, maxTokenCount: requestedContext) else {
                 return nil
             }
             llm.useResolvedTemplate(systemPrompt: TextCleaner.defaultPrompt)
@@ -737,9 +740,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         loadedModel.postprocess = { (_: String) in }
         activeLLM = loadedModel
         activeLoadedModelKind = kind
+        activeLoadedContextTokenCount = requestedContext
         state = .ready
         errorMessage = nil
         debugLogger?(.model, "Local cleanup model ready: \(descriptor.displayName).")
+    }
+
+    func loadModel(kind: LocalCleanupModelKind) async {
+        await loadModel(kind: kind, contextTokenCount: descriptor(for: kind).maxTokenCount)
     }
 
     /// Kicks off a tracked `loadModel(kind:)` so callers can later cancel it
@@ -782,6 +790,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     func unloadModel() {
         activeLLM = nil
         activeLoadedModelKind = nil
+        activeLoadedContextTokenCount = nil
         state = .idle
         errorMessage = nil
         debugLogger?(.model, "Unloaded local cleanup models.")

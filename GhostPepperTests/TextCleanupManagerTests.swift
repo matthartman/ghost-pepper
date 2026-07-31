@@ -307,6 +307,20 @@ final class TextCleanupManagerTests: XCTestCase {
         XCTAssertEqual(restored.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
     }
 
+    func testLoadModelReloadsWhenContextTokenCountChangesForSameKind() async {
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 4096)
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 4096)
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 16384)
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
     func testDeleteCachedModelRemovesOnlyTheConfiguredCacheFileAndNotifiesObservers() throws {
         let modelsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
