@@ -292,7 +292,6 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         isModelAvailable(selectedCleanupModelKind)
     }
 
-    private static let timeoutSeconds: TimeInterval = 15.0
     private static let selectedCleanupModelDefaultsKey = "selectedCleanupModelKind"
     private static let selectedMeetingSummaryModelDefaultsKey = "selectedMeetingSummaryModelKind"
     private static let systemPromptSentinel = "<|ghost-pepper-system-prefill-split|>"
@@ -398,9 +397,22 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         objectWillChange.send()
     }
 
+    /// Satisfies `TextCleaningManaging`'s exact 3-parameter signature: a
+    /// witness with an extra parameter — even a defaulted `purpose` — can't
+    /// stand in for the protocol requirement, so this forwards to the real
+    /// implementation below with the default purpose.
     func clean(text: String, prompt: String? = nil, modelKind: LocalCleanupModelKind? = nil) async throws -> String {
+        try await clean(text: text, prompt: prompt, modelKind: modelKind, purpose: .realtime)
+    }
+
+    func clean(
+        text: String,
+        prompt: String? = nil,
+        modelKind: LocalCleanupModelKind? = nil,
+        purpose: CleanupPurpose = .realtime
+    ) async throws -> String {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind)
+        await loadModel(kind: requestedModelKind, contextTokenCount: Self.config(for: purpose).maxTokenCount)
 
         guard model(for: requestedModelKind) != nil else {
             debugLogger?(
@@ -416,7 +428,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 text: text,
                 prompt: activePrompt,
                 modelKind: requestedModelKind,
-                thinkingMode: .suppressed
+                thinkingMode: .suppressed,
+                purpose: purpose
             )
             let cleaned = result.rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty || cleaned == "..." {
@@ -438,11 +451,12 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 throw CleanupBackendError.unavailable
             }
         } catch is CancellationError {
+            let timeoutSeconds = Self.config(for: purpose).timeoutSeconds
             debugLogger?(
                 .cleanup,
-                "Local cleanup probe failed before producing usable output: timed out after \(Int(Self.timeoutSeconds))s."
+                "Local cleanup probe failed before producing usable output: timed out after \(Int(timeoutSeconds))s."
             )
-            throw CleanupBackendError.timedOut(seconds: Self.timeoutSeconds)
+            throw CleanupBackendError.timedOut(seconds: timeoutSeconds)
         } catch {
             debugLogger?(
                 .cleanup,
@@ -540,13 +554,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         text: String,
         prompt: String,
         modelKind: LocalCleanupModelKind,
-        thinkingMode: CleanupModelProbeThinkingMode
+        thinkingMode: CleanupModelProbeThinkingMode,
+        purpose: CleanupPurpose
     ) async throws -> CleanupModelProbeRawResult {
         await probeExecutionGate.acquire()
         do {
             if let probeExecutionOverride {
                 let result = try await probeExecutionOverride(text, prompt, modelKind, thinkingMode)
-                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, rawOutput: result.rawOutput, elapsed: result.elapsed)
+                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, purpose: purpose, rawOutput: result.rawOutput, elapsed: result.elapsed)
                 await probeExecutionGate.release()
                 return result
             }
@@ -561,6 +576,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             }
 
             let start = Date()
+            let timeoutSeconds = Self.config(for: purpose).timeoutSeconds
             do {
                 let preparedCompletionInput: String?
                 if let preparedPromptContext,
@@ -577,7 +593,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
                 let rawOutput: String
                 if let preparedCompletionInput {
-                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) { [self] in
+                    rawOutput = try await withTimeout(seconds: timeoutSeconds) { [self] in
                         await generateFromPreparedContext(
                             llm: llm,
                             completionInput: preparedCompletionInput,
@@ -585,7 +601,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                         )
                     }
                 } else {
-                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) {
+                    rawOutput = try await withTimeout(seconds: timeoutSeconds) {
                         llm.useResolvedTemplate(systemPrompt: prompt)
                         llm.history = []
                         await llm.respond(to: text, thinking: thinkingMode.llmThinkingMode)
@@ -593,7 +609,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                     }
                 }
                 let elapsed = Date().timeIntervalSince(start)
-                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, rawOutput: rawOutput, elapsed: elapsed)
+                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, purpose: purpose, rawOutput: rawOutput, elapsed: elapsed)
                 await probeExecutionGate.release()
                 return CleanupModelProbeRawResult(
                     modelKind: modelKind,
@@ -863,15 +879,16 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         text: String,
         prompt: String,
         modelKind: LocalCleanupModelKind,
+        purpose: CleanupPurpose,
         rawOutput: String,
         elapsed: TimeInterval
     ) {
         let promptTokens = Self.estimatedTokenCount(text) + Self.estimatedTokenCount(prompt)
         let outputTokens = Self.estimatedTokenCount(rawOutput)
-        let maxTokens = Int(descriptor(for: modelKind).maxTokenCount)
+        let maxTokens = Int(min(Self.config(for: purpose).maxTokenCount, descriptor(for: modelKind).maxTokenCount))
         debugLogger?(
             .cleanup,
-            "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(descriptor(for: modelKind).displayName) — ~\(promptTokens) prompt + ~\(outputTokens) output of \(maxTokens) max tokens."
+            "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(descriptor(for: modelKind).displayName) — ~\(promptTokens) prompt + ~\(outputTokens) output of \(maxTokens) max tokens (\(purpose))."
         )
     }
 

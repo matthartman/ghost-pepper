@@ -277,7 +277,9 @@ final class TextCleanupManagerTests: XCTestCase {
         _ = try await manager.clean(text: "some transcript text", prompt: "summarize this")
 
         XCTAssertTrue(
-            loggedMessages.contains { $0.contains("prompt") && $0.contains("output") && $0.contains("of 16384 max tokens") },
+            loggedMessages.contains {
+                $0.contains("prompt") && $0.contains("output") && $0.contains("of 4096 max tokens (realtime)")
+            },
             "Expected a debug log entry reporting the estimated token budget, got: \(loggedMessages)"
         )
     }
@@ -319,6 +321,48 @@ final class TextCleanupManagerTests: XCTestCase {
         await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 16384)
         XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
         XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testCleanUsesDistinctContextPerPurposeForSameModelKind() async throws {
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            probeExecutionOverride: { _, _, modelKind, _ in
+                CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: TextCleanupManager.compactModel.displayName,
+                    rawOutput: "cleaned",
+                    elapsed: 0.01
+                )
+            }
+        )
+
+        _ = try await manager.clean(text: "hi", prompt: "unused", modelKind: .qwen35_0_8b_q4_k_m, purpose: .realtime)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 4096)
+
+        _ = try await manager.clean(text: "hi", prompt: "unused", modelKind: .qwen35_0_8b_q4_k_m, purpose: .summarization)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testCleanupUsesSummarizationTimeoutWhenPurposeIsSummarization() async {
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_2b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, _, _ in
+                throw CancellationError()
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await manager.clean(text: "hello", prompt: "unused", purpose: .summarization)
+        ) { error in
+            XCTAssertEqual(
+                error as? CleanupBackendError,
+                .timedOut(seconds: 90.0)
+            )
+        }
     }
 
     func testDeleteCachedModelRemovesOnlyTheConfiguredCacheFileAndNotifiesObservers() throws {
