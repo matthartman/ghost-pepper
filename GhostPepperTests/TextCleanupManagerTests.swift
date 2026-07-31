@@ -288,12 +288,35 @@ final class TextCleanupManagerTests: XCTestCase {
         )
     }
 
-    func testDefaultMeetingSummaryModelSelectionUsesFullModel() {
+    /// Relies on the Full model actually being downloaded in this dev
+    /// environment, matching the convention already used by tests like
+    /// `testCleanupSuppressesThinkingForProductionCleanupCalls`.
+    func testDefaultMeetingSummaryModelSelectionUsesFullModelWhenFullIsDownloaded() {
         let defaults = UserDefaults(suiteName: #function)!
         defaults.removePersistentDomain(forName: #function)
-        let manager = TextCleanupManager(defaults: defaults)
+        let manager = TextCleanupManager(
+            defaults: defaults,
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m
+        )
 
         XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_4b_q4_k_m)
+    }
+
+    func testDefaultMeetingSummaryModelFallsBackToRealtimeModelWhenFullIsNotDownloaded() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let manager = TextCleanupManager(
+            defaults: defaults,
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            modelsDirectory: tempDirectory
+        )
+
+        XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
     }
 
     func testMeetingSummaryModelSelectionPersistsIndependentlyOfRealtimeModel() {

@@ -333,9 +333,16 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         self.selectedCleanupModelKind = initialKind
         defaults.set(initialKind.rawValue, forKey: Self.selectedCleanupModelDefaultsKey)
 
+        // New users only auto-download `initialKind` (via onboarding); Full
+        // is never auto-downloaded. Defaulting summarization to Full only
+        // when it's already present means a fresh install needs exactly one
+        // download, and an existing user needs zero.
+        let smartSummaryDefault = Self.isModelDownloaded(Self.meetingSummaryModelFallback, in: self.modelsDirectory)
+            ? Self.meetingSummaryModelFallback
+            : initialKind
         let storedSummaryKind = LocalCleanupModelKind(
             rawValue: defaults.string(forKey: Self.selectedMeetingSummaryModelDefaultsKey) ?? ""
-        ) ?? .qwen35_4b_q4_k_m
+        ) ?? smartSummaryDefault
         let initialSummaryKind = selectedMeetingSummaryModelKind ?? storedSummaryKind
         self.selectedMeetingSummaryModelKind = initialSummaryKind
         defaults.set(initialSummaryKind.rawValue, forKey: Self.selectedMeetingSummaryModelDefaultsKey)
@@ -370,10 +377,21 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         return appSupport.appendingPathComponent("GhostPepper/models", isDirectory: true)
     }
 
-    static func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
+    /// Single source of truth for the meeting-summary preference's
+    /// last-resort fallback — referenced here and by
+    /// `MeetingTranscriptWindow`'s `@AppStorage` default, so the two never
+    /// drift apart the way `selectedCleanupModelKind`'s coincidental
+    /// UserDefaults sharing once did (ghost-pepper#158).
+    static let meetingSummaryModelFallback: LocalCleanupModelKind = .qwen35_4b_q4_k_m
+
+    static func isModelDownloaded(_ kind: LocalCleanupModelKind, in directory: URL) -> Bool {
         guard let desc = cleanupModels.first(where: { $0.kind == kind }) else { return false }
-        let path = modelsDirectory.appendingPathComponent(desc.fileName)
+        let path = directory.appendingPathComponent(desc.fileName)
         return isVerifiedModelFile(path, descriptor: desc)
+    }
+
+    static func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
+        isModelDownloaded(kind, in: modelsDirectory)
     }
 
     func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
