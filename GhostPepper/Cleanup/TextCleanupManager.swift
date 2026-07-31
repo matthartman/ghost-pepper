@@ -689,7 +689,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
         let descriptor = descriptor(for: kind)
         let path = modelPath(for: descriptor.fileName)
-        debugLogger?(.model, "Loading local cleanup model \(descriptor.displayName).")
+        debugLogger?(.model, "Loading local cleanup model \(descriptor.displayName) with \(requestedContext) context.")
 
         if FileManager.default.fileExists(atPath: path.path), !Self.isVerifiedModelFile(path, descriptor: descriptor) {
             try? FileManager.default.removeItem(at: path)
@@ -754,7 +754,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         activeLoadedContextTokenCount = requestedContext
         state = .ready
         errorMessage = nil
-        debugLogger?(.model, "Local cleanup model ready: \(descriptor.displayName).")
+        debugLogger?(.model, "Local cleanup model ready: \(descriptor.displayName) with \(requestedContext) context.")
     }
 
     func loadModel(kind: LocalCleanupModelKind, purpose: CleanupPurpose = .realtime) async {
