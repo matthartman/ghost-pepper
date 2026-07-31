@@ -170,7 +170,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         url: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf",
         expectedSHA256: "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
         expectedByteCount: 532_517_120,
-        maxTokenCount: 4096,
+        maxTokenCount: 16_384,
         recommendation: .veryFast
     )
 
@@ -182,7 +182,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
         expectedSHA256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
         expectedByteCount: 1_280_835_840,
-        maxTokenCount: 4096,
+        maxTokenCount: 16_384,
         recommendation: .fast
     )
 
@@ -194,7 +194,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
         expectedSHA256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
         expectedByteCount: 2_740_937_888,
-        maxTokenCount: 8192,
+        maxTokenCount: 16_384,
         recommendation: .full
     )
 
@@ -510,6 +510,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         do {
             if let probeExecutionOverride {
                 let result = try await probeExecutionOverride(text, prompt, modelKind, thinkingMode)
+                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, rawOutput: result.rawOutput, elapsed: result.elapsed)
                 await probeExecutionGate.release()
                 return result
             }
@@ -556,10 +557,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                     }
                 }
                 let elapsed = Date().timeIntervalSince(start)
-                debugLogger?(
-                    .cleanup,
-                    "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(descriptor(for: modelKind).displayName)."
-                )
+                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, rawOutput: rawOutput, elapsed: elapsed)
                 await probeExecutionGate.release()
                 return CleanupModelProbeRawResult(
                     modelKind: modelKind,
@@ -811,6 +809,31 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
     private func descriptor(for modelKind: LocalCleanupModelKind) -> CleanupModelDescriptor {
         Self.cleanupModels.first(where: { $0.kind == modelKind })!
+    }
+
+    /// Logs an estimated token budget (~4 chars/token) so a completion that's
+    /// suspiciously short relative to the model's context window — the
+    /// signature of hitting `maxTokenCount` mid-generation rather than an
+    /// error — is visible in the debug log rather than looking like a normal
+    /// success.
+    private func logTokenBudget(
+        text: String,
+        prompt: String,
+        modelKind: LocalCleanupModelKind,
+        rawOutput: String,
+        elapsed: TimeInterval
+    ) {
+        let promptTokens = Self.estimatedTokenCount(text) + Self.estimatedTokenCount(prompt)
+        let outputTokens = Self.estimatedTokenCount(rawOutput)
+        let maxTokens = Int(descriptor(for: modelKind).maxTokenCount)
+        debugLogger?(
+            .cleanup,
+            "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(descriptor(for: modelKind).displayName) — ~\(promptTokens) prompt + ~\(outputTokens) output of \(maxTokens) max tokens."
+        )
+    }
+
+    private static func estimatedTokenCount(_ text: String) -> Int {
+        max(1, Int(ceil(Double(text.count) / 4.0)))
     }
 
     private func availabilityOverride(for modelKind: LocalCleanupModelKind) -> Bool? {

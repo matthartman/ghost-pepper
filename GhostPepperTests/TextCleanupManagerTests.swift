@@ -240,6 +240,38 @@ final class TextCleanupManagerTests: XCTestCase {
         }
     }
 
+    func testGGUFCleanupModelsUseSixteenKContextWindow() {
+        XCTAssertEqual(TextCleanupManager.compactModel.maxTokenCount, 16384)
+        XCTAssertEqual(TextCleanupManager.recommendedFastModel.maxTokenCount, 16384)
+        XCTAssertEqual(TextCleanupManager.recommendedFullModel.maxTokenCount, 16384)
+    }
+
+    func testCleanupLogsEstimatedTokenBudgetForPromptAndOutput() async throws {
+        var loggedMessages: [String] = []
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_2b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, _, _ in
+                CleanupModelProbeRawResult(
+                    modelKind: .qwen35_2b_q4_k_m,
+                    modelDisplayName: TextCleanupManager.recommendedFastModel.displayName,
+                    rawOutput: "short output",
+                    elapsed: 1.23
+                )
+            }
+        )
+        manager.debugLogger = { _, message in loggedMessages.append(message) }
+
+        _ = try await manager.clean(text: "some transcript text", prompt: "summarize this")
+
+        XCTAssertTrue(
+            loggedMessages.contains { $0.contains("prompt") && $0.contains("output") && $0.contains("of 16384 max tokens") },
+            "Expected a debug log entry reporting the estimated token budget, got: \(loggedMessages)"
+        )
+    }
+
     func testDeleteCachedModelRemovesOnlyTheConfiguredCacheFileAndNotifiesObservers() throws {
         let modelsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
