@@ -76,5 +76,13 @@ struct GhostPepperApp: App {
                 appState.prepareForTermination()
             }
         }
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    appState.showSettings()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
     }
 }
