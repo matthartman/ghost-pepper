@@ -16,6 +16,16 @@ private extension CleanupModelProbeThinkingMode {
     }
 }
 
+enum CleanupPurpose {
+    case realtime
+    case summarization
+}
+
+struct CleanupPurposeConfig {
+    let maxTokenCount: Int32
+    let timeoutSeconds: TimeInterval
+}
+
 enum CleanupModelState: Equatable {
     case idle
     case downloading(kind: LocalCleanupModelKind, progress: Double)
@@ -255,6 +265,15 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         }
 
         return .qwen35_4b_q4_k_m
+    }
+
+    static func config(for purpose: CleanupPurpose) -> CleanupPurposeConfig {
+        switch purpose {
+        case .realtime:
+            return CleanupPurposeConfig(maxTokenCount: 4096, timeoutSeconds: 15.0)
+        case .summarization:
+            return CleanupPurposeConfig(maxTokenCount: 16384, timeoutSeconds: 90.0)
+        }
     }
 
     var isReady: Bool { state == .ready }

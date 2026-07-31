@@ -240,6 +240,16 @@ final class TextCleanupManagerTests: XCTestCase {
         }
     }
 
+    func testCleanupPurposeConfigProvidesDistinctContextAndTimeoutPerPurpose() {
+        let realtime = TextCleanupManager.config(for: .realtime)
+        let summarization = TextCleanupManager.config(for: .summarization)
+
+        XCTAssertEqual(realtime.maxTokenCount, 4096)
+        XCTAssertEqual(realtime.timeoutSeconds, 15.0)
+        XCTAssertEqual(summarization.maxTokenCount, 16384)
+        XCTAssertEqual(summarization.timeoutSeconds, 90.0)
+    }
+
     func testGGUFCleanupModelsUseSixteenKContextWindow() {
         XCTAssertEqual(TextCleanupManager.compactModel.maxTokenCount, 16384)
         XCTAssertEqual(TextCleanupManager.recommendedFastModel.maxTokenCount, 16384)
