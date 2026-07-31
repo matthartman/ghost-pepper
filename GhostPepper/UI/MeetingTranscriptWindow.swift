@@ -8927,7 +8927,7 @@ struct MeetingTabContentView: View {
     @State private var speakerLabelDrafts: [String: String] = [:]
     @State private var speakerReviewError: String?
     @AppStorage("meetingSummaryPrompt") private var summaryPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
-    @AppStorage("selectedCleanupModelKind") private var selectedModelKind: String = LocalCleanupModelKind.qwen35_0_8b_q4_k_m.rawValue
+    @AppStorage("selectedMeetingSummaryModelKind") private var selectedModelKind: String = LocalCleanupModelKind.qwen35_4b_q4_k_m.rawValue
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -9562,7 +9562,7 @@ struct MeetingTabContentView: View {
     // MARK: - Status Bar
 
     private func regenerateSummary() {
-        let modelKind = LocalCleanupModelKind(rawValue: selectedModelKind) ?? .qwen35_0_8b_q4_k_m
+        let modelKind = LocalCleanupModelKind(rawValue: selectedModelKind) ?? .qwen35_4b_q4_k_m
         state.onGenerateSummary?(tab.transcript, modelKind)
     }
 
