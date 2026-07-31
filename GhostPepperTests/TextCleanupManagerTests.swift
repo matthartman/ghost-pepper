@@ -282,6 +282,31 @@ final class TextCleanupManagerTests: XCTestCase {
         )
     }
 
+    func testDefaultMeetingSummaryModelSelectionUsesFullModel() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let manager = TextCleanupManager(defaults: defaults)
+
+        XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_4b_q4_k_m)
+    }
+
+    func testMeetingSummaryModelSelectionPersistsIndependentlyOfRealtimeModel() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let manager = TextCleanupManager(
+            defaults: defaults,
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            selectedMeetingSummaryModelKind: .qwen35_2b_q4_k_m
+        )
+
+        XCTAssertEqual(manager.selectedCleanupModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
+
+        let restored = TextCleanupManager(defaults: defaults)
+        XCTAssertEqual(restored.selectedCleanupModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(restored.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
+    }
+
     func testDeleteCachedModelRemovesOnlyTheConfiguredCacheFileAndNotifiesObservers() throws {
         let modelsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

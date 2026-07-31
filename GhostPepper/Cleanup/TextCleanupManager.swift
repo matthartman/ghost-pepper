@@ -167,6 +167,12 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         }
     }
 
+    @Published var selectedMeetingSummaryModelKind: LocalCleanupModelKind {
+        didSet {
+            defaults.set(selectedMeetingSummaryModelKind.rawValue, forKey: Self.selectedMeetingSummaryModelDefaultsKey)
+        }
+    }
+
     var debugLogger: ((DebugLogCategory, String) -> Void)?
 
     private(set) var activeLLM: LLM?
@@ -287,6 +293,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
     private static let timeoutSeconds: TimeInterval = 15.0
     private static let selectedCleanupModelDefaultsKey = "selectedCleanupModelKind"
+    private static let selectedMeetingSummaryModelDefaultsKey = "selectedMeetingSummaryModelKind"
     private static let systemPromptSentinel = "<|ghost-pepper-system-prefill-split|>"
     private static let userInputSentinel = "<|ghost-pepper-user-prefill-split|>"
     private static let repositoryDownloadMarkerFileName = ".ghostpepper-model-cache-complete"
@@ -307,6 +314,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     init(
         defaults: UserDefaults = .standard,
         selectedCleanupModelKind: LocalCleanupModelKind? = nil,
+        selectedMeetingSummaryModelKind: LocalCleanupModelKind? = nil,
         cleanupModelAvailabilityOverrides: [LocalCleanupModelKind: Bool] = [:],
         probeExecutionOverride: CleanupModelProbeExecutionOverride? = nil,
         backendShutdownOverride: (() -> Void)? = nil,
@@ -324,6 +332,13 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         let initialKind = selectedCleanupModelKind ?? storedKind
         self.selectedCleanupModelKind = initialKind
         defaults.set(initialKind.rawValue, forKey: Self.selectedCleanupModelDefaultsKey)
+
+        let storedSummaryKind = LocalCleanupModelKind(
+            rawValue: defaults.string(forKey: Self.selectedMeetingSummaryModelDefaultsKey) ?? ""
+        ) ?? .qwen35_4b_q4_k_m
+        let initialSummaryKind = selectedMeetingSummaryModelKind ?? storedSummaryKind
+        self.selectedMeetingSummaryModelKind = initialSummaryKind
+        defaults.set(initialSummaryKind.rawValue, forKey: Self.selectedMeetingSummaryModelDefaultsKey)
     }
 
     func selectedModelKind(wordCount: Int, isQuestion: Bool) -> LocalCleanupModelKind? {
