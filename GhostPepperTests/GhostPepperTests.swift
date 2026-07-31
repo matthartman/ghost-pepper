@@ -976,6 +976,49 @@ final class GhostPepperTests: XCTestCase {
         XCTAssertNotNil(session.transcript.endDate)
     }
 
+    func testGenerateMeetingSummarySkipsGenerationAndLogsWhenSelectedModelIsNotDownloaded() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: #function))
+        defaults.removePersistentDomain(forName: #function)
+        // deepseek_r1_qwen_7b_q4_k_m is a real catalog GGUF model that is
+        // never downloaded by this test suite's other fixtures, so
+        // isModelDownloaded(_:) genuinely returns false for it without
+        // touching any real cached model files on disk.
+        let cleanupManager = TextCleanupManager(
+            defaults: defaults,
+            selectedMeetingSummaryModelKind: .deepseek_r1_qwen_7b_q4_k_m
+        )
+        let debugLogStore = DebugLogStore(
+            storageURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString).json")
+        )
+        let appState = AppState(
+            hotkeyMonitor: FakeHotkeyMonitor(),
+            chordBindingStore: ChordBindingStore(defaults: defaults),
+            cleanupSettingsDefaults: defaults,
+            textCleanupManager: cleanupManager,
+            debugLogStore: debugLogStore
+        )
+        let transcript = MeetingTranscript(meetingName: "Undownloaded Model Meeting")
+        transcript.appendSegment(
+            TranscriptSegment(
+                id: UUID(),
+                speaker: .remote(name: "Eric"),
+                startTime: 0,
+                endTime: 10,
+                text: "Some meeting content."
+            )
+        )
+
+        await appState.generateMeetingSummary(for: transcript)
+
+        XCTAssertNil(transcript.summary)
+        XCTAssertFalse(transcript.isGeneratingSummary)
+        XCTAssertTrue(debugLogStore.entries.contains {
+            $0.message.contains("DeepSeek R1 Distill Qwen 7B Q4_K_M") &&
+            $0.message.contains("Settings")
+        })
+    }
+
     func testAppStateWaitsForPepperChatTranscriptionBeforeReloadingSpeechAnalyzer() async throws {
         guard #available(macOS 26, *) else {
             throw XCTSkip("SpeechAnalyzer requires macOS 26 or later.")

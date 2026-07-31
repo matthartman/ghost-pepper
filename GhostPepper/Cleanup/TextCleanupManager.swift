@@ -412,15 +412,6 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         purpose: CleanupPurpose = .realtime
     ) async throws -> String {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind, contextTokenCount: Self.config(for: purpose).maxTokenCount)
-
-        guard model(for: requestedModelKind) != nil else {
-            debugLogger?(
-                .cleanup,
-                "Skipped local cleanup because model \(requestedModelKind.rawValue) was not ready."
-            )
-            throw CleanupBackendError.unavailable
-        }
 
         let activePrompt = prompt ?? TextCleaner.defaultPrompt
         do {
@@ -480,7 +471,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         thinkingMode: ThinkingMode = .suppressed
     ) async throws -> AsyncStream<String> {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind)
+        await loadModel(kind: requestedModelKind, contextTokenCount: descriptor(for: requestedModelKind).maxTokenCount)
         let requestedDescriptor = descriptor(for: requestedModelKind)
 
         if case .mlxRepository = requestedDescriptor.runtime {
@@ -559,6 +550,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     ) async throws -> CleanupModelProbeRawResult {
         await probeExecutionGate.acquire()
         do {
+            await loadModel(kind: modelKind, contextTokenCount: Self.config(for: purpose).maxTokenCount)
+
             if let probeExecutionOverride {
                 let result = try await probeExecutionOverride(text, prompt, modelKind, thinkingMode)
                 logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, purpose: purpose, rawOutput: result.rawOutput, elapsed: result.elapsed)
@@ -707,6 +700,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             do {
                 try await downloadModel(kind: kind, url: descriptor.url, to: path)
             } catch {
+                // User-initiated cancellation should drop the row back to
+                // "not downloaded" without surfacing a scary red error.
                 let nsError = error as NSError
                 let isCancelled = error is CancellationError
                     || nsError.code == NSURLErrorCancelled
@@ -762,8 +757,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         debugLogger?(.model, "Local cleanup model ready: \(descriptor.displayName).")
     }
 
-    func loadModel(kind: LocalCleanupModelKind) async {
-        await loadModel(kind: kind, contextTokenCount: descriptor(for: kind).maxTokenCount)
+    func loadModel(kind: LocalCleanupModelKind, purpose: CleanupPurpose = .realtime) async {
+        await loadModel(kind: kind, contextTokenCount: Self.config(for: purpose).maxTokenCount)
     }
 
     /// Kicks off a tracked `loadModel(kind:)` so callers can later cancel it

@@ -1875,6 +1875,17 @@ class AppState: ObservableObject {
     func generateMeetingSummary(for transcript: MeetingTranscript, modelKind: LocalCleanupModelKind? = nil) async {
         guard !transcript.segments.isEmpty else { return }
         transcript.isGeneratingSummary = true
+        let effectiveModelKind = modelKind ?? textCleanupManager.selectedMeetingSummaryModelKind
+        guard textCleanupManager.isModelDownloaded(effectiveModelKind) else {
+            let modelName = TextCleanupManager.cleanupModels.first(where: { $0.kind == effectiveModelKind })?.displayName
+                ?? effectiveModelKind.rawValue
+            debugLogStore.record(
+                category: .model,
+                message: "Meeting summary skipped for \(transcript.meetingName): selected summarization model \(modelName) isn't downloaded yet. Download it in Settings → Models."
+            )
+            transcript.isGeneratingSummary = false
+            return
+        }
         let generator = MeetingSummaryGenerator(cleanupManager: textCleanupManager)
         generator.debugLogger = debugLogStore.record
         let result = await generator.generateSummary(

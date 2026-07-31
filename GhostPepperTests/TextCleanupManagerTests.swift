@@ -30,6 +30,10 @@ final class TextCleanupManagerTests: XCTestCase {
         }
     }
 
+    private final class WeakManagerBox {
+        weak var manager: TextCleanupManager?
+    }
+
     func testCleanupModelCatalogIncludesVeryFastFastAndFullQwenModels() {
         let modelsByKind = Dictionary(
             uniqueKeysWithValues: TextCleanupManager.cleanupModels.map { ($0.kind, $0) }
@@ -321,6 +325,82 @@ final class TextCleanupManagerTests: XCTestCase {
         await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 16384)
         XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
         XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testPlainLoadModelWrapperDefaultsToRealtimeContextNotCatalogCeiling() async {
+        // Preload paths (Settings/Onboarding/ModelsSidebar, the no-arg
+        // convenience, startLoad, and prefillPromptContext) all call this
+        // plain wrapper. It must request realtime's context (4096) by
+        // default so a subsequent realtime `clean()` call doesn't find a
+        // context mismatch and force an unnecessary reload.
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m)
+
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 4096)
+    }
+
+    func testPlainLoadModelWrapperHonorsExplicitSummarizationPurpose() async {
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, purpose: .summarization)
+
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testCleanKeepsCorrectContextPerCallWhenPurposesInterleaveOnSameModelKind() async throws {
+        // Regression test for moving the load call inside probeExecutionGate:
+        // an interleaved summarization + realtime `clean()` call on the same
+        // model kind must never observe the OTHER call's context while its
+        // own probe is running, because the load now happens under the same
+        // gate as the probe itself.
+        actor CapturedContexts {
+            private(set) var values: [Int32?] = []
+            func record(_ value: Int32?) { values.append(value) }
+        }
+        let captured = CapturedContexts()
+        let box = WeakManagerBox()
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            probeExecutionOverride: { [weak box] _, _, modelKind, _ in
+                await captured.record(box?.manager?.activeLoadedContextTokenCount)
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                return CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: TextCleanupManager.compactModel.displayName,
+                    rawOutput: "cleaned",
+                    elapsed: 0.01
+                )
+            }
+        )
+        box.manager = manager
+
+        async let summarization = manager.clean(
+            text: "long meeting text",
+            prompt: "unused",
+            modelKind: .qwen35_0_8b_q4_k_m,
+            purpose: .summarization
+        )
+        async let realtime = manager.clean(
+            text: "short",
+            prompt: "unused",
+            modelKind: .qwen35_0_8b_q4_k_m,
+            purpose: .realtime
+        )
+
+        let results = try await [summarization, realtime]
+        XCTAssertEqual(results, ["cleaned", "cleaned"])
+
+        let values = await captured.values
+        XCTAssertEqual(values.count, 2)
+        XCTAssertEqual(Set(values.compactMap { $0 }), Set<Int32>([16384, 4096]))
     }
 
     func testCleanUsesDistinctContextPerPurposeForSameModelKind() async throws {
