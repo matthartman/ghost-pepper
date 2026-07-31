@@ -41,7 +41,10 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         var callCount = 0
         let cleanupManager = TextCleanupManager(
             selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
-            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
             probeExecutionOverride: { _, _, modelKind, _ in
                 callCount += 1
                 return CleanupModelProbeRawResult(
@@ -73,7 +76,10 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         var callCount = 0
         let cleanupManager = TextCleanupManager(
             selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
-            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
             probeExecutionOverride: { _, _, modelKind, _ in
                 callCount += 1
                 if callCount == 2 {
@@ -114,7 +120,10 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         var callCount = 0
         let cleanupManager = TextCleanupManager(
             selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
-            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
             probeExecutionOverride: { _, _, modelKind, _ in
                 callCount += 1
                 if callCount == 4 {
@@ -137,7 +146,7 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         XCTAssertNil(summary)
         XCTAssertTrue(logged.contains {
             $0.1.contains("final combine step failed") &&
-            $0.1.contains("timed out after 15s") &&
+            $0.1.contains("timed out after 90s") &&
             $0.1.contains("3/3 chunk summaries discarded")
         })
     }
@@ -147,7 +156,10 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         var capturedPrompt: String?
         let cleanupManager = TextCleanupManager(
             selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
-            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
             probeExecutionOverride: { _, prompt, modelKind, _ in
                 capturedPrompt = prompt
                 return CleanupModelProbeRawResult(
@@ -198,7 +210,10 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         let transcript = makeSingleChunkTranscript()
         let cleanupManager = TextCleanupManager(
             selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
-            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
             probeExecutionOverride: { _, _, _, _ in
                 throw CancellationError()
             }
@@ -213,7 +228,35 @@ final class MeetingSummaryGeneratorTests: XCTestCase {
         XCTAssertFalse(logged.contains { $0.1.contains("chunk summarization complete") })
         XCTAssertTrue(logged.contains {
             $0.1.contains("final combine step failed") &&
-            $0.1.contains("timed out after 15s")
+            $0.1.contains("timed out after 90s")
         })
+    }
+
+    func testGenerateSummaryDefaultsToSelectedMeetingSummaryModelWhenNoOverrideGiven() async {
+        let transcript = makeSingleChunkTranscript()
+        var capturedModelKind: LocalCleanupModelKind?
+        let cleanupManager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            selectedMeetingSummaryModelKind: .qwen35_4b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_0_8b_q4_k_m: true,
+                .qwen35_4b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, modelKind, _ in
+                capturedModelKind = modelKind
+                return CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: "test",
+                    rawOutput: "Summary",
+                    elapsed: 0.01
+                )
+            }
+        )
+        let generator = MeetingSummaryGenerator(cleanupManager: cleanupManager)
+
+        let summary = await generator.generateSummary(transcript: transcript)
+
+        XCTAssertNotNil(summary)
+        XCTAssertEqual(capturedModelKind, .qwen35_4b_q4_k_m)
     }
 }
