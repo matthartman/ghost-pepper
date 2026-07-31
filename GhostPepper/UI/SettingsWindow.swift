@@ -1345,10 +1345,10 @@ struct SettingsView: View {
                 }
             }
 
-            SettingsCard("Cleanup model") {
-                SettingsField("Active cleanup model") {
+            SettingsCard("Realtime cleanup model") {
+                SettingsField("Active realtime cleanup model") {
                     Picker(
-                        "Cleanup model",
+                        "Realtime cleanup model",
                         selection: Binding(
                             get: { appState.textCleanupManager.selectedCleanupModelKind },
                             set: { appState.textCleanupManager.selectedCleanupModelKind = $0 }
@@ -1367,7 +1367,30 @@ struct SettingsView: View {
                     }
                 }
 
-                Text("Recommended cleanup models are marked Very fast, Fast, and Full.")
+                Text("Recommended realtime cleanup models are marked Very fast, Fast, and Full. Used for live dictation cleanup — keep this small and fast.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            SettingsCard("Meeting summarization model") {
+                SettingsField("Active meeting summarization model") {
+                    Picker(
+                        "Meeting summarization model",
+                        selection: Binding(
+                            get: { appState.textCleanupManager.selectedMeetingSummaryModelKind },
+                            set: { appState.textCleanupManager.selectedMeetingSummaryModelKind = $0 }
+                        )
+                    ) {
+                        ForEach(TextCleanupManager.cleanupGenerationModels, id: \.kind) { model in
+                            Text(model.displayName).tag(model.kind)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 360, alignment: .leading)
+                }
+
+                Text("Used for meeting summary generation. This runs once after a meeting ends, so a bigger, slower model with more context is fine here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

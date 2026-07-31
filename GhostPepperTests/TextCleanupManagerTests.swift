@@ -30,6 +30,10 @@ final class TextCleanupManagerTests: XCTestCase {
         }
     }
 
+    private final class WeakManagerBox {
+        weak var manager: TextCleanupManager?
+    }
+
     func testCleanupModelCatalogIncludesVeryFastFastAndFullQwenModels() {
         let modelsByKind = Dictionary(
             uniqueKeysWithValues: TextCleanupManager.cleanupModels.map { ($0.kind, $0) }
@@ -217,6 +221,298 @@ final class TextCleanupManagerTests: XCTestCase {
             XCTAssertEqual(
                 error as? CleanupBackendError,
                 .unusableOutput(rawOutput: "...")
+            )
+        }
+    }
+
+    func testCleanupThrowsTimedOutWhenProbeIsCancelled() async {
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_2b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, _, _ in
+                throw CancellationError()
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(try await manager.clean(text: "hello", prompt: "unused")) { error in
+            XCTAssertEqual(
+                error as? CleanupBackendError,
+                .timedOut(seconds: 15.0)
+            )
+        }
+    }
+
+    func testCleanupPurposeConfigProvidesDistinctContextAndTimeoutPerPurpose() {
+        let realtime = TextCleanupManager.config(for: .realtime)
+        let summarization = TextCleanupManager.config(for: .summarization)
+
+        XCTAssertEqual(realtime.maxTokenCount, 4096)
+        XCTAssertEqual(realtime.timeoutSeconds, 15.0)
+        XCTAssertEqual(summarization.maxTokenCount, 16384)
+        XCTAssertEqual(summarization.timeoutSeconds, 90.0)
+    }
+
+    func testGGUFCleanupModelsUseSixteenKContextWindow() {
+        XCTAssertEqual(TextCleanupManager.compactModel.maxTokenCount, 16384)
+        XCTAssertEqual(TextCleanupManager.recommendedFastModel.maxTokenCount, 16384)
+        XCTAssertEqual(TextCleanupManager.recommendedFullModel.maxTokenCount, 16384)
+    }
+
+    func testCleanupLogsEstimatedTokenBudgetForPromptAndOutput() async throws {
+        var loggedMessages: [String] = []
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_2b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, _, _ in
+                CleanupModelProbeRawResult(
+                    modelKind: .qwen35_2b_q4_k_m,
+                    modelDisplayName: TextCleanupManager.recommendedFastModel.displayName,
+                    rawOutput: "short output",
+                    elapsed: 1.23
+                )
+            }
+        )
+        manager.debugLogger = { _, message in loggedMessages.append(message) }
+
+        _ = try await manager.clean(text: "some transcript text", prompt: "summarize this")
+
+        XCTAssertTrue(
+            loggedMessages.contains {
+                $0.contains("prompt") && $0.contains("output") && $0.contains("of 4096 max tokens (realtime)")
+            },
+            "Expected a debug log entry reporting the estimated token budget, got: \(loggedMessages)"
+        )
+    }
+
+    /// Relies on the Full model actually being downloaded in this dev
+    /// environment, matching the convention already used by tests like
+    /// `testCleanupSuppressesThinkingForProductionCleanupCalls`.
+    func testDefaultMeetingSummaryModelSelectionUsesFullModelWhenFullIsDownloaded() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let manager = TextCleanupManager(
+            defaults: defaults,
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m
+        )
+
+        XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_4b_q4_k_m)
+    }
+
+    func testDefaultMeetingSummaryModelFallsBackToRealtimeModelWhenFullIsNotDownloaded() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let manager = TextCleanupManager(
+            defaults: defaults,
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            modelsDirectory: tempDirectory
+        )
+
+        XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
+    }
+
+    func testMeetingSummaryModelSelectionPersistsIndependentlyOfRealtimeModel() {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        let manager = TextCleanupManager(
+            defaults: defaults,
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            selectedMeetingSummaryModelKind: .qwen35_2b_q4_k_m
+        )
+
+        XCTAssertEqual(manager.selectedCleanupModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
+
+        let restored = TextCleanupManager(defaults: defaults)
+        XCTAssertEqual(restored.selectedCleanupModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(restored.selectedMeetingSummaryModelKind, .qwen35_2b_q4_k_m)
+    }
+
+    func testLoadModelReloadsWhenContextTokenCountChangesForSameKind() async {
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 4096)
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 4096)
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 16384)
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testLoadModelClearsPreparedPromptContextOnContextMismatchReload() async throws {
+        // preparedPromptContext is primed (llm.core.prepareContext) against
+        // one specific LLM instance. A same-kind reload triggered purely by
+        // a context-size change discards that instance — the stale plan
+        // must not survive, or a later probe() could run generation against
+        // an unprimed KV cache using a plan built for a different instance.
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        manager.startPromptPrefill(systemPromptPrefix: "You are a helpful assistant.", modelKind: .qwen35_0_8b_q4_k_m)
+
+        var attempts = 0
+        while manager.preparedPromptContext == nil, attempts < 200 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            attempts += 1
+        }
+        XCTAssertNotNil(manager.preparedPromptContext, "Expected prompt prefill to finish and populate preparedPromptContext")
+
+        // Prefill primes at realtime's context (4096); reload the same kind
+        // at a different (summarization-sized) context.
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 16384)
+
+        XCTAssertNil(manager.preparedPromptContext)
+    }
+
+    func testStreamCompletionContextIsADedicatedConstantNotTheCatalogCeiling() {
+        // Asserted as its own value, independent of any CleanupModelDescriptor,
+        // so a future change to a model's catalog maxTokenCount (e.g. lowering
+        // compactModel's ceiling to save RAM on realtime cleanup) can't
+        // silently change what the agent loop / Wiki generation request too.
+        XCTAssertEqual(TextCleanupManager.streamCompletionContextTokenCount, 16384)
+    }
+
+    func testStreamCompletionUsesDedicatedContextNotCatalogCeiling() async throws {
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        let stream = try await manager.streamCompletion(prompt: "hi", modelKind: .qwen35_0_8b_q4_k_m)
+
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, TextCleanupManager.streamCompletionContextTokenCount)
+
+        // Drain to completion rather than abandoning it mid-generation —
+        // leaving the AsyncStream unconsumed tears down the llama.cpp/Metal
+        // backend mid-flight and trips a GGML_ASSERT on process exit.
+        for await _ in stream {}
+    }
+
+    func testPlainLoadModelWrapperDefaultsToRealtimeContextNotCatalogCeiling() async {
+        // Preload paths (Settings/Onboarding/ModelsSidebar, the no-arg
+        // convenience, startLoad, and prefillPromptContext) all call this
+        // plain wrapper. It must request realtime's context (4096) by
+        // default so a subsequent realtime `clean()` call doesn't find a
+        // context mismatch and force an unnecessary reload.
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m)
+
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 4096)
+    }
+
+    func testPlainLoadModelWrapperHonorsExplicitSummarizationPurpose() async {
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, purpose: .summarization)
+
+        XCTAssertEqual(manager.activeLoadedModelKind, .qwen35_0_8b_q4_k_m)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testCleanKeepsCorrectContextPerCallWhenPurposesInterleaveOnSameModelKind() async throws {
+        // Regression test for moving the load call inside probeExecutionGate:
+        // an interleaved summarization + realtime `clean()` call on the same
+        // model kind must never observe the OTHER call's context while its
+        // own probe is running, because the load now happens under the same
+        // gate as the probe itself.
+        actor CapturedContexts {
+            private(set) var values: [Int32?] = []
+            func record(_ value: Int32?) { values.append(value) }
+        }
+        let captured = CapturedContexts()
+        let box = WeakManagerBox()
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            probeExecutionOverride: { [weak box] _, _, modelKind, _ in
+                await captured.record(box?.manager?.activeLoadedContextTokenCount)
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                return CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: TextCleanupManager.compactModel.displayName,
+                    rawOutput: "cleaned",
+                    elapsed: 0.01
+                )
+            }
+        )
+        box.manager = manager
+
+        async let summarization = manager.clean(
+            text: "long meeting text",
+            prompt: "unused",
+            modelKind: .qwen35_0_8b_q4_k_m,
+            purpose: .summarization
+        )
+        async let realtime = manager.clean(
+            text: "short",
+            prompt: "unused",
+            modelKind: .qwen35_0_8b_q4_k_m,
+            purpose: .realtime
+        )
+
+        let results = try await [summarization, realtime]
+        XCTAssertEqual(results, ["cleaned", "cleaned"])
+
+        let values = await captured.values
+        XCTAssertEqual(values.count, 2)
+        XCTAssertEqual(Set(values.compactMap { $0 }), Set<Int32>([16384, 4096]))
+    }
+
+    func testCleanUsesDistinctContextPerPurposeForSameModelKind() async throws {
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_0_8b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true],
+            probeExecutionOverride: { _, _, modelKind, _ in
+                CleanupModelProbeRawResult(
+                    modelKind: modelKind,
+                    modelDisplayName: TextCleanupManager.compactModel.displayName,
+                    rawOutput: "cleaned",
+                    elapsed: 0.01
+                )
+            }
+        )
+
+        _ = try await manager.clean(text: "hi", prompt: "unused", modelKind: .qwen35_0_8b_q4_k_m, purpose: .realtime)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 4096)
+
+        _ = try await manager.clean(text: "hi", prompt: "unused", modelKind: .qwen35_0_8b_q4_k_m, purpose: .summarization)
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
+    }
+
+    func testCleanupUsesSummarizationTimeoutWhenPurposeIsSummarization() async {
+        let manager = TextCleanupManager(
+            selectedCleanupModelKind: .qwen35_2b_q4_k_m,
+            cleanupModelAvailabilityOverrides: [
+                .qwen35_2b_q4_k_m: true
+            ],
+            probeExecutionOverride: { _, _, _, _ in
+                throw CancellationError()
+            }
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await manager.clean(text: "hello", prompt: "unused", purpose: .summarization)
+        ) { error in
+            XCTAssertEqual(
+                error as? CleanupBackendError,
+                .timedOut(seconds: 90.0)
             )
         }
     }

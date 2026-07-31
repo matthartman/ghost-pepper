@@ -16,6 +16,16 @@ private extension CleanupModelProbeThinkingMode {
     }
 }
 
+enum CleanupPurpose {
+    case realtime
+    case summarization
+}
+
+struct CleanupPurposeConfig {
+    let maxTokenCount: Int32
+    let timeoutSeconds: TimeInterval
+}
+
 enum CleanupModelState: Equatable {
     case idle
     case downloading(kind: LocalCleanupModelKind, progress: Double)
@@ -144,7 +154,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         }
     }
 
-    private struct PreparedPromptContext {
+    struct PreparedPromptContext {
         let modelKind: LocalCleanupModelKind
         let plan: CleanupPromptPrefillPlan
     }
@@ -157,10 +167,17 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         }
     }
 
+    @Published var selectedMeetingSummaryModelKind: LocalCleanupModelKind {
+        didSet {
+            defaults.set(selectedMeetingSummaryModelKind.rawValue, forKey: Self.selectedMeetingSummaryModelDefaultsKey)
+        }
+    }
+
     var debugLogger: ((DebugLogCategory, String) -> Void)?
 
     private(set) var activeLLM: LLM?
     private(set) var activeLoadedModelKind: LocalCleanupModelKind?
+    private(set) var activeLoadedContextTokenCount: Int32?
 
     static let compactModel = CleanupModelDescriptor(
         kind: .qwen35_0_8b_q4_k_m,
@@ -170,7 +187,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         url: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf",
         expectedSHA256: "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
         expectedByteCount: 532_517_120,
-        maxTokenCount: 4096,
+        maxTokenCount: 16_384,
         recommendation: .veryFast
     )
 
@@ -182,7 +199,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
         expectedSHA256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
         expectedByteCount: 1_280_835_840,
-        maxTokenCount: 4096,
+        maxTokenCount: 16_384,
         recommendation: .fast
     )
 
@@ -194,7 +211,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
         expectedSHA256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
         expectedByteCount: 2_740_937_888,
-        maxTokenCount: 8192,
+        maxTokenCount: 16_384,
         recommendation: .full
     )
 
@@ -257,6 +274,15 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         return .qwen35_4b_q4_k_m
     }
 
+    static func config(for purpose: CleanupPurpose) -> CleanupPurposeConfig {
+        switch purpose {
+        case .realtime:
+            return CleanupPurposeConfig(maxTokenCount: 4096, timeoutSeconds: 15.0)
+        case .summarization:
+            return CleanupPurposeConfig(maxTokenCount: 16384, timeoutSeconds: 90.0)
+        }
+    }
+
     var isReady: Bool { state == .ready }
     var selectedCleanupModelDisplayName: String {
         descriptor(for: selectedCleanupModelKind).displayName
@@ -266,8 +292,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         isModelAvailable(selectedCleanupModelKind)
     }
 
-    private static let timeoutSeconds: TimeInterval = 15.0
     private static let selectedCleanupModelDefaultsKey = "selectedCleanupModelKind"
+    private static let selectedMeetingSummaryModelDefaultsKey = "selectedMeetingSummaryModelKind"
     private static let systemPromptSentinel = "<|ghost-pepper-system-prefill-split|>"
     private static let userInputSentinel = "<|ghost-pepper-user-prefill-split|>"
     private static let repositoryDownloadMarkerFileName = ".ghostpepper-model-cache-complete"
@@ -279,7 +305,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     private let modelsDirectory: URL
     private let probeExecutionGate = CleanupProbeExecutionGate()
     private var promptPrefillTask: Task<Void, Never>?
-    private var preparedPromptContext: PreparedPromptContext?
+    private(set) var preparedPromptContext: PreparedPromptContext?
     /// Tracks the in-flight download/load Task so the UI can cancel it. We
     /// only allow one load at a time (the manager has a single `activeLLM`
     /// slot), so a Task? is sufficient.
@@ -288,6 +314,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     init(
         defaults: UserDefaults = .standard,
         selectedCleanupModelKind: LocalCleanupModelKind? = nil,
+        selectedMeetingSummaryModelKind: LocalCleanupModelKind? = nil,
         cleanupModelAvailabilityOverrides: [LocalCleanupModelKind: Bool] = [:],
         probeExecutionOverride: CleanupModelProbeExecutionOverride? = nil,
         backendShutdownOverride: (() -> Void)? = nil,
@@ -305,6 +332,20 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         let initialKind = selectedCleanupModelKind ?? storedKind
         self.selectedCleanupModelKind = initialKind
         defaults.set(initialKind.rawValue, forKey: Self.selectedCleanupModelDefaultsKey)
+
+        // New users only auto-download `initialKind` (via onboarding); Full
+        // is never auto-downloaded. Defaulting summarization to Full only
+        // when it's already present means a fresh install needs exactly one
+        // download, and an existing user needs zero.
+        let smartSummaryDefault = Self.isModelDownloaded(Self.meetingSummaryModelFallback, in: self.modelsDirectory)
+            ? Self.meetingSummaryModelFallback
+            : initialKind
+        let storedSummaryKind = LocalCleanupModelKind(
+            rawValue: defaults.string(forKey: Self.selectedMeetingSummaryModelDefaultsKey) ?? ""
+        ) ?? smartSummaryDefault
+        let initialSummaryKind = selectedMeetingSummaryModelKind ?? storedSummaryKind
+        self.selectedMeetingSummaryModelKind = initialSummaryKind
+        defaults.set(initialSummaryKind.rawValue, forKey: Self.selectedMeetingSummaryModelDefaultsKey)
     }
 
     func selectedModelKind(wordCount: Int, isQuestion: Bool) -> LocalCleanupModelKind? {
@@ -336,10 +377,29 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         return appSupport.appendingPathComponent("GhostPepper/models", isDirectory: true)
     }
 
-    static func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
+    /// Context window for streamCompletion callers (the local agent tool
+    /// loop, Wiki generation, the Settings model probe) — deliberately its
+    /// own constant rather than a model's catalog `maxTokenCount`, so
+    /// raising that ceiling to give the summarization purpose headroom on
+    /// every model doesn't silently inflate KV-cache reservation for these
+    /// unrelated, non-purpose-scoped callers.
+    static let streamCompletionContextTokenCount: Int32 = 16384
+
+    /// Single source of truth for the meeting-summary preference's
+    /// last-resort fallback — referenced here and by
+    /// `MeetingTranscriptWindow`'s `@AppStorage` default, so the two never
+    /// drift apart the way `selectedCleanupModelKind`'s coincidental
+    /// UserDefaults sharing once did (ghost-pepper#158).
+    static let meetingSummaryModelFallback: LocalCleanupModelKind = .qwen35_4b_q4_k_m
+
+    static func isModelDownloaded(_ kind: LocalCleanupModelKind, in directory: URL) -> Bool {
         guard let desc = cleanupModels.first(where: { $0.kind == kind }) else { return false }
-        let path = modelsDirectory.appendingPathComponent(desc.fileName)
+        let path = directory.appendingPathComponent(desc.fileName)
         return isVerifiedModelFile(path, descriptor: desc)
+    }
+
+    static func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
+        isModelDownloaded(kind, in: modelsDirectory)
     }
 
     func isModelDownloaded(_ kind: LocalCleanupModelKind) -> Bool {
@@ -354,6 +414,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         if activeLoadedModelKind == kind {
             activeLLM = nil
             activeLoadedModelKind = nil
+            activeLoadedContextTokenCount = nil
             state = .idle
             errorMessage = nil
             return
@@ -362,17 +423,21 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         objectWillChange.send()
     }
 
+    /// Satisfies `TextCleaningManaging`'s exact 3-parameter signature: a
+    /// witness with an extra parameter — even a defaulted `purpose` — can't
+    /// stand in for the protocol requirement, so this forwards to the real
+    /// implementation below with the default purpose.
     func clean(text: String, prompt: String? = nil, modelKind: LocalCleanupModelKind? = nil) async throws -> String {
-        let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind)
+        try await clean(text: text, prompt: prompt, modelKind: modelKind, purpose: .realtime)
+    }
 
-        guard model(for: requestedModelKind) != nil else {
-            debugLogger?(
-                .cleanup,
-                "Skipped local cleanup because model \(requestedModelKind.rawValue) was not ready."
-            )
-            throw CleanupBackendError.unavailable
-        }
+    func clean(
+        text: String,
+        prompt: String? = nil,
+        modelKind: LocalCleanupModelKind? = nil,
+        purpose: CleanupPurpose = .realtime
+    ) async throws -> String {
+        let requestedModelKind = modelKind ?? selectedCleanupModelKind
 
         let activePrompt = prompt ?? TextCleaner.defaultPrompt
         do {
@@ -380,7 +445,8 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                 text: text,
                 prompt: activePrompt,
                 modelKind: requestedModelKind,
-                thinkingMode: .suppressed
+                thinkingMode: .suppressed,
+                purpose: purpose
             )
             let cleaned = result.rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             if cleaned.isEmpty || cleaned == "..." {
@@ -401,6 +467,13 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             case .modelUnavailable:
                 throw CleanupBackendError.unavailable
             }
+        } catch is CancellationError {
+            let timeoutSeconds = Self.config(for: purpose).timeoutSeconds
+            debugLogger?(
+                .cleanup,
+                "Local cleanup probe failed before producing usable output: timed out after \(Int(timeoutSeconds))s."
+            )
+            throw CleanupBackendError.timedOut(seconds: timeoutSeconds)
         } catch {
             debugLogger?(
                 .cleanup,
@@ -424,7 +497,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         thinkingMode: ThinkingMode = .suppressed
     ) async throws -> AsyncStream<String> {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind)
+        await loadModel(kind: requestedModelKind, contextTokenCount: Self.streamCompletionContextTokenCount)
         let requestedDescriptor = descriptor(for: requestedModelKind)
 
         if case .mlxRepository = requestedDescriptor.runtime {
@@ -498,12 +571,16 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         text: String,
         prompt: String,
         modelKind: LocalCleanupModelKind,
-        thinkingMode: CleanupModelProbeThinkingMode
+        thinkingMode: CleanupModelProbeThinkingMode,
+        purpose: CleanupPurpose
     ) async throws -> CleanupModelProbeRawResult {
         await probeExecutionGate.acquire()
         do {
+            await loadModel(kind: modelKind, contextTokenCount: Self.config(for: purpose).maxTokenCount)
+
             if let probeExecutionOverride {
                 let result = try await probeExecutionOverride(text, prompt, modelKind, thinkingMode)
+                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, purpose: purpose, rawOutput: result.rawOutput, elapsed: result.elapsed)
                 await probeExecutionGate.release()
                 return result
             }
@@ -518,6 +595,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
             }
 
             let start = Date()
+            let timeoutSeconds = Self.config(for: purpose).timeoutSeconds
             do {
                 let preparedCompletionInput: String?
                 if let preparedPromptContext,
@@ -534,7 +612,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
                 let rawOutput: String
                 if let preparedCompletionInput {
-                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) { [self] in
+                    rawOutput = try await withTimeout(seconds: timeoutSeconds) { [self] in
                         await generateFromPreparedContext(
                             llm: llm,
                             completionInput: preparedCompletionInput,
@@ -542,7 +620,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                         )
                     }
                 } else {
-                    rawOutput = try await withTimeout(seconds: Self.timeoutSeconds) {
+                    rawOutput = try await withTimeout(seconds: timeoutSeconds) {
                         llm.useResolvedTemplate(systemPrompt: prompt)
                         llm.history = []
                         await llm.respond(to: text, thinking: thinkingMode.llmThinkingMode)
@@ -550,10 +628,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
                     }
                 }
                 let elapsed = Date().timeIntervalSince(start)
-                debugLogger?(
-                    .cleanup,
-                    "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(descriptor(for: modelKind).displayName)."
-                )
+                logTokenBudget(text: text, prompt: prompt, modelKind: modelKind, purpose: purpose, rawOutput: rawOutput, elapsed: elapsed)
                 await probeExecutionGate.release()
                 return CleanupModelProbeRawResult(
                     modelKind: modelKind,
@@ -609,8 +684,10 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         await loadModel()
     }
 
-    func loadModel(kind: LocalCleanupModelKind) async {
-        if activeLoadedModelKind == kind && activeLLM != nil {
+    func loadModel(kind: LocalCleanupModelKind, contextTokenCount: Int32) async {
+        let requestedContext = min(contextTokenCount, descriptor(for: kind).maxTokenCount)
+
+        if activeLoadedModelKind == kind && activeLoadedContextTokenCount == requestedContext && activeLLM != nil {
             state = .ready
             errorMessage = nil
             return
@@ -618,7 +695,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
         if case .loadingModel = state {
             await waitForActiveLoad()
-            if activeLoadedModelKind == kind && activeLLM != nil {
+            if activeLoadedModelKind == kind && activeLoadedContextTokenCount == requestedContext && activeLLM != nil {
                 state = .ready
                 errorMessage = nil
                 return
@@ -638,7 +715,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
         let descriptor = descriptor(for: kind)
         let path = modelPath(for: descriptor.fileName)
-        debugLogger?(.model, "Loading local cleanup model \(descriptor.displayName).")
+        debugLogger?(.model, "Loading local cleanup model \(descriptor.displayName) with \(requestedContext) context.")
 
         if FileManager.default.fileExists(atPath: path.path), !Self.isVerifiedModelFile(path, descriptor: descriptor) {
             try? FileManager.default.removeItem(at: path)
@@ -678,9 +755,16 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         state = .loadingModel(kind: kind)
         activeLLM = nil
         activeLoadedModelKind = nil
+        activeLoadedContextTokenCount = nil
+        // A prepared prompt context was primed (llm.core.prepareContext)
+        // against the LLM instance being discarded here — it's keyed only
+        // on model kind, not instance identity, so a stale plan must not
+        // survive a reload, even a same-kind reload triggered purely by a
+        // context-size change.
+        preparedPromptContext = nil
 
         let loadedModel = await Task.detached { () -> LLM? in
-            guard let llm = LLM(from: path, maxTokenCount: descriptor.maxTokenCount) else {
+            guard let llm = LLM(from: path, maxTokenCount: requestedContext) else {
                 return nil
             }
             llm.useResolvedTemplate(systemPrompt: TextCleaner.defaultPrompt)
@@ -699,9 +783,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         loadedModel.postprocess = { (_: String) in }
         activeLLM = loadedModel
         activeLoadedModelKind = kind
+        activeLoadedContextTokenCount = requestedContext
         state = .ready
         errorMessage = nil
-        debugLogger?(.model, "Local cleanup model ready: \(descriptor.displayName).")
+        debugLogger?(.model, "Local cleanup model ready: \(descriptor.displayName) with \(requestedContext) context.")
+    }
+
+    func loadModel(kind: LocalCleanupModelKind, purpose: CleanupPurpose = .realtime) async {
+        await loadModel(kind: kind, contextTokenCount: Self.config(for: purpose).maxTokenCount)
     }
 
     /// Kicks off a tracked `loadModel(kind:)` so callers can later cancel it
@@ -744,6 +833,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     func unloadModel() {
         activeLLM = nil
         activeLoadedModelKind = nil
+        activeLoadedContextTokenCount = nil
         state = .idle
         errorMessage = nil
         debugLogger?(.model, "Unloaded local cleanup models.")
@@ -805,6 +895,32 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
 
     private func descriptor(for modelKind: LocalCleanupModelKind) -> CleanupModelDescriptor {
         Self.cleanupModels.first(where: { $0.kind == modelKind })!
+    }
+
+    /// Logs an estimated token budget (~4 chars/token) so a completion that's
+    /// suspiciously short relative to the model's context window — the
+    /// signature of hitting `maxTokenCount` mid-generation rather than an
+    /// error — is visible in the debug log rather than looking like a normal
+    /// success.
+    private func logTokenBudget(
+        text: String,
+        prompt: String,
+        modelKind: LocalCleanupModelKind,
+        purpose: CleanupPurpose,
+        rawOutput: String,
+        elapsed: TimeInterval
+    ) {
+        let promptTokens = Self.estimatedTokenCount(text) + Self.estimatedTokenCount(prompt)
+        let outputTokens = Self.estimatedTokenCount(rawOutput)
+        let maxTokens = Int(min(Self.config(for: purpose).maxTokenCount, descriptor(for: modelKind).maxTokenCount))
+        debugLogger?(
+            .cleanup,
+            "Local cleanup finished in \(String(format: "%.2f", elapsed))s using \(descriptor(for: modelKind).displayName) — ~\(promptTokens) prompt + ~\(outputTokens) output of \(maxTokens) max tokens (\(purpose))."
+        )
+    }
+
+    private static func estimatedTokenCount(_ text: String) -> Int {
+        max(1, Int(ceil(Double(text.count) / 4.0)))
     }
 
     private func availabilityOverride(for modelKind: LocalCleanupModelKind) -> Bool? {

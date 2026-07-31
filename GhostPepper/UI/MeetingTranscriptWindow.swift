@@ -1084,7 +1084,7 @@ final class MeetingTranscriptWindowController: NSObject, NSWindowDelegate {
     var onOpenSettings: (() -> Void)?
     var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) throws -> MeetingSession)?
     var onStopRecording: ((MeetingSession) -> Void)?
-    var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onGenerateSummary: ((MeetingTranscript, LocalCleanupModelKind) -> Void)?
     var onLoadSpeakerReviewItems: ((MeetingTranscript) -> [MeetingSpeakerReviewItem])?
     var onUpdateSpeakerLabel: ((_ transcript: MeetingTranscript, _ currentDisplayName: String, _ newDisplayName: String) throws -> Void)?
     var onAskQuestion: ((_ question: String, _ history: [QAHistoryTurn]) -> AsyncThrowingStream<QAEvent, Error>)?
@@ -1377,7 +1377,7 @@ final class MeetingWindowState: ObservableObject {
     var onOpenSettings: (() -> Void)?
     var onStartRecording: ((_ name: String, _ detectedMeeting: DetectedMeeting?) throws -> MeetingSession)?
     var onStopRecording: ((MeetingSession) -> Void)?
-    var onGenerateSummary: ((MeetingTranscript) -> Void)?
+    var onGenerateSummary: ((MeetingTranscript, LocalCleanupModelKind) -> Void)?
     var onLoadSpeakerReviewItems: ((MeetingTranscript) -> [MeetingSpeakerReviewItem])?
     var onUpdateSpeakerLabel: ((_ transcript: MeetingTranscript, _ currentDisplayName: String, _ newDisplayName: String) throws -> Void)?
     var onMakeIndexBuilder: ((IndexKind) -> (any IndexBuilding)?)?
@@ -8927,7 +8927,7 @@ struct MeetingTabContentView: View {
     @State private var speakerLabelDrafts: [String: String] = [:]
     @State private var speakerReviewError: String?
     @AppStorage("meetingSummaryPrompt") private var summaryPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
-    @AppStorage("selectedCleanupModelKind") private var selectedModelKind: String = LocalCleanupModelKind.qwen35_0_8b_q4_k_m.rawValue
+    @AppStorage("selectedMeetingSummaryModelKind") private var selectedModelKind: String = TextCleanupManager.meetingSummaryModelFallback.rawValue
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -9562,7 +9562,8 @@ struct MeetingTabContentView: View {
     // MARK: - Status Bar
 
     private func regenerateSummary() {
-        state.onGenerateSummary?(tab.transcript)
+        let modelKind = LocalCleanupModelKind(rawValue: selectedModelKind) ?? TextCleanupManager.meetingSummaryModelFallback
+        state.onGenerateSummary?(tab.transcript, modelKind)
     }
 
     private var statusBar: some View {

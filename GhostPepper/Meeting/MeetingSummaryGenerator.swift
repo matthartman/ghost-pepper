@@ -8,6 +8,7 @@ import Foundation
 @MainActor
 final class MeetingSummaryGenerator {
     private let cleanupManager: TextCleanupManager
+    var debugLogger: ((DebugLogCategory, String) -> Void)?
 
     /// Maximum characters per chunk sent to the LLM (~1500 tokens ≈ 6000 chars).
     private let chunkCharLimit = 5000
@@ -43,10 +44,13 @@ final class MeetingSummaryGenerator {
     func generateSummary(
         transcript: MeetingTranscript,
         chunkPrompt: String = MeetingSummaryGenerator.defaultPrompt,
-        finalPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt
+        finalPrompt: String = MeetingSummaryGenerator.finalSummaryPrompt,
+        modelKind: LocalCleanupModelKind? = nil
     ) async -> String? {
         let segments = transcript.segments
         guard !segments.isEmpty else { return nil }
+
+        let effectiveModelKind = modelKind ?? cleanupManager.selectedMeetingSummaryModelKind
 
         // Build the full transcript text
         let fullText = segments.map { segment in
@@ -56,6 +60,11 @@ final class MeetingSummaryGenerator {
         // Split into chunks
         let chunks = splitIntoChunks(fullText)
 
+        debugLogger?(
+            .model,
+            "Meeting summary: starting for \(transcript.meetingName) (\(segments.count) segments, \(chunks.count) chunk(s))."
+        )
+
         // Include user notes if available
         let notesText = transcript.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let notesPrefix = notesText.isEmpty ? "" : "User's notes during the meeting:\n\n\(notesText)\n\n"
@@ -63,17 +72,36 @@ final class MeetingSummaryGenerator {
         if chunks.count == 1 {
             // Short meeting — summarize directly with the final prompt
             let input = "\(notesPrefix)Meeting transcript:\n\n\(chunks[0])"
-            return await runLLM(text: input, prompt: finalPrompt)
+            do {
+                return try await runLLM(text: input, prompt: finalPrompt, modelKind: effectiveModelKind)
+            } catch {
+                debugLogger?(
+                    .model,
+                    "Meeting summary: final combine step failed (\(error.localizedDescription))."
+                )
+                return nil
+            }
         }
 
         // Multi-chunk: summarize each chunk, then combine
         var chunkSummaries: [String] = []
         for (i, chunk) in chunks.enumerated() {
             let input = "Meeting transcript (part \(i + 1) of \(chunks.count)):\n\n\(chunk)"
-            if let summary = await runLLM(text: input, prompt: chunkPrompt) {
+            do {
+                let summary = try await runLLM(text: input, prompt: chunkPrompt, modelKind: effectiveModelKind)
                 chunkSummaries.append(summary)
+            } catch {
+                debugLogger?(
+                    .model,
+                    "Meeting summary: chunk \(i + 1)/\(chunks.count) failed (\(error.localizedDescription)) — dropped from summary."
+                )
             }
         }
+
+        debugLogger?(
+            .model,
+            "Meeting summary: chunk summarization complete — \(chunkSummaries.count)/\(chunks.count) chunks succeeded."
+        )
 
         guard !chunkSummaries.isEmpty else { return nil }
 
@@ -83,7 +111,15 @@ final class MeetingSummaryGenerator {
         }.joined(separator: "\n\n")
 
         let finalInput = "\(notesPrefix)Combined meeting notes:\n\n\(combined)"
-        return await runLLM(text: finalInput, prompt: finalPrompt)
+        do {
+            return try await runLLM(text: finalInput, prompt: finalPrompt, modelKind: effectiveModelKind)
+        } catch {
+            debugLogger?(
+                .model,
+                "Meeting summary: final combine step failed (\(error.localizedDescription)) — \(chunkSummaries.count)/\(chunks.count) chunk summaries discarded."
+            )
+            return nil
+        }
     }
 
     // MARK: - Private
@@ -110,15 +146,8 @@ final class MeetingSummaryGenerator {
         return chunks
     }
 
-    private func runLLM(text: String, prompt: String) async -> String? {
-        do {
-            let fullPrompt = "\(prompt)\n\n\(text)"
-            let result = try await cleanupManager.clean(text: fullPrompt, prompt: nil)
-            let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        } catch {
-            print("MeetingSummaryGenerator: LLM failed — \(error.localizedDescription)")
-            return nil
-        }
+    private func runLLM(text: String, prompt: String, modelKind: LocalCleanupModelKind) async throws -> String {
+        let result = try await cleanupManager.clean(text: text, prompt: prompt, modelKind: modelKind, purpose: .summarization)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
