@@ -350,6 +350,55 @@ final class TextCleanupManagerTests: XCTestCase {
         XCTAssertEqual(manager.activeLoadedContextTokenCount, 16384)
     }
 
+    func testLoadModelClearsPreparedPromptContextOnContextMismatchReload() async throws {
+        // preparedPromptContext is primed (llm.core.prepareContext) against
+        // one specific LLM instance. A same-kind reload triggered purely by
+        // a context-size change discards that instance — the stale plan
+        // must not survive, or a later probe() could run generation against
+        // an unprimed KV cache using a plan built for a different instance.
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        manager.startPromptPrefill(systemPromptPrefix: "You are a helpful assistant.", modelKind: .qwen35_0_8b_q4_k_m)
+
+        var attempts = 0
+        while manager.preparedPromptContext == nil, attempts < 200 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            attempts += 1
+        }
+        XCTAssertNotNil(manager.preparedPromptContext, "Expected prompt prefill to finish and populate preparedPromptContext")
+
+        // Prefill primes at realtime's context (4096); reload the same kind
+        // at a different (summarization-sized) context.
+        await manager.loadModel(kind: .qwen35_0_8b_q4_k_m, contextTokenCount: 16384)
+
+        XCTAssertNil(manager.preparedPromptContext)
+    }
+
+    func testStreamCompletionContextIsADedicatedConstantNotTheCatalogCeiling() {
+        // Asserted as its own value, independent of any CleanupModelDescriptor,
+        // so a future change to a model's catalog maxTokenCount (e.g. lowering
+        // compactModel's ceiling to save RAM on realtime cleanup) can't
+        // silently change what the agent loop / Wiki generation request too.
+        XCTAssertEqual(TextCleanupManager.streamCompletionContextTokenCount, 16384)
+    }
+
+    func testStreamCompletionUsesDedicatedContextNotCatalogCeiling() async throws {
+        let manager = TextCleanupManager(
+            cleanupModelAvailabilityOverrides: [.qwen35_0_8b_q4_k_m: true]
+        )
+
+        let stream = try await manager.streamCompletion(prompt: "hi", modelKind: .qwen35_0_8b_q4_k_m)
+
+        XCTAssertEqual(manager.activeLoadedContextTokenCount, TextCleanupManager.streamCompletionContextTokenCount)
+
+        // Drain to completion rather than abandoning it mid-generation —
+        // leaving the AsyncStream unconsumed tears down the llama.cpp/Metal
+        // backend mid-flight and trips a GGML_ASSERT on process exit.
+        for await _ in stream {}
+    }
+
     func testPlainLoadModelWrapperDefaultsToRealtimeContextNotCatalogCeiling() async {
         // Preload paths (Settings/Onboarding/ModelsSidebar, the no-arg
         // convenience, startLoad, and prefillPromptContext) all call this

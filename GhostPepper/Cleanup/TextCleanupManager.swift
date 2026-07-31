@@ -154,7 +154,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         }
     }
 
-    private struct PreparedPromptContext {
+    struct PreparedPromptContext {
         let modelKind: LocalCleanupModelKind
         let plan: CleanupPromptPrefillPlan
     }
@@ -305,7 +305,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
     private let modelsDirectory: URL
     private let probeExecutionGate = CleanupProbeExecutionGate()
     private var promptPrefillTask: Task<Void, Never>?
-    private var preparedPromptContext: PreparedPromptContext?
+    private(set) var preparedPromptContext: PreparedPromptContext?
     /// Tracks the in-flight download/load Task so the UI can cancel it. We
     /// only allow one load at a time (the manager has a single `activeLLM`
     /// slot), so a Task? is sufficient.
@@ -376,6 +376,14 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("GhostPepper/models", isDirectory: true)
     }
+
+    /// Context window for streamCompletion callers (the local agent tool
+    /// loop, Wiki generation, the Settings model probe) — deliberately its
+    /// own constant rather than a model's catalog `maxTokenCount`, so
+    /// raising that ceiling to give the summarization purpose headroom on
+    /// every model doesn't silently inflate KV-cache reservation for these
+    /// unrelated, non-purpose-scoped callers.
+    static let streamCompletionContextTokenCount: Int32 = 16384
 
     /// Single source of truth for the meeting-summary preference's
     /// last-resort fallback — referenced here and by
@@ -489,7 +497,7 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         thinkingMode: ThinkingMode = .suppressed
     ) async throws -> AsyncStream<String> {
         let requestedModelKind = modelKind ?? selectedCleanupModelKind
-        await loadModel(kind: requestedModelKind, contextTokenCount: descriptor(for: requestedModelKind).maxTokenCount)
+        await loadModel(kind: requestedModelKind, contextTokenCount: Self.streamCompletionContextTokenCount)
         let requestedDescriptor = descriptor(for: requestedModelKind)
 
         if case .mlxRepository = requestedDescriptor.runtime {
@@ -748,6 +756,12 @@ final class TextCleanupManager: ObservableObject, TextCleaningManaging {
         activeLLM = nil
         activeLoadedModelKind = nil
         activeLoadedContextTokenCount = nil
+        // A prepared prompt context was primed (llm.core.prepareContext)
+        // against the LLM instance being discarded here — it's keyed only
+        // on model kind, not instance identity, so a stale plan must not
+        // survive a reload, even a same-kind reload triggered purely by a
+        // context-size change.
+        preparedPromptContext = nil
 
         let loadedModel = await Task.detached { () -> LLM? in
             guard let llm = LLM(from: path, maxTokenCount: requestedContext) else {
