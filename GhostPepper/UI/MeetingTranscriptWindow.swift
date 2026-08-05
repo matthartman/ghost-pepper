@@ -1360,6 +1360,8 @@ struct GeneratedWikiSidebarFolder: Identifiable, Hashable {
 
 @MainActor
 final class MeetingWindowState: ObservableObject {
+    private var historyRefreshCancellable: AnyCancellable?
+
     var onAskQuestion: ((_ question: String, _ history: [QAHistoryTurn]) -> AsyncThrowingStream<QAEvent, Error>)?
     @Published var pushToTalkDisplay: String = ""
     @Published var tabs: [OpenMeetingTab] = []
@@ -2232,6 +2234,19 @@ final class MeetingWindowState: ObservableObject {
         }
     }
 
+    init() {
+        historyRefreshCancellable = Timer.publish(every: 10, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self, self.showSidebar else { return }
+                self.loadHistory()
+            }
+    }
+
+    deinit {
+        historyRefreshCancellable?.cancel()
+    }
+
     func loadHistory() {
         let dir = MeetingTranscriptSettings.effectiveSaveDirectory()
         historyGroups = MeetingHistory.loadEntries(from: dir)
@@ -2633,9 +2648,6 @@ struct MeetingRootView: View {
             guard shouldRun else { return }
             state.pendingSecondBrainLint = false
             runSecondBrainLint()
-        }
-        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
-            if state.showSidebar { state.loadHistory() }
         }
         .overlay {
             if let run = wikiGenerationRun {

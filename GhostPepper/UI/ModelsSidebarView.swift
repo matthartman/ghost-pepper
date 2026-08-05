@@ -111,7 +111,7 @@ struct ModelsSidebarView: View {
                 title: "Meeting summary",
                 modelLabel: (cleanupModel?.displayName ?? "—") + " (same as Cleanup)",
                 location: .local,
-                available: cleanupModel.map { TextCleanupManager.isModelDownloaded($0.kind) } ?? false
+                available: cleanupModel.map { cleanupManager.cachedModelKinds.contains($0.kind) } ?? false
             )
 
             FunctionRow(
@@ -134,7 +134,7 @@ struct ModelsSidebarView: View {
 
     /// Cleanup models the user has actually downloaded.
     private var downloadedCleanupModels: [CleanupModelDescriptor] {
-        TextCleanupManager.cleanupModels.filter { TextCleanupManager.isModelDownloaded($0.kind) }
+        TextCleanupManager.cleanupModels.filter { cleanupManager.cachedModelKinds.contains($0.kind) }
     }
 
     // MARK: - Section 2 · Local models
@@ -160,7 +160,7 @@ struct ModelsSidebarView: View {
                 )
             }
             ForEach(TextCleanupManager.cleanupModels, id: \.kind) { desc in
-                let downloaded = TextCleanupManager.isModelDownloaded(desc.kind)
+                let downloaded = cleanupManager.cachedModelKinds.contains(desc.kind)
                 let isActive = desc.kind.rawValue == selectedCleanupModelKindRaw
                 let progress = cleanupRowProgress(for: desc.kind, downloaded: downloaded)
                 LocalModelRow(
@@ -283,7 +283,7 @@ struct ModelsSidebarView: View {
             .qwen35_0_8b_q4_k_m,
         ]
         return preferred.compactMap { kind in
-            TextCleanupManager.cleanupModels.first { $0.kind == kind && TextCleanupManager.isModelDownloaded(kind) }
+            TextCleanupManager.cleanupModels.first { $0.kind == kind && cleanupManager.cachedModelKinds.contains(kind) }
         }.first
     }
 
