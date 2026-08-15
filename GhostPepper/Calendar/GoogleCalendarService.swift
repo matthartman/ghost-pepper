@@ -112,19 +112,17 @@ final class GoogleCalendarService: ObservableObject {
 
     /// Start the OAuth sign-in flow — starts a loopback server and opens the browser.
     func signIn() {
+        // Abandon any attempt still in flight so retrying can't strand the UI or leak a listener.
+        cancelSignIn()
         authError = nil
-        isLoading = true
-        defer {
-            if activeServer == nil {
-                isLoading = false
-            }
-        }
 
         guard Self.isConfigured else {
             authError = "Google Calendar OAuth is not configured in this build."
             calendarLog.error("OAuth client is not configured")
             return
         }
+
+        isLoading = true
 
         let verifier = generateCodeVerifier()
         codeVerifier = verifier
@@ -135,15 +133,15 @@ final class GoogleCalendarService: ObservableObject {
         // Start loopback server on a random port (127.0.0.1 only, not network-accessible)
         let server = LoopbackOAuthServer { [weak self] callback in
             Task { @MainActor [weak self] in
-                guard let self, let verifier = self.codeVerifier, callback.state == self.oauthState else {
-                    self?.codeVerifier = nil
-                    self?.oauthState = nil
-                    self?.activeServer = nil
+                guard let self else { return }
+                let pendingVerifier = self.codeVerifier
+                let expectedState = self.oauthState
+                self.cancelSignIn()
+                guard let verifier = pendingVerifier, callback.state == expectedState else {
+                    self.authError = "Google sign-in could not be completed. Please try connecting again."
+                    calendarLog.error("Discarded OAuth callback with unexpected state")
                     return
                 }
-                self.codeVerifier = nil
-                self.oauthState = nil
-                self.activeServer = nil
                 self.isLoading = true
                 await self.exchangeCodeForToken(code: callback.code, verifier: verifier)
                 self.isLoading = false
@@ -153,7 +151,7 @@ final class GoogleCalendarService: ObservableObject {
         guard let port = server.start() else {
             authError = "Could not start the local Google sign-in callback. Check the app sandbox network server entitlement."
             calendarLog.error("Failed to start loopback OAuth server")
-            activeServer = nil
+            cancelSignIn()
             return
         }
         loopbackPort = port
@@ -176,14 +174,26 @@ final class GoogleCalendarService: ObservableObject {
         guard let url = components.url else {
             authError = "Could not create the Google sign-in URL."
             calendarLog.error("Failed to create Google OAuth URL")
-            activeServer = nil
+            cancelSignIn()
             return
         }
         if !NSWorkspace.shared.open(url) {
             authError = "Could not open the Google sign-in page."
             calendarLog.error("NSWorkspace failed to open Google OAuth URL")
-            activeServer = nil
+            cancelSignIn()
         }
+    }
+
+    /// Abandon an in-flight sign-in and drop back to the disconnected state.
+    /// Google never calls back when the user closes the browser tab or signs in with the
+    /// wrong account, so without this the loading flag stays set, the Connect button stays
+    /// replaced by a spinner, and the loopback listener stays bound until the app is quit.
+    func cancelSignIn() {
+        activeServer?.stop()
+        activeServer = nil
+        codeVerifier = nil
+        oauthState = nil
+        isLoading = false
     }
 
     /// Sign out — clear stored tokens.
@@ -656,26 +666,52 @@ final class GoogleCalendarService: ObservableObject {
 /// Listens on a random port, accepts one request (the Google OAuth redirect),
 /// extracts the auth code, sends a "success" page, and shuts down immediately.
 /// This is Google's officially recommended approach for desktop OAuth apps.
-private class LoopbackOAuthServer {
+final class LoopbackOAuthServer {
     struct Callback {
         let code: String
         let state: String?
     }
 
     private let onCode: (Callback) -> Void
+    private let lock = NSLock()
     private var serverSocket: Int32 = -1
+    private var stopped = false
 
     init(onCode: @escaping (Callback) -> Void) {
         self.onCode = onCode
     }
 
+    deinit {
+        stop()
+    }
+
+    /// Close the listening socket, releasing the port and unblocking the waiting `accept`.
+    /// Safe to call from any thread and more than once.
+    func stop() {
+        lock.lock()
+        let socketToClose = serverSocket
+        serverSocket = -1
+        stopped = true
+        lock.unlock()
+
+        if socketToClose >= 0 {
+            close(socketToClose)
+        }
+    }
+
+    private var isStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
     /// Start listening. Returns the assigned port, or nil on failure.
     func start() -> UInt16? {
-        serverSocket = socket(AF_INET, SOCK_STREAM, 0)
-        guard serverSocket >= 0 else { return nil }
+        let listeningSocket = socket(AF_INET, SOCK_STREAM, 0)
+        guard listeningSocket >= 0 else { return nil }
 
         var yes: Int32 = 1
-        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
@@ -683,24 +719,32 @@ private class LoopbackOAuthServer {
         addr.sin_addr.s_addr = inet_addr("127.0.0.1")
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(serverSocket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listeningSocket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
-        guard bindResult == 0 else { close(serverSocket); return nil }
-        guard listen(serverSocket, 1) == 0 else { close(serverSocket); return nil }
+        guard bindResult == 0 else { close(listeningSocket); return nil }
+        guard listen(listeningSocket, 1) == 0 else { close(listeningSocket); return nil }
 
         // Get the assigned port
         var assignedAddr = sockaddr_in()
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
         withUnsafeMutablePointer(to: &assignedAddr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(serverSocket, $0, &len) }
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listeningSocket, $0, &len) }
         }
         let port = UInt16(bigEndian: assignedAddr.sin_port)
 
-        // Accept one connection in background
+        lock.lock()
+        serverSocket = listeningSocket
+        lock.unlock()
+
+        // Accept one connection in background. `stop()` closes the listening socket, which
+        // unblocks this `accept` so the flow can be abandoned without leaking the port.
         DispatchQueue.global(qos: .userInitiated).async { [self] in
-            let client = accept(serverSocket, nil, nil)
-            defer { close(client); close(serverSocket) }
-            guard client >= 0 else { return }
+            let client = accept(listeningSocket, nil, nil)
+            defer {
+                if client >= 0 { close(client) }
+                stop()
+            }
+            guard client >= 0, !isStopped else { return }
 
             var buffer = [UInt8](repeating: 0, count: 4096)
             let bytesRead = read(client, &buffer, buffer.count)
