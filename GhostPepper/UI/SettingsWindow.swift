@@ -2660,7 +2660,17 @@ struct SettingsView: View {
                                 Text("Connecting...")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Cancel") {
+                                    calendarService.cancelSignIn()
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(.red)
+                                .font(.caption)
                             }
+                            Text("Finish signing in on the browser tab that just opened, or cancel to start again with a different account.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         } else {
                             Text("Connect Google Calendar to automatically populate meeting titles and attendees when recording.")
                                 .font(.caption)

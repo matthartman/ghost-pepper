@@ -161,6 +161,7 @@
 		ACC06182C51F75BDF79E571E /* QAAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F95A4E9746B97273AFA6904 /* QAAttachment.swift */; };
 		AD56986FFDABBEAF84446A0F /* MeetingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBE6E6C11EA04C058C642573 /* MeetingSession.swift */; };
 		AF1DD5FE5059779E1D5D59C2 /* PostPasteLearningCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EDE03E93B2A9E420B2C74CA /* PostPasteLearningCoordinator.swift */; };
+		AF2839BB20621FFD30394735 /* LoopbackOAuthServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04FF6D449F93126DEEBCA600 /* LoopbackOAuthServerTests.swift */; };
 		AFAAFB58F0A76F5213F67C45 /* FluidAudioSpeechSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F781190896573C3BA687CB /* FluidAudioSpeechSessionTests.swift */; };
 		B060F5F4210612DF33732FDF /* PepperChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A797BF8671DD4D44E9B1188 /* PepperChatSession.swift */; };
 		B0E4A139001EF2DF0E809935 /* TextCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBAB39218D09F11336C4F684 /* TextCleaner.swift */; };
@@ -244,6 +245,7 @@
 		01A8B88DFD046F1EC74E5CD6 /* TranscriptionLabStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLabStore.swift; sourceTree = "<group>"; };
 		0267B716FEB381C08F172EE6 /* UsageReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageReportView.swift; sourceTree = "<group>"; };
 		029E36727193D8502C69FB38 /* sprite_frame_2@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "sprite_frame_2@2x.png"; sourceTree = "<group>"; };
+		04FF6D449F93126DEEBCA600 /* LoopbackOAuthServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackOAuthServerTests.swift; sourceTree = "<group>"; };
 		09095C80171572F5C5B3ECDA /* MeetingCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCard.swift; sourceTree = "<group>"; };
 		0D91666EEE2CF7B4B78E3061 /* ChordBindingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChordBindingStore.swift; sourceTree = "<group>"; };
 		0EDE03E93B2A9E420B2C74CA /* PostPasteLearningCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostPasteLearningCoordinator.swift; sourceTree = "<group>"; };
@@ -897,6 +899,7 @@
 				5588D5D8742520186BBD4970 /* IndexManifestTests.swift */,
 				AF04305B5AE9665D25C23A2C /* IndexSystemPromptTests.swift */,
 				0F634CFD724E29ECA57C0BB6 /* KeyChordTests.swift */,
+				04FF6D449F93126DEEBCA600 /* LoopbackOAuthServerTests.swift */,
 				D2703FAF4A3B8D55B84100BA /* MarkdownArchivePathsTests.swift */,
 				5C926BF4341F8D3448FE7096 /* MeetingCardTests.swift */,
 				B00B029C7A13483CD703B723 /* MeetingChunkerTests.swift */,
@@ -1017,7 +1020,6 @@
 				};
 			};
 			buildConfigurationList = 4DD304029FEB6147483470FD /* Build configuration list for PBXProject "GhostPepper" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -1034,6 +1036,7 @@
 				E56E28037799FE95D6CB5F71 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 			);
 			preferredProjectObjectVersion = 77;
+			productRefGroup = 3705D6F7BCD01CB7D37DF812 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -1254,6 +1257,7 @@
 				3653237D6C0C44E3AFF33800 /* IndexManifestTests.swift in Sources */,
 				5A4D2E405B6F7A519BA6F6F0 /* IndexSystemPromptTests.swift in Sources */,
 				AB0AC6DC19EC0DB440F5B123 /* KeyChordTests.swift in Sources */,
+				AF2839BB20621FFD30394735 /* LoopbackOAuthServerTests.swift in Sources */,
 				EA0A1ECE203067342B2E2CF6 /* MarkdownArchivePathsTests.swift in Sources */,
 				E7165BCC53E626252EC92C98 /* MeetingCardTests.swift in Sources */,
 				160D6AB39F87C2045BE156F4 /* MeetingChunkerTests.swift in Sources */,
