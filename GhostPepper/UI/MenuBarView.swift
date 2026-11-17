@@ -22,6 +22,12 @@ struct MenuBarView: View {
                 appState.showDebugLog()
             }
 
+            if !appState.meetingTranscriptEnabled {
+                Button("Home...") {
+                    appState.showOrCreateMeetingWindow()
+                }
+            }
+
             if appState.meetingTranscriptEnabled {
                 Divider()
 

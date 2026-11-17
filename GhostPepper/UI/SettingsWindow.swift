@@ -197,6 +197,7 @@ struct SettingsView: View {
     @State private var inputDevices: [AudioInputDevice] = []
     @State private var selectedDeviceID: AudioDeviceID = 0
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @AppStorage("showHomeWindowAtLaunch") private var showHomeWindowAtLaunch = true
     @State private var hasScreenRecordingPermission = PermissionChecker.hasScreenRecordingPermission()
     @State private var hasAccessibilityPermission = PermissionChecker.checkAccessibility()
     @State private var hasInputMonitoringPermission = PermissionChecker.checkInputMonitoring()
@@ -1155,6 +1156,8 @@ struct SettingsView: View {
                             launchAtLogin = !enabled
                         }
                     }
+
+                Toggle("Open the Home window at launch", isOn: $showHomeWindowAtLaunch)
             }
         }
     }
