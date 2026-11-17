@@ -510,6 +510,64 @@ final class HotkeyMonitorTests: XCTestCase {
         XCTAssertEqual(events, ["start"])
     }
 
+    func testFunctionKeyToggleIgnoresImplicitFnFlagWhenFnIsPushToTalk() throws {
+        let fn = PhysicalKey(keyCode: 63)
+        let f16 = PhysicalKey(keyCode: 106)
+        let monitor = HotkeyMonitor(
+            bindings: [
+                .pushToTalk: try XCTUnwrap(KeyChord(keys: Set([fn]))),
+                .toggleToTalk: try XCTUnwrap(KeyChord(keys: Set([f16])))
+            ],
+            keyStateProvider: { _ in false },
+            modifierFlagsProvider: { [] },
+            eventProcessor: { work in work() }
+        )
+        var events: [String] = []
+
+        monitor.onPushToTalkStart = { events.append("push-start") }
+        monitor.onPushToTalkStop = { events.append("push-stop") }
+        monitor.onToggleToTalkStart = { events.append("toggle-start") }
+        monitor.onToggleToTalkStop = { events.append("toggle-stop") }
+
+        // macOS sets the secondary-Fn flag on function-key events even though Fn is not held.
+        let implicitFn = CGEventFlags.maskSecondaryFn.rawValue
+
+        monitor.handleEvent(.keyDown, event: modifierEvent(key: f16, flagsRawValue: implicitFn))
+        monitor.handleEvent(.keyUp, event: modifierEvent(key: f16, flagsRawValue: implicitFn))
+        XCTAssertEqual(events, ["toggle-start"])
+
+        monitor.handleEvent(.keyDown, event: modifierEvent(key: f16, flagsRawValue: implicitFn))
+        monitor.handleEvent(.keyUp, event: modifierEvent(key: f16, flagsRawValue: implicitFn))
+        XCTAssertEqual(events, ["toggle-start", "toggle-stop"])
+    }
+
+    func testFunctionKeyChordStillMatchesWhenFnIsPhysicallyHeld() throws {
+        let fn = PhysicalKey(keyCode: 63)
+        let f16 = PhysicalKey(keyCode: 106)
+        let monitor = HotkeyMonitor(
+            bindings: [
+                .toggleToTalk: try XCTUnwrap(KeyChord(keys: Set([fn, f16])))
+            ],
+            keyStateProvider: { _ in false },
+            modifierFlagsProvider: { [] },
+            eventProcessor: { work in work() }
+        )
+        var events: [String] = []
+
+        monitor.onRecordingStart = { events.append("start") }
+
+        let fnFlag = CGEventFlags.maskSecondaryFn.rawValue
+
+        // F16 alone carries the Fn flag but must not satisfy an Fn + F16 chord.
+        monitor.handleEvent(.keyDown, event: modifierEvent(key: f16, flagsRawValue: fnFlag))
+        monitor.handleEvent(.keyUp, event: modifierEvent(key: f16, flagsRawValue: fnFlag))
+        XCTAssertEqual(events, [])
+
+        monitor.handleEvent(.flagsChanged, event: modifierEvent(key: fn, flagsRawValue: fnFlag))
+        monitor.handleEvent(.keyDown, event: modifierEvent(key: f16, flagsRawValue: fnFlag))
+        XCTAssertEqual(events, ["start"])
+    }
+
     func testHandleEventDispatchesCallbacksAsynchronously() throws {
         let queue = DispatchQueue(label: "HotkeyMonitorTests.eventProcessor")
         let monitor = HotkeyMonitor(
