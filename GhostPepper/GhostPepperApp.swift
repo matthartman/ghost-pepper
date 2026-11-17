@@ -11,6 +11,7 @@ struct GhostPepperApp: App {
     private static let forceOnboarding = ProcessInfo.processInfo.arguments.contains("--force-onboarding")
     @StateObject private var appState = AppState()
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
+    @AppStorage("showHomeWindowAtLaunch") private var showHomeWindowAtLaunch = true
     @State private var hasInitialized = false
     private let onboardingController = OnboardingWindowController()
     private let lazyUpdater = LazyUpdaterController()
@@ -61,7 +62,9 @@ struct GhostPepperApp: App {
                 } else if onboardingCompleted {
                     Task {
                         await appState.initialize()
-                        appState.showMeetingTranscriptWindow()
+                        if showHomeWindowAtLaunch {
+                            appState.showMeetingTranscriptWindow()
+                        }
                     }
                 } else {
                     onboardingController.show(appState: appState) {

@@ -101,6 +101,7 @@ Every core feature runs 100% on your Mac — verified by AI code review. No trus
 ## Good to know
 
 - **Launch at login** is enabled by default on first run. You can toggle it off in Settings.
+- **The Home window opens at launch** by default. If you only use Ghost Pepper from the menu bar, turn off "Open the Home window at launch" in Settings.
 - **Everything stays local** — transcription history and recordings are stored on your Mac only. Nothing is sent to the cloud. You can clear history anytime in Settings.
 
 ## Acknowledgments
