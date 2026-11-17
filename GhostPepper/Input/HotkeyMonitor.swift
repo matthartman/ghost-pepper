@@ -204,22 +204,22 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
             let pressedKeys = trackedNonModifierPressedKeys().union(modifierPressedKeys(from: snapshot.flags))
             result = handleInputLocked(.flagsChanged(snapshot.key), authoritativePressedKeys: pressedKeys)
         case .keyDown:
-            guard shouldProcessNonModifierEvents(with: snapshot.flags) else {
+            guard shouldProcessNonModifierEvents(with: snapshot.flags, key: snapshot.key) else {
                 stateLock.unlock()
                 return
             }
             let pressedKeys = trackedNonModifierPressedKeys()
-                .union(modifierPressedKeys(from: snapshot.flags))
+                .union(modifierPressedKeys(from: snapshot.flags, forKeyEvent: snapshot.key))
                 .union([snapshot.key])
             result = handleInputLocked(.keyDown(snapshot.key), authoritativePressedKeys: pressedKeys)
         case .keyUp:
-            guard shouldProcessNonModifierEvents(with: snapshot.flags) else {
+            guard shouldProcessNonModifierEvents(with: snapshot.flags, key: snapshot.key) else {
                 stateLock.unlock()
                 return
             }
             var pressedKeys = trackedNonModifierPressedKeys()
             pressedKeys.remove(snapshot.key)
-            pressedKeys.formUnion(modifierPressedKeys(from: snapshot.flags))
+            pressedKeys.formUnion(modifierPressedKeys(from: snapshot.flags, forKeyEvent: snapshot.key))
             result = handleInputLocked(.keyUp(snapshot.key), authoritativePressedKeys: pressedKeys)
         default:
             result = nil
@@ -334,12 +334,12 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
         monitoredKeys.filter { !$0.isModifierKey && keyStateProvider($0) }
     }
 
-    private func shouldProcessNonModifierEvents(with flags: CGEventFlags) -> Bool {
+    private func shouldProcessNonModifierEvents(with flags: CGEventFlags, key: PhysicalKey) -> Bool {
         guard !nonModifierBindingPrefixes.isEmpty else {
             return false
         }
 
-        let activeModifiers = modifierPressedKeys(from: flags)
+        let activeModifiers = modifierPressedKeys(from: flags, forKeyEvent: key)
         return nonModifierBindingPrefixes.contains { prefix in
             prefix.isEmpty || activeModifiers.isSuperset(of: prefix)
         }
@@ -353,6 +353,21 @@ final class HotkeyMonitor: NSObject, HotkeyMonitoring {
 
             return flags.rawValue & modifierMaskRawValue == modifierMaskRawValue
         }
+    }
+
+    /// Modifier state for a keyDown/keyUp event. macOS sets the secondary-Fn flag on events
+    /// for function, arrow, and navigation keys whether or not Fn is physically held, so for
+    /// those keys Fn comes from flagsChanged history instead of the event's own flags.
+    private func modifierPressedKeys(from flags: CGEventFlags, forKeyEvent key: PhysicalKey) -> Set<PhysicalKey> {
+        var pressedKeys = modifierPressedKeys(from: flags)
+        guard key.impliesSecondaryFnFlag else {
+            return pressedKeys
+        }
+
+        for fnKey in pressedKeys where fnKey.isSecondaryFnKey && !chordEngine.pressedKeys.contains(fnKey) {
+            pressedKeys.remove(fnKey)
+        }
+        return pressedKeys
     }
 
     private func currentStateReflectsCurrentEvent(
@@ -530,6 +545,23 @@ private extension HotkeyMonitor.EventSnapshot {
 private extension PhysicalKey {
     var isModifierKey: Bool {
         modifierMaskRawValue != nil
+    }
+
+    var isSecondaryFnKey: Bool {
+        keyCode == 63
+    }
+
+    /// Keys whose keyDown/keyUp events always carry `maskSecondaryFn`, even when Fn is not held.
+    var impliesSecondaryFnFlag: Bool {
+        switch keyCode {
+        case 122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, // F1-F12
+             105, 107, 113, 106, 64, 79, 80, 90, // F13-F20
+             114, 115, 116, 117, 119, 121, // Help/Insert, Home, Page Up, Forward Delete, End, Page Down
+             123, 124, 125, 126: // Arrows
+            true
+        default:
+            false
+        }
     }
 
     var modifierMaskRawValue: UInt64? {
